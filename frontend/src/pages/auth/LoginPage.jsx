@@ -25,7 +25,7 @@ const FloatCard = ({ icon: Icon, value, label, delay }) => (
   <div
     className="flex items-center gap-3 px-4 py-3 rounded-2xl border border-white/10 bg-white/8 shadow-xl backdrop-blur-md"
     style={{ animation: `lp-up .65s ease both`, animationDelay: delay }}>
-    <div className="w-9 h-9 rounded-xl bg-white/15 flex items-center justify-center flex-shrink-0">
+    <div className="w-10 h-9 rounded-xl bg-white/15 flex items-center justify-center flex-shrink-0">
       <Icon size={15} className="text-white" />
     </div>
     <div>
