@@ -1,7 +1,8 @@
 // src/services/auth.service.js
-// OTP table  : dbo.OtpTokens  (existing schema)
+// OTP table  : dbo.OtpTokens
+// SMS via    : Fast2SMS (fast2sms.com) — set FAST2SMS_API_KEY in .env
 // Cleanup strategy:
-//   • DELETE row immediately after successful password reset  (used)
+//   • DELETE row immediately after successful password reset
 //   • DELETE row immediately when detected as expired
 //   • DELETE all previous rows for same user+purpose before inserting a new OTP
 //   • DELETE row when max attempts exceeded
@@ -11,7 +12,7 @@ const jwt    = require('jsonwebtoken');
 const crypto = require('crypto');
 const { query, sql } = require('../config/database');
 const AppError = require('../utils/AppError');
-const { sendOtpEmail, sendPasswordChangedEmail } = require('./emailService');
+const { sendOtpEmail, sendOtpSms, sendPasswordChangedEmail } = require('./emailService');
 
 // ── JWT helpers ───────────────────────────────────────────────────────────────
 const signAccess = (payload) =>
@@ -43,8 +44,6 @@ const deleteOtpById = async (id) => {
   );
 };
 
-// Wipe all pending OTPs for a user+purpose before inserting a fresh one.
-// This ensures only one active OTP exists per user per purpose at all times.
 const deletePendingOtps = async (userId, purpose) => {
   await query(
     `DELETE FROM dbo.OtpTokens
@@ -82,6 +81,19 @@ const findUserByIdentifier = async (identifier) => {
     }
   );
   return result.recordset[0] || null;
+};
+
+// ── Mask helpers ──────────────────────────────────────────────────────────────
+const maskEmail = (email) => {
+  if (!email) return '';
+  const [local, domain] = email.split('@');
+  return `${local.slice(0, 2)}${'*'.repeat(Math.max(local.length - 2, 2))}@${domain}`;
+};
+
+const maskPhone = (phone) => {
+  if (!phone) return '';
+  const clean = String(phone).replace(/\D/g, '');
+  return `${clean.slice(0, 2)}${'*'.repeat(Math.max(clean.length - 4, 3))}${clean.slice(-2)}`;
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -152,7 +164,7 @@ const login = async ({ identifier, password, ipAddress, userAgent, deviceInfo })
   const refreshToken = signRefresh(tokenPayload);
 
   // Create AuthSessions row required by auth.middleware.js
-  const tokenHash = crypto.createHash('sha256').update(accessToken).digest('hex');
+  const tokenHash       = crypto.createHash('sha256').update(accessToken).digest('hex');
   const sessionExpiresAt = new Date(Date.now() + 8 * 60 * 60 * 1000);
   await query(
     `INSERT INTO dbo.AuthSessions (UserId, TokenHash, DeviceInfo, IpAddress, IsActive, ExpiresAt)
@@ -193,27 +205,29 @@ const login = async ({ identifier, password, ipAddress, userAgent, deviceInfo })
 const logout = async () => true; // JWT stateless; cookie cleared by controller
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// FORGOT PASSWORD  →  generate OTP, store hash, email it
+// FORGOT PASSWORD
+// Supports both email OTP and phone SMS OTP via Fast2SMS
+// contactType: 'email' → sends email OTP
+// contactType: 'phone' → sends SMS OTP via Fast2SMS
 // ═══════════════════════════════════════════════════════════════════════════════
 const forgotPassword = async ({ identifier, contactType = 'email', ipAddress }) => {
   const user = await findUserByIdentifier(identifier);
 
-  // Debug log — remove after confirming email works
-  console.log(`[forgotPassword] identifier="${identifier}" → user found:`, user ? `id=${user.Id} email=${user.Email}` : 'NOT FOUND');
+  // User not found — show real error (no enumeration protection per user request)
+  if (!user) throw new AppError('No account found with this email or phone number.', 404);
 
-  // Prevent user enumeration — always return success shape
-  if (!user) return { message: 'If this account exists, an OTP has been sent.' };
-
-  if (!user.Email && contactType === 'email')
+  if (contactType === 'email' && !user.Email)
     throw new AppError('No email address linked to this account.', 400);
+  if (contactType === 'phone' && !user.Phone)
+    throw new AppError('No phone number linked to this account.', 400);
 
   const otp       = generateOtp();
   const expMin    = OTP_EXPIRES_MINUTES();
   const expiresAt = new Date(Date.now() + expMin * 60 * 1000);
   const otpHash   = await bcrypt.hash(otp, 8);
-  const contact   = user.Email || user.Phone;
+  const contact   = contactType === 'phone' ? user.Phone : user.Email;
 
-  // Remove any previous OTPs for this user+purpose so only one is ever active
+  // Remove any previous OTPs for this user+purpose
   await deletePendingOtps(user.Id, 'forgot_password');
 
   await query(
@@ -224,30 +238,46 @@ const forgotPassword = async ({ identifier, contactType = 'email', ipAddress }) 
        (@uid, @contact, @ctype, 'forgot_password',
         @hash, 0, @maxAtt, 0, @exp, @ip)`,
     {
-      uid:    { type: sql.BigInt,           value: user.Id },
-      contact:{ type: sql.NVarChar(255),    value: contact },
-      ctype:  { type: sql.NVarChar(10),     value: contactType },
-      hash:   { type: sql.NVarChar(sql.MAX),value: otpHash },
-      maxAtt: { type: sql.SmallInt,         value: OTP_MAX_ATTEMPTS },
-      exp:    { type: sql.DateTime2,        value: expiresAt },
-      ip:     { type: sql.NVarChar(50),     value: ipAddress || null },
+      uid:     { type: sql.BigInt,            value: user.Id },
+      contact: { type: sql.NVarChar(255),     value: contact },
+      ctype:   { type: sql.NVarChar(10),      value: contactType },
+      hash:    { type: sql.NVarChar(sql.MAX), value: otpHash },
+      maxAtt:  { type: sql.SmallInt,          value: OTP_MAX_ATTEMPTS },
+      exp:     { type: sql.DateTime2,         value: expiresAt },
+      ip:      { type: sql.NVarChar(50),      value: ipAddress || null },
     }
   );
 
-  await sendOtpEmail({
-    to:             user.Email,
-    name:           user.FirstName,
-    otp,
-    expiresMinutes: expMin,
-    purpose:        'password reset',
-  });
-
-  console.log(`🔐 OTP sent → ${user.Email} (userId: ${user.Id})`);
-  return { maskedEmail: maskEmail(user.Email), expiresInMinutes: expMin };
+  // ── Send OTP via appropriate channel ────────────────────────────────────────
+  if (contactType === 'phone') {
+    await sendOtpSms({ phone: user.Phone, otp });
+    console.log(`📱 SMS OTP sent → ${user.Phone} (userId: ${user.Id})`);
+    return {
+      maskedContact:    maskPhone(user.Phone),
+      contactType:      'phone',
+      expiresInMinutes: expMin,
+    };
+  } else {
+    await sendOtpEmail({
+      to:             user.Email,
+      name:           user.FirstName,
+      otp,
+      expiresMinutes: expMin,
+      purpose:        'password reset',
+    });
+    console.log(`📧 Email OTP sent → ${user.Email} (userId: ${user.Id})`);
+    return {
+      maskedContact:    maskEmail(user.Email),
+      maskedEmail:      maskEmail(user.Email),   // kept for frontend backward compat
+      contactType:      'email',
+      expiresInMinutes: expMin,
+    };
+  }
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // VERIFY OTP
+// Works for both email and phone OTPs — contact field is the email or phone
 // Expired  → DELETE row, throw
 // Wrong    → increment Attempts; if max hit DELETE row, throw
 // Correct  → set IsVerified = 1, keep row (reset-password will delete it)
@@ -273,24 +303,18 @@ const verifyOtp = async ({ contact, otp, purpose = 'forgot_password' }) => {
   const rec = result.recordset[0];
   if (!rec) throw new AppError('No active OTP found. Please request a new one.', 400);
 
-  // ── Expired → delete row immediately
   if (new Date(rec.ExpiresAt) < new Date()) {
     await deleteOtpById(rec.Id);
     throw new AppError('OTP has expired. Please request a new one.', 400);
   }
 
-  // ── Already verified (user hit Back and re-submitted)
-  if (rec.IsVerified) {
-    return { verified: true };
-  }
+  if (rec.IsVerified) return { verified: true };
 
-  // ── Max attempts already hit → delete row
   if (rec.Attempts >= rec.MaxAttempts) {
     await deleteOtpById(rec.Id);
     throw new AppError('Too many incorrect attempts. Please request a new OTP.', 429);
   }
 
-  // ── Verify OTP value
   const valid = await bcrypt.compare(otp.trim(), rec.OtpHash);
   if (!valid) {
     const newAttempts = rec.Attempts + 1;
@@ -311,7 +335,6 @@ const verifyOtp = async ({ contact, otp, purpose = 'forgot_password' }) => {
     throw new AppError(`Incorrect OTP. ${remaining} attempt(s) remaining.`, 400);
   }
 
-  // ── Correct → mark verified, keep row for reset-password step
   await query(
     `UPDATE dbo.OtpTokens
      SET IsVerified = 1, VerifiedAt = SYSUTCDATETIME()
@@ -324,10 +347,6 @@ const verifyOtp = async ({ contact, otp, purpose = 'forgot_password' }) => {
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // RESET PASSWORD
-// Re-verifies OTP hash as a security double-check.
-// On success → updates password + DELETES OTP row (cleanup done here)
-// On expired → DELETES row
-// On wrong   → increments attempts / deletes if maxed out
 // ═══════════════════════════════════════════════════════════════════════════════
 const resetPassword = async ({ identifier, otp, newPassword }) => {
   const user = await findUserByIdentifier(identifier);
@@ -347,13 +366,11 @@ const resetPassword = async ({ identifier, otp, newPassword }) => {
   const rec = result.recordset[0];
   if (!rec) throw new AppError('No active OTP found. Please request a new one.', 400);
 
-  // ── Expired → delete row immediately
   if (new Date(rec.ExpiresAt) < new Date()) {
     await deleteOtpById(rec.Id);
     throw new AppError('OTP has expired. Please request a new one.', 400);
   }
 
-  // ── Re-verify OTP (security double-check even if IsVerified = 1)
   const valid = await bcrypt.compare(otp.trim(), rec.OtpHash);
   if (!valid) {
     const newAttempts = rec.Attempts + 1;
@@ -374,13 +391,8 @@ const resetPassword = async ({ identifier, otp, newPassword }) => {
     throw new AppError(`Incorrect OTP. ${remaining} attempt(s) remaining.`, 400);
   }
 
-  // ── Hash new password
-  const hash = await bcrypt.hash(
-    newPassword,
-    parseInt(process.env.BCRYPT_ROUNDS) || 10
-  );
+  const hash = await bcrypt.hash(newPassword, parseInt(process.env.BCRYPT_ROUNDS) || 10);
 
-  // ── Update user password + reset lockout
   await query(
     `UPDATE dbo.Users
      SET PasswordHash      = @hash,
@@ -394,25 +406,14 @@ const resetPassword = async ({ identifier, otp, newPassword }) => {
     }
   );
 
-  // ── DELETE the OTP row — used and done
   await deleteOtpById(rec.Id);
 
-  // ── Confirmation email (fire and forget — don't block response)
   if (user.Email) {
     sendPasswordChangedEmail({ to: user.Email, name: user.FirstName })
       .catch(err => console.error('Confirmation email failed:', err.message));
   }
 
   return true;
-};
-
-// ── Mask email for display (e.g. do****@gmail.com) ───────────────────────────
-const maskEmail = (email) => {
-  if (!email) return '';
-  const [local, domain] = email.split('@');
-  const visible = local.slice(0, 2);
-  const stars   = '*'.repeat(Math.max(local.length - 2, 2));
-  return `${visible}${stars}@${domain}`;
 };
 
 module.exports = { login, logout, forgotPassword, verifyOtp, resetPassword };

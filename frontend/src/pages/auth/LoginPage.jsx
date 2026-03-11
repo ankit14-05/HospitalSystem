@@ -203,7 +203,7 @@ export default function LoginPage() {
               {branding?.bedCapacity && (
                 <FloatCard icon={Bed}          value={`${branding.bedCapacity}+ Beds`} label="Total hospital capacity"  delay=".18s" />
               )}
-              <FloatCard   icon={CheckCircle}  value="HIPAA Compliant"                label="End-to-end encryption"     delay=".26s" />
+              
               <FloatCard   icon={TrendingUp}   value="Real-time Dashboards"           label="Live analytics & reports"  delay=".34s" />
               {branding?.emergencyNumber && (
                 <FloatCard icon={Phone}        value={branding.emergencyNumber}       label="24/7 Emergency line"       delay=".42s" />

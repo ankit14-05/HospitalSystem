@@ -1,18 +1,22 @@
 // src/services/emailService.js
-// Nodemailer SMTP email service
-// Uses SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM_NAME, SMTP_FROM_EMAIL from .env
+// Nodemailer SMTP email service + Fast2SMS for phone OTP
+//
+// Required .env vars:
+//   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM_NAME, SMTP_FROM_EMAIL
+//   FAST2SMS_API_KEY  ← sign up at fast2sms.com → Dev API → copy key
 
 const nodemailer = require('nodemailer');
+const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
 
-// ── Create transporter (lazy singleton) ──────────────────────────────────────
+// ── SMTP transporter (lazy singleton) ────────────────────────────────────────
 let _transporter = null;
 
 const getTransporter = () => {
   if (_transporter) return _transporter;
   _transporter = nodemailer.createTransport({
-    host:   process.env.SMTP_HOST   || 'smtp.gmail.com',
+    host:   process.env.SMTP_HOST || 'smtp.gmail.com',
     port:   parseInt(process.env.SMTP_PORT) || 587,
-    secure: process.env.SMTP_SECURE === 'true', // false = STARTTLS on port 587
+    secure: process.env.SMTP_SECURE === 'true',
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS,
@@ -22,7 +26,6 @@ const getTransporter = () => {
   return _transporter;
 };
 
-// ── Verify connection on startup (optional, logs to console) ─────────────────
 const verifyConnection = async () => {
   try {
     await getTransporter().verify();
@@ -32,12 +35,58 @@ const verifyConnection = async () => {
   }
 };
 
-// ── Core send function ────────────────────────────────────────────────────────
 const sendEmail = async ({ to, subject, html, text }) => {
   const from = `"${process.env.SMTP_FROM_NAME || 'MediCore HMS'}" <${process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER}>`;
   const info = await getTransporter().sendMail({ from, to, subject, html, text });
   console.log(`📧 Email sent to ${to} — MessageId: ${info.messageId}`);
   return info;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FAST2SMS — Send OTP via SMS
+//
+// Setup steps:
+//   1. Go to https://www.fast2sms.com → Sign Up (free)
+//   2. Dashboard → Dev API → copy your API key
+//   3. Add to .env:  FAST2SMS_API_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+//   4. Free plan gives ₹50 credit ≈ 200–300 SMS to Indian numbers
+//
+// The 'otp' route auto-uses Fast2SMS default OTP template:
+//   "Your OTP is {otp}. Valid for 10 minutes. -Fast2SMS"
+// No DLT registration required for dev/testing.
+// ═══════════════════════════════════════════════════════════════════════════════
+const sendOtpSms = async ({ phone, otp }) => {
+  const apiKey = process.env.FAST2SMS_API_KEY;
+  if (!apiKey) throw new Error('FAST2SMS_API_KEY not configured in .env');
+
+  // Fast2SMS needs a clean 10-digit Indian number (no +91 prefix)
+  const cleanPhone = String(phone).replace(/\D/g, '').replace(/^91/, '').slice(-10);
+  if (cleanPhone.length !== 10) {
+    throw new Error(`Invalid Indian phone number: "${phone}" → cleaned to "${cleanPhone}"`);
+  }
+
+  const res = await fetch('https://www.fast2sms.com/dev/bulkV2', {
+    method: 'POST',
+    headers: {
+      'authorization': apiKey,
+      'Content-Type':  'application/json',
+    },
+    body: JSON.stringify({
+      route:            'q',      // OTP route — free, no DLT needed
+      variables_values: otp,        // injected as {otp} in template
+      numbers:          cleanPhone,
+    }),
+  });
+
+  const data = await res.json();
+
+  if (!data.return) {
+    console.error('❌ Fast2SMS error response:', JSON.stringify(data));
+    throw new Error(data.message || 'SMS delivery failed via Fast2SMS');
+  }
+
+  console.log(`📱 SMS OTP sent → ${cleanPhone} (request_id: ${data.request_id})`);
+  return data;
 };
 
 // ── OTP Email Template ────────────────────────────────────────────────────────
@@ -72,11 +121,9 @@ const sendOtpEmail = async ({ to, name, otp, expiresMinutes = 10, purpose = 'pas
         <!-- Body -->
         <tr>
           <td style="padding:40px;">
-            <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#0f172a;">
-              Verification Code
-            </p>
+            <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#0f172a;">Verification Code</p>
             <p style="margin:0 0 28px;font-size:14px;color:#64748b;line-height:1.6;">
-              Hi ${name || 'there'}, use the OTP below to ${purpose}. 
+              Hi ${name || 'there'}, use the OTP below to ${purpose}.
               It expires in <strong>${expiresMinutes} minutes</strong>.
             </p>
 
@@ -177,7 +224,16 @@ const sendPasswordChangedEmail = async ({ to, name }) => {
 </body>
 </html>`;
 
-  return sendEmail({ to, subject, html, text: `Hi ${name || 'there'}, your MediCore HMS password was changed successfully. If this wasn't you, contact your administrator.` });
+  return sendEmail({
+    to, subject, html,
+    text: `Hi ${name || 'there'}, your MediCore HMS password was changed successfully. If this wasn't you, contact your administrator.`,
+  });
 };
 
-module.exports = { sendEmail, sendOtpEmail, sendPasswordChangedEmail, verifyConnection };
+module.exports = {
+  sendEmail,
+  sendOtpEmail,
+  sendOtpSms,
+  sendPasswordChangedEmail,
+  verifyConnection,
+};

@@ -5,7 +5,7 @@ import {
   Eye, EyeOff, CheckCircle, ArrowLeft, ArrowRight,
   Activity, Shield, MapPin, Lock, Camera, Check, X,
   Search, Plus, AlertCircle, Briefcase, User, FileText,
-  Clock, Calendar, Heart, Phone
+  Clock, Calendar, Heart, Phone, Mail, Send
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../services/api';
@@ -112,7 +112,7 @@ const PhoneField = ({ code, onCode, val, onChange, err, placeholder='9876543210'
     </select>
     {/* digits only enforced here */}
     <input value={val}
-      onChange={e=>{ const v=digitsOnly(e.target.value); if(v.length<=10) onChange(v); }}
+      onChange={e=>{ const v=digitsOnly(e.target.value); if(v.startsWith('0')) return; if(v.length<=10) onChange(v); }}
       placeholder={placeholder} inputMode="numeric"
       className="flex-1 px-3 py-2.5 text-[13px] text-slate-700 outline-none bg-white placeholder:text-slate-300"/>
   </div>
@@ -352,6 +352,15 @@ export default function StaffRegisterPage() {
   const [unStatus,setUnStatus]       = useState(null);
   const emailTimer=useRef(null); const phoneTimer=useRef(null); const unTimer=useRef(null);
 
+  // ── Email OTP verification state ──────────────────────────────────────────
+  const [emailOtpSent,    setEmailOtpSent]    = useState(false);
+  const [emailOtpValue,   setEmailOtpValue]   = useState('');
+  const [emailVerified,   setEmailVerified]   = useState(false);
+  const [emailOtpLoading, setEmailOtpLoading] = useState(false);
+  const [emailOtpError,   setEmailOtpError]   = useState('');
+  const [otpCooldown,     setOtpCooldown]     = useState(0);
+  const otpCooldownRef = useRef(null);
+
   const FALLBACK_COUNTRIES = [
     {Id:-1,Name:'India'},{Id:-2,Name:'United States'},{Id:-3,Name:'United Kingdom'},
     {Id:-4,Name:'UAE'},{Id:-5,Name:'Australia'},{Id:-6,Name:'Singapore'},
@@ -395,35 +404,84 @@ export default function StaffRegisterPage() {
     api.get(`/geo/countries/${form.countryId}/states`).then(r=>setStates(extractList(r.data)??extractList(r))).catch(()=>setStates([]));
   },[form.countryId]);
 
-  // ── Real-time checks via api service ──────────────────────────────────────
+  // ── Real-time checks ──────────────────────────────────────────────────────
   const handleEmail = v => {
-    set('email',v); setEmailStatus(null);
-    if(emailTimer.current) clearTimeout(emailTimer.current);
-    if(!v||!/\S+@\S+\.\S+/.test(v)) return;
+    set('email', v); setEmailStatus(null);
+    // Reset OTP flow whenever email changes
+    if (emailOtpSent || emailVerified) {
+      setEmailOtpSent(false); setEmailVerified(false);
+      setEmailOtpValue(''); setEmailOtpError('');
+    }
+    if (emailTimer.current) clearTimeout(emailTimer.current);
+    if (!v || !/\S+@\S+\.\S+/.test(v)) return;
     setEmailStatus('checking');
-    emailTimer.current = setTimeout(async()=>{
+    emailTimer.current = setTimeout(async () => {
       try {
-        const r = await api.get('/register/check-email?email='+encodeURIComponent(v.trim()));
-        const avail = r?.data?.available??r?.available;
-        setEmailStatus(avail===true?'available':avail===false?'taken':null);
-        if(avail===false) setErrors(e=>({...e,email:'Already registered'}));
+        const r = await api.get('/register/check-email?email=' + encodeURIComponent(v.trim()));
+        const avail = r?.data?.available ?? r?.available;
+        setEmailStatus(avail === true ? 'available' : avail === false ? 'taken' : null);
+        if (avail === false) setErrors(e => ({ ...e, email: 'Already registered' }));
       } catch { setEmailStatus(null); }
     }, 600);
   };
 
+  // Block leading 0 at handler level (PhoneField also blocks at keystroke)
   const handlePhone = v => {
-    set('phone',v); setPhoneStatus(null);
-    if(phoneTimer.current) clearTimeout(phoneTimer.current);
-    if(v.length<10) return;
+    if (v.startsWith('0')) return;
+    set('phone', v); setPhoneStatus(null);
+    if (phoneTimer.current) clearTimeout(phoneTimer.current);
+    if (v.length < 10) return;
     setPhoneStatus('checking');
-    phoneTimer.current = setTimeout(async()=>{
+    phoneTimer.current = setTimeout(async () => {
       try {
-        const r = await api.get('/register/check-phone?phone='+encodeURIComponent(v));
-        const avail = r?.data?.available??r?.available;
-        setPhoneStatus(avail===true?'available':avail===false?'taken':null);
-        if(avail===false) setErrors(e=>({...e,phone:'Already registered'}));
+        const r = await api.get('/register/check-phone?phone=' + encodeURIComponent(v));
+        const avail = r?.data?.available ?? r?.available;
+        setPhoneStatus(avail === true ? 'available' : avail === false ? 'taken' : null);
+        if (avail === false) setErrors(e => ({ ...e, phone: 'Already registered' }));
       } catch { setPhoneStatus(null); }
     }, 600);
+  };
+
+  // ── OTP cooldown ticker ────────────────────────────────────────────────────
+  const startCooldown = (secs = 60) => {
+    setOtpCooldown(secs);
+    if (otpCooldownRef.current) clearInterval(otpCooldownRef.current);
+    otpCooldownRef.current = setInterval(() => {
+      setOtpCooldown(prev => {
+        if (prev <= 1) { clearInterval(otpCooldownRef.current); return 0; }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+
+  // ── Send OTP to staff email ────────────────────────────────────────────────
+  const sendStaffEmailOtp = async () => {
+    const email = form.email.trim();
+    if (!email || !/\S+@\S+\.\S+/.test(email)) { setEmailOtpError('Enter a valid email first'); return; }
+    if (emailStatus === 'taken') { setEmailOtpError('This email is already registered'); return; }
+    setEmailOtpLoading(true); setEmailOtpError('');
+    try {
+      await api.post('/register/send-email-otp', { email });
+      setEmailOtpSent(true); setEmailOtpValue(''); startCooldown(60);
+      toast.success('OTP sent! Check your inbox.');
+    } catch (err) {
+      const msg = err?.response?.data?.message || 'Failed to send OTP';
+      setEmailOtpError(msg); toast.error(msg);
+    } finally { setEmailOtpLoading(false); }
+  };
+
+  // ── Verify staff email OTP ─────────────────────────────────────────────────
+  const verifyStaffEmailOtp = async () => {
+    if (emailOtpValue.length !== 6) { setEmailOtpError('Enter the 6-digit OTP'); return; }
+    setEmailOtpLoading(true); setEmailOtpError('');
+    try {
+      await api.post('/register/verify-email-otp', { email: form.email.trim(), otp: emailOtpValue });
+      setEmailVerified(true); setEmailOtpError('');
+      setErrors(e => ({ ...e, email: '' }));
+      toast.success('Email verified!');
+    } catch (err) {
+      setEmailOtpError(err?.response?.data?.message || 'Invalid OTP');
+    } finally { setEmailOtpLoading(false); }
   };
 
   const handleUsername = v => {
@@ -448,11 +506,13 @@ export default function StaffRegisterPage() {
       if(!form.firstName.trim()) e.firstName = 'Required';
       if(!form.lastName.trim())  e.lastName  = 'Required';
       if(!form.gender)           e.gender    = 'Required';
-      if(!form.phone)              e.phone   = 'Required';
-      else if(form.phone.length!==10) e.phone = 'Must be 10 digits';
-      else if(phoneStatus==='taken')  e.phone = 'Already registered';
+      if(!form.phone)                   e.phone = 'Required';
+      else if(form.phone.startsWith('0')) e.phone = 'Cannot start with 0';
+      else if(form.phone.length!==10)    e.phone = 'Must be 10 digits';
+      else if(phoneStatus==='taken')     e.phone = 'Already registered';
       if(!form.email||!/\S+@\S+\.\S+/.test(form.email)) e.email = 'Valid email required';
-      else if(emailStatus==='taken') e.email = 'Already registered';
+      else if(emailStatus==='taken')  e.email = 'Already registered';
+      else if(!emailVerified)         e.email = 'Please verify your email with the OTP sent';
       if(!form.street1.trim()) e.street1 = 'Required';
       if(!form.city.trim())    e.city    = 'Required';
       if(!form.countryId)      e.countryId = 'Required';
@@ -709,15 +769,81 @@ export default function StaffRegisterPage() {
                         <PhoneField code={form.altCode} onCode={v=>set('altCode',v)}
                           val={form.altPhone} onChange={v=>set('altPhone',v)} placeholder="Optional"/>
                       </FW>
-                      <FW label="Email" required error={errors.email}>
+                      <FW label="Email" required error={!emailOtpSent && errors.email}>
+                        {/* Email input */}
                         <div className="relative">
-                          <FI type="email" err={!!errors.email||emailStatus==='taken'} ok={emailStatus==='available'}
-                            value={form.email} onChange={e=>handleEmail(e.target.value)}
-                            placeholder="priya@email.com" className="pr-8"/>
-                          <div className="absolute right-3 top-1/2 -translate-y-1/2"><Dot status={emailStatus}/></div>
+                          <FI type="email"
+                            err={!!errors.email || emailStatus==='taken'}
+                            ok={emailVerified}
+                            value={form.email}
+                            onChange={e => handleEmail(e.target.value)}
+                            placeholder="priya@email.com"
+                            className="pr-20"
+                            disabled={emailVerified}
+                          />
+                          <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                            {emailVerified
+                              ? <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-bold"><Check size={9}/>Verified</span>
+                              : <Dot status={emailStatus}/>
+                            }
+                          </div>
                         </div>
-                        {errors.email&&<p className="mt-1 flex items-center gap-1 text-[11px] text-red-500"><AlertCircle size={9}/>{errors.email}</p>}
-                        {emailStatus==='available'&&<div className="text-emerald-600 text-[11px] mt-1 flex items-center gap-1"><Check size={9}/>Available</div>}
+
+                        {!emailOtpSent && errors.email && (
+                          <p className="mt-1 flex items-center gap-1 text-[11px] text-red-500"><AlertCircle size={9}/>{errors.email}</p>
+                        )}
+
+                        {/* Send OTP button */}
+                        {!emailVerified && !emailOtpSent && emailStatus==='available' && (
+                          <button type="button" onClick={sendStaffEmailOtp} disabled={emailOtpLoading}
+                            className="mt-2 w-full flex items-center justify-center gap-1.5 py-2 rounded-xl border border-indigo-200 text-indigo-600 text-[12px] font-semibold hover:bg-indigo-50 disabled:opacity-50 transition-colors">
+                            {emailOtpLoading
+                              ? <><div className="w-3 h-3 border-2 border-indigo-300 border-t-indigo-600 rounded-full animate-spin"/>Sending...</>
+                              : <><Send size={11}/>Send Verification OTP</>}
+                          </button>
+                        )}
+
+                        {/* OTP input after send */}
+                        {emailOtpSent && !emailVerified && (
+                          <div className="mt-2 p-3 rounded-xl border border-indigo-100 bg-indigo-50/50 space-y-2">
+                            <p className="text-[11px] text-indigo-700 font-semibold flex items-center gap-1">
+                              <Mail size={10}/>OTP sent to <span className="font-bold ml-0.5">{form.email}</span>
+                            </p>
+                            <div className="flex gap-2">
+                              <input
+                                value={emailOtpValue}
+                                onChange={e => { setEmailOtpValue(e.target.value.replace(/\D/g,'').slice(0,6)); setEmailOtpError(''); }}
+                                placeholder="Enter 6-digit OTP"
+                                inputMode="numeric"
+                                maxLength={6}
+                                className="flex-1 px-3 py-2 rounded-lg border border-indigo-200 text-[13px] text-slate-700 outline-none focus:border-indigo-400 font-mono tracking-widest bg-white placeholder:tracking-normal placeholder:font-sans placeholder:text-slate-300"
+                              />
+                              <button type="button" onClick={verifyStaffEmailOtp} disabled={emailOtpLoading || emailOtpValue.length!==6}
+                                className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-[12px] font-semibold disabled:opacity-50 hover:bg-indigo-700 transition-colors">
+                                {emailOtpLoading ? <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin"/> : 'Verify'}
+                              </button>
+                            </div>
+                            {emailOtpError && (
+                              <p className="text-[11px] text-red-500 flex items-center gap-1"><AlertCircle size={9}/>{emailOtpError}</p>
+                            )}
+                            <div className="flex items-center justify-between">
+                              <p className="text-[11px] text-slate-400">Didn't receive it?</p>
+                              {otpCooldown > 0
+                                ? <span className="text-[11px] text-slate-400 font-medium">Resend in {otpCooldown}s</span>
+                                : <button type="button" onClick={sendStaffEmailOtp} disabled={emailOtpLoading}
+                                    className="text-[11px] text-indigo-600 font-semibold hover:underline disabled:opacity-50">
+                                    Resend OTP
+                                  </button>
+                              }
+                            </div>
+                          </div>
+                        )}
+
+                        {emailVerified && (
+                          <div className="mt-2 flex items-center gap-1.5 text-[11px] text-emerald-700 font-semibold">
+                            <CheckCircle size={12} className="text-emerald-500"/>Email verified successfully
+                          </div>
+                        )}
                       </FW>
                     </div>
                   </div>

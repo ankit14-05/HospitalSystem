@@ -14,7 +14,7 @@ import {
   Eye, EyeOff, CheckCircle, ArrowLeft, ArrowRight,
   Activity, Shield, MapPin, Lock, Camera, Check, X,
   Search, Plus, AlertCircle, Stethoscope, Clock, User,
-  FileText, Upload, Trash2, Award, BookOpen
+  FileText, Upload, Trash2, Award, BookOpen, Mail, Send
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../services/api';
@@ -157,7 +157,7 @@ const PhoneField = ({ code, onCode, val, onChange, err, placeholder='9876543210'
         className="px-2 bg-slate-50 border-r border-slate-200 text-[12px] text-slate-600 outline-none cursor-pointer py-2.5 min-w-[68px]">
         {COUNTRY_CODES.map(c=><option key={c}>{c}</option>)}
       </select>
-      <input value={val} onChange={e=>{const v=e.target.value.replace(/\D/g,'');if(v.length<=10)onChange(v);}}
+      <input value={val} onChange={e=>{const v=e.target.value.replace(/\D/g,'');if(v.startsWith('0'))return;if(v.length<=10)onChange(v);}}
         placeholder={placeholder} inputMode="numeric"
         className="flex-1 px-3 py-2.5 text-[13px] text-slate-700 outline-none bg-white placeholder:text-slate-300"/>
     </div>
@@ -333,6 +333,15 @@ export default function DoctorRegisterPage() {
   const [phoneStatus, setPhoneStatus] = useState(null);
   const unTimer=useRef(null); const emailTimer=useRef(null); const phoneTimer=useRef(null);
 
+  // ── FIX 6: Email OTP state for doctor registration ────────────────────────
+  const [emailOtpSent,     setEmailOtpSent]     = useState(false);  // OTP sent to email
+  const [emailOtpValue,    setEmailOtpValue]    = useState('');     // what user typed
+  const [emailVerified,    setEmailVerified]    = useState(false);  // backend confirmed
+  const [emailOtpLoading,  setEmailOtpLoading]  = useState(false);  // send/verify spinner
+  const [emailOtpError,    setEmailOtpError]    = useState('');     // inline error
+  const [otpCooldown,      setOtpCooldown]      = useState(0);      // resend countdown (s)
+  const otpCooldownRef = useRef(null);
+
   const [form, setForm] = useState({
     firstName:'', lastName:'', gender:'', dateOfBirth:'',
     bloodGroup:'', nationality:'Indian', maritalStatus:'', religion:'',
@@ -395,33 +404,95 @@ export default function DoctorRegisterPage() {
       }catch{setUnStatus(null);}
     },500);
   };
+  // ── FIX 6: handleEmail resets OTP state whenever email changes ──────────────
   const handleEmail = v => {
-    set('email',v); setEmailStatus(null);
-    if(emailTimer.current) clearTimeout(emailTimer.current);
-    if(!v||!/\S+@\S+\.\S+/.test(v)) return;
+    set('email', v);
+    setEmailStatus(null);
+    // Reset entire OTP flow if email changes after OTP was sent / verified
+    if (emailOtpSent || emailVerified) {
+      setEmailOtpSent(false);
+      setEmailVerified(false);
+      setEmailOtpValue('');
+      setEmailOtpError('');
+    }
+    if (emailTimer.current) clearTimeout(emailTimer.current);
+    if (!v || !/\S+@\S+\.\S+/.test(v)) return;
     setEmailStatus('checking');
-    emailTimer.current=setTimeout(async()=>{
-      try{
-        const r=await api.get('/register/check-email?email='+encodeURIComponent(v.trim()));
-        const avail=r?.data?.available??r?.available;
-        setEmailStatus(avail===true?'available':avail===false?'taken':null);
-        if(avail===false) setErrors(e=>({...e,email:'Already registered'}));
-      }catch{setEmailStatus(null);}
-    },600);
+    emailTimer.current = setTimeout(async () => {
+      try {
+        const r = await api.get('/register/check-email?email=' + encodeURIComponent(v.trim()));
+        const avail = r?.data?.available ?? r?.available;
+        setEmailStatus(avail === true ? 'available' : avail === false ? 'taken' : null);
+        if (avail === false) setErrors(e => ({ ...e, email: 'Already registered' }));
+      } catch { setEmailStatus(null); }
+    }, 600);
   };
+
+  // ── FIX 5: handlePhone blocks leading 0 ──────────────────────────────────
   const handlePhone = v => {
-    set('phone',v); setPhoneStatus(null);
-    if(phoneTimer.current) clearTimeout(phoneTimer.current);
-    if(v.length<10) return;
+    if (v.startsWith('0')) return;           // reject 0-prefix at handler level too
+    set('phone', v); setPhoneStatus(null);
+    if (phoneTimer.current) clearTimeout(phoneTimer.current);
+    if (v.length < 10) return;
     setPhoneStatus('checking');
-    phoneTimer.current=setTimeout(async()=>{
-      try{
-        const r=await api.get('/register/check-phone?phone='+encodeURIComponent(v));
-        const avail=r?.data?.available??r?.available;
-        setPhoneStatus(avail===true?'available':avail===false?'taken':null);
-        if(avail===false) setErrors(e=>({...e,phone:'Already registered'}));
-      }catch{setPhoneStatus(null);}
-    },600);
+    phoneTimer.current = setTimeout(async () => {
+      try {
+        const r = await api.get('/register/check-phone?phone=' + encodeURIComponent(v));
+        const avail = r?.data?.available ?? r?.available;
+        setPhoneStatus(avail === true ? 'available' : avail === false ? 'taken' : null);
+        if (avail === false) setErrors(e => ({ ...e, phone: 'Already registered' }));
+      } catch { setPhoneStatus(null); }
+    }, 600);
+  };
+
+  // ── FIX 6: OTP cooldown ticker ────────────────────────────────────────────
+  const startCooldown = (secs = 60) => {
+    setOtpCooldown(secs);
+    if (otpCooldownRef.current) clearInterval(otpCooldownRef.current);
+    otpCooldownRef.current = setInterval(() => {
+      setOtpCooldown(prev => {
+        if (prev <= 1) { clearInterval(otpCooldownRef.current); return 0; }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+
+  // ── FIX 6: Send email OTP to doctor ──────────────────────────────────────
+  const sendDocEmailOtp = async () => {
+    const email = form.email.trim();
+    if (!email || !/\S+@\S+\.\S+/.test(email)) {
+      setEmailOtpError('Enter a valid email first'); return;
+    }
+    if (emailStatus === 'taken') { setEmailOtpError('This email is already registered'); return; }
+    setEmailOtpLoading(true); setEmailOtpError('');
+    try {
+      // Reuse the same endpoint used by patient registration
+      await api.post('/register/send-email-otp', { email });
+      setEmailOtpSent(true);
+      setEmailOtpValue('');
+      startCooldown(60);
+      toast.success('OTP sent! Check your inbox.');
+    } catch (err) {
+      const msg = err?.response?.data?.message || 'Failed to send OTP';
+      setEmailOtpError(msg);
+      toast.error(msg);
+    } finally { setEmailOtpLoading(false); }
+  };
+
+  // ── FIX 6: Verify email OTP ───────────────────────────────────────────────
+  const verifyDocEmailOtp = async () => {
+    if (emailOtpValue.length !== 6) { setEmailOtpError('Enter the 6-digit OTP'); return; }
+    setEmailOtpLoading(true); setEmailOtpError('');
+    try {
+      await api.post('/register/verify-email-otp', { email: form.email.trim(), otp: emailOtpValue });
+      setEmailVerified(true);
+      setEmailOtpError('');
+      setErrors(e => ({ ...e, email: '' }));
+      toast.success('Email verified!');
+    } catch (err) {
+      const msg = err?.response?.data?.message || 'Invalid OTP';
+      setEmailOtpError(msg);
+    } finally { setEmailOtpLoading(false); }
   };
 
   // ── Identity handlers ─────────────────────────────────────────────────────
@@ -447,9 +518,11 @@ export default function DoctorRegisterPage() {
       if(f.dateOfBirth){ const de=validateDoctorDOB(f.dateOfBirth); if(de) e.dateOfBirth=de; }
       if(!f.email||!/\S+@\S+\.\S+/.test(f.email)) e.email='Valid email required';
       else if(emailStatus==='taken') e.email='Email already registered';
-      if(!f.phone)               e.phone='Required';
-      else if(f.phone.length!==10) e.phone='Must be 10 digits';
-      else if(phoneStatus==='taken') e.phone='Already registered';
+      else if(!emailVerified) e.email='Please verify your email with the OTP sent';
+      if(!f.phone)                  e.phone='Required';
+      else if(f.phone.startsWith('0')) e.phone='Cannot start with 0';
+      else if(f.phone.length!==10)    e.phone='Must be 10 digits';
+      else if(phoneStatus==='taken')  e.phone='Already registered';
       if(!f.username.trim())       e.username='Required';
       else if(f.username.length<3) e.username='Min 3 characters';
       else if(unStatus==='taken')  e.username='Already taken';
@@ -746,15 +819,86 @@ export default function DoctorRegisterPage() {
                       <FW label="Alternate Phone">
                         <PhoneField code={form.phoneCode} onCode={()=>{}} val={form.altPhone} onChange={v=>set('altPhone',v)} placeholder="Optional"/>
                       </FW>
-                      <FW label="Email" required error={errors.email}>
+                      {/* ── FIX 6: Email with inline OTP verification ────── */}
+                      <FW label="Email" required error={!emailOtpSent && errors.email}>
+                        {/* Email input row */}
                         <div className="relative">
-                          <FI type="email" err={!!errors.email||emailStatus==='taken'} ok={emailStatus==='available'}
-                            value={form.email} onChange={e=>handleEmail(e.target.value)} placeholder="dr.priya@email.com" className="pr-8"/>
-                          <div className="absolute right-3 top-1/2 -translate-y-1/2"><Dot status={emailStatus}/></div>
+                          <FI type="email"
+                            err={!!errors.email || emailStatus==='taken'}
+                            ok={emailVerified}
+                            value={form.email}
+                            onChange={e => handleEmail(e.target.value)}
+                            placeholder="dr.priya@email.com"
+                            className="pr-20"
+                            disabled={emailVerified}
+                          />
+                          {/* Availability dot OR verified badge */}
+                          <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                            {emailVerified
+                              ? <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-bold"><Check size={9}/>Verified</span>
+                              : <Dot status={emailStatus}/>
+                            }
+                          </div>
                         </div>
-                        {errors.email&&<p className="mt-1 flex items-center gap-1 text-[11px] text-red-500"><AlertCircle size={9}/>{errors.email}</p>}
-                        {/* FIX 4: was <p> — changed to <div> to avoid nesting issues with <Check> sibling <div> */}
-                        {emailStatus==='available'&&<div className="text-emerald-600 text-[11px] mt-1 flex items-center gap-1"><Check size={9}/>Available</div>}
+
+                        {/* Error when not yet in OTP flow */}
+                        {!emailOtpSent && errors.email && (
+                          <p className="mt-1 flex items-center gap-1 text-[11px] text-red-500"><AlertCircle size={9}/>{errors.email}</p>
+                        )}
+
+                        {/* Send OTP button — shown when email is valid, not taken, not verified */}
+                        {!emailVerified && !emailOtpSent && emailStatus==='available' && (
+                          <button type="button" onClick={sendDocEmailOtp} disabled={emailOtpLoading}
+                            className="mt-2 w-full flex items-center justify-center gap-1.5 py-2 rounded-xl border border-indigo-200 text-indigo-600 text-[12px] font-semibold hover:bg-indigo-50 disabled:opacity-50 transition-colors">
+                            {emailOtpLoading
+                              ? <><div className="w-3 h-3 border-2 border-indigo-300 border-t-indigo-600 rounded-full animate-spin"/>Sending...</>
+                              : <><Send size={11}/>Send Verification OTP</>}
+                          </button>
+                        )}
+
+                        {/* OTP input + verify — shown after OTP sent */}
+                        {emailOtpSent && !emailVerified && (
+                          <div className="mt-2 p-3 rounded-xl border border-indigo-100 bg-indigo-50/50 space-y-2">
+                            <p className="text-[11px] text-indigo-700 font-semibold flex items-center gap-1">
+                              <Mail size={10}/>OTP sent to <span className="font-bold">{form.email}</span>
+                            </p>
+                            <div className="flex gap-2">
+                              <input
+                                value={emailOtpValue}
+                                onChange={e => { setEmailOtpValue(e.target.value.replace(/\D/g,'').slice(0,6)); setEmailOtpError(''); }}
+                                placeholder="Enter 6-digit OTP"
+                                inputMode="numeric"
+                                maxLength={6}
+                                className="flex-1 px-3 py-2 rounded-lg border border-indigo-200 text-[13px] text-slate-700 outline-none focus:border-indigo-400 font-mono tracking-widest bg-white placeholder:tracking-normal placeholder:font-sans placeholder:text-slate-300"
+                              />
+                              <button type="button" onClick={verifyDocEmailOtp} disabled={emailOtpLoading || emailOtpValue.length!==6}
+                                className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-[12px] font-semibold disabled:opacity-50 hover:bg-indigo-700 transition-colors">
+                                {emailOtpLoading ? <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin"/> : 'Verify'}
+                              </button>
+                            </div>
+                            {emailOtpError && (
+                              <p className="text-[11px] text-red-500 flex items-center gap-1"><AlertCircle size={9}/>{emailOtpError}</p>
+                            )}
+                            {/* Resend with cooldown */}
+                            <div className="flex items-center justify-between">
+                              <p className="text-[11px] text-slate-400">Didn't receive it?</p>
+                              {otpCooldown > 0
+                                ? <span className="text-[11px] text-slate-400 font-medium">Resend in {otpCooldown}s</span>
+                                : <button type="button" onClick={sendDocEmailOtp} disabled={emailOtpLoading}
+                                    className="text-[11px] text-indigo-600 font-semibold hover:underline disabled:opacity-50">
+                                    Resend OTP
+                                  </button>
+                              }
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Verified success row */}
+                        {emailVerified && (
+                          <div className="mt-2 flex items-center gap-1.5 text-[11px] text-emerald-700 font-semibold">
+                            <CheckCircle size={12} className="text-emerald-500"/>Email verified successfully
+                          </div>
+                        )}
                       </FW>
                     </div>
                   </div>

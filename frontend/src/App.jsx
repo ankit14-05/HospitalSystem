@@ -8,7 +8,7 @@ import AppLayout from './components/layout/AppLayout';
 // Auth pages
 import LoginPage          from './pages/auth/LoginPage';
 import ForgotPasswordPage from './pages/auth/ForgotPasswordPage';
-import ResetPasswordPage  from './pages/auth/ResetPasswordPage';
+
 
 // Register pages
 import PatientRegisterPage from './pages/register/PatientRegisterPage';
@@ -63,7 +63,7 @@ export default function App() {
           {/* Public auth routes */}
           <Route path="/login"           element={<RedirectIfAuth><LoginPage /></RedirectIfAuth>} />
           <Route path="/forgot-password" element={<RedirectIfAuth><ForgotPasswordPage /></RedirectIfAuth>} />
-          <Route path="/reset-password"  element={<RedirectIfAuth><ResetPasswordPage /></RedirectIfAuth>} />
+          
 
           {/* Public registration routes */}
           <Route path="/register/patient" element={<RedirectIfAuth><PatientRegisterPage /></RedirectIfAuth>} />
