@@ -1,28 +1,42 @@
 // src/app.js
 require('dotenv').config();
-const express = require('express');
-const helmet = require('helmet');
-const cors = require('cors');
-const compression = require('compression');
+const express      = require('express');
+const helmet       = require('helmet');
+const cors         = require('cors');
+const compression  = require('compression');
 const cookieParser = require('cookie-parser');
-const morgan = require('morgan');
-const rateLimit = require('express-rate-limit');
-const logger = require('./config/logger');
+const morgan       = require('morgan');
+const rateLimit    = require('express-rate-limit');
+const logger       = require('./config/logger');
 
-// Route imports
-const authRoutes     = require('./routes/auth.routes');
-const registerRoutes = require('./routes/register.routes');
-const hospitalRoutes = require('./routes/hospital.routes');
-const geoRoutes      = require('./routes/geo.routes');
-const setupRoutes    = require('./routes/setup.routes');
-const userRoutes     = require('./routes/user.routes');
+// ── Route imports ─────────────────────────────────────────────────────────────
+const authRoutes         = require('./routes/auth.routes');
+const registerRoutes     = require('./routes/register.routes');
+const hospitalRoutes     = require('./routes/hospital.routes');
+const geoRoutes          = require('./routes/geo.routes');
+const setupRoutes        = require('./routes/setup.routes');
+const userRoutes         = require('./routes/user.routes');
+const appointmentRoutes  = require('./routes/appointment.routes');
+const patientRoutes      = require('./routes/patient.routes');
+const departmentRoutes   = require('./routes/department.routes');
+const doctorRoutes       = require('./routes/doctor.routes');
+const prescriptionRoutes = require('./routes/prescription.routes');
+const reportRoutes       = require('./routes/report.routes');
+const billRoutes         = require('./routes/bill.routes');
+const schedulingRoutes   = require('./routes/scheduling.routes');   // ← NEW
 
 const app = express();
 
-// ── Security headers
+// TEMPORARY DEBUG — remove in production
+app.use((req, res, next) => {
+  console.log(`>>> ${req.method} ${req.originalUrl} → path: ${req.path}`);
+  next();
+});
+
+// ── Security headers ──────────────────────────────────────────────────────────
 app.use(helmet());
 
-// ── CORS
+// ── CORS ──────────────────────────────────────────────────────────────────────
 const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:3000').split(',');
 app.use(
   cors({
@@ -36,13 +50,13 @@ app.use(
   })
 );
 
-// ── Compression & parsing
+// ── Compression & parsing ─────────────────────────────────────────────────────
 app.use(compression());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
 
-// ── HTTP logging
+// ── HTTP logging ──────────────────────────────────────────────────────────────
 app.use(
   morgan('combined', {
     stream: { write: (msg) => logger.http(msg.trim()) },
@@ -50,37 +64,49 @@ app.use(
   })
 );
 
-// ── Global rate limiter
+// ── Global rate limiter ───────────────────────────────────────────────────────
 app.use(
   rateLimit({
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
-    max: parseInt(process.env.RATE_LIMIT_MAX) || 100,
+    max:      parseInt(process.env.RATE_LIMIT_MAX)       || 100,
     standardHeaders: true,
-    legacyHeaders: false,
+    legacyHeaders:   false,
     message: { success: false, message: 'Too many requests. Please try again later.' },
   })
 );
 
-// ── Health check
+// ── Health check ──────────────────────────────────────────────────────────────
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString(), service: 'MediCore HMS API' });
 });
 
-// ── API routes
+// ── API routes ────────────────────────────────────────────────────────────────
 const prefix = process.env.API_PREFIX || '/api/v1';
-app.use(`${prefix}/auth`,      authRoutes);
-app.use(`${prefix}/register`,  registerRoutes);
-app.use(`${prefix}/hospitals`, hospitalRoutes);
-app.use(`${prefix}/geo`,       geoRoutes);
-app.use(`${prefix}/setup`,     setupRoutes);
-app.use(`${prefix}/users`,     userRoutes);
 
-// ── 404 handler
+app.use(`${prefix}/auth`,          authRoutes);
+app.use(`${prefix}/register`,      registerRoutes);
+app.use(`${prefix}/hospitals`,     hospitalRoutes);
+app.use(`${prefix}/geo`,           geoRoutes);
+app.use(`${prefix}/setup`,         setupRoutes);
+app.use(`${prefix}/users`,         userRoutes);
+app.use(`${prefix}/appointments`,  appointmentRoutes);
+app.use(`${prefix}/patients`,      patientRoutes);
+app.use(`${prefix}/departments`,   departmentRoutes);
+app.use(`${prefix}/doctors`,       doctorRoutes);
+app.use(`${prefix}/prescriptions`, prescriptionRoutes);
+app.use(`${prefix}/reports`,       reportRoutes);
+app.use(`${prefix}/bills`,         billRoutes);
+app.use(`${prefix}/scheduling`,    schedulingRoutes);               // ← NEW
+
+// ── 404 handler ───────────────────────────────────────────────────────────────
 app.use((req, res) => {
-  res.status(404).json({ success: false, message: `Route ${req.method} ${req.path} not found` });
+  res.status(404).json({
+    success: false,
+    message: `Route ${req.method} ${req.path} not found`,
+  });
 });
 
-// ── Global error handler
+// ── Global error handler ──────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
   const status = err.status || err.statusCode || 500;
   logger.error(`${status} — ${err.message}`, { stack: err.stack, path: req.path });

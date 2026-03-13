@@ -3,6 +3,7 @@ require('dotenv').config();
 const app = require('./app');
 const { getPool, closePool } = require('./config/database');
 const logger = require('./config/logger');
+const { scheduleReminderJob } = require('./jobs/appointmentReminder.job');
 
 const PORT = parseInt(process.env.PORT) || 5000;
 
@@ -10,7 +11,7 @@ async function startServer() {
   try {
     // Warm up DB pool
     await getPool();
-
+     scheduleReminderJob();
     const server = app.listen(PORT, () => {
       logger.info(`🚀 MediCore HMS API running on port ${PORT} [${process.env.NODE_ENV}]`);
     });

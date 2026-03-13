@@ -2,10 +2,13 @@
 import React, { useState } from 'react';
 import {
   LayoutDashboard, Calendar, FileText, Receipt, Stethoscope,
-  Activity, Users, Pill, Bell, Search, ChevronDown, Menu,
-  X, LogOut, Settings, Shield, Clock, BarChart3, FlaskConical,
-  Heart, ChevronRight, User
+  Activity, Users, Pill, Search, ChevronDown, Menu,
+  LogOut, Settings, Clock, BarChart3, FlaskConical,
+  ChevronRight, User
 } from 'lucide-react';
+
+// ── NotificationBell replaces the old hardcoded bell button ──────────────────
+import NotificationBell from './ui/NotificationBell';
 
 const TEAL  = '#0d9488';
 const BLUE  = '#1a6cf6';
@@ -122,7 +125,9 @@ export const HMSSidebar = ({ role = 'doctor', activeTab, setActiveTab, badges = 
 };
 
 // ─── HMS Topbar ───────────────────────────────────────────────────────────────
-export const HMSTopbar = ({ name, role, avatarUrl, notifications = 0, onNotifClick, onProfileClick }) => {
+// CHANGED: removed `notifications`, `onNotifClick` props — NotificationBell
+// is now self-contained and handles its own state internally.
+export const HMSTopbar = ({ name, role, avatarUrl, onProfileClick }) => {
   const hour = new Date().getHours();
   const greet = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
 
@@ -142,18 +147,8 @@ export const HMSTopbar = ({ name, role, avatarUrl, notifications = 0, onNotifCli
         />
       </div>
 
-      {/* Notifications */}
-      <button
-        onClick={onNotifClick}
-        className="relative w-9 h-9 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-center hover:bg-slate-100 transition-colors"
-      >
-        <Bell size={15} className="text-slate-500" />
-        {notifications > 0 && (
-          <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full text-[9px] text-white font-bold flex items-center justify-center">
-            {notifications}
-          </span>
-        )}
-      </button>
+      {/* ── CHANGED: replaced hardcoded bell button with NotificationBell ── */}
+      <NotificationBell />
 
       {/* Avatar */}
       <button

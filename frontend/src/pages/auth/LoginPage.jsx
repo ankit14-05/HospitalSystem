@@ -133,11 +133,12 @@ export default function LoginPage() {
         .lp-reg { transition: all .2s ease; }
       `}</style>
 
-      <div className="min-h-screen flex" style={{ fontFamily:"'Plus Jakarta Sans',sans-serif" }}>
+      {/* Root: fixed full viewport, no overflow */}
+      <div className="h-screen w-screen flex overflow-hidden" style={{ fontFamily:"'Plus Jakarta Sans',sans-serif" }}>
 
         {/* ═══════════════ LEFT — Immersive brand panel ═══════════════════ */}
         <div
-          className="hidden lg:flex lg:w-[46%] xl:w-[44%] flex-col relative overflow-hidden"
+          className="hidden lg:flex lg:w-[46%] xl:w-[44%] flex-col relative overflow-hidden flex-shrink-0"
           style={{ background:`linear-gradient(155deg, ${primary} 0%, ${deep} 100%)` }}>
 
           {/* Animated orbs */}
@@ -165,7 +166,7 @@ export default function LoginPage() {
           <div className="relative z-10 flex flex-col h-full p-10 xl:p-12">
 
             {/* Logo */}
-            <div className="flex items-center gap-3.5 mb-14"
+            <div className="flex items-center gap-3.5 mb-10"
               style={{ animation:'lp-up .55s ease both' }}>
               {branding?.logoUrl
                 ? <img src={branding.logoUrl} alt="logo"
@@ -181,14 +182,14 @@ export default function LoginPage() {
             </div>
 
             {/* Headline */}
-            <div className="mb-10" style={{ animation:'lp-up .55s ease .08s both' }}>
+            <div className="mb-8" style={{ animation:'lp-up .55s ease .08s both' }}>
               {/* Live badge */}
-              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-white/15 bg-white/10 backdrop-blur-sm mb-6">
+              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-white/15 bg-white/10 backdrop-blur-sm mb-5">
                 <span className="w-2 h-2 rounded-full bg-emerald-400" style={{ animation:'lp-orb1 2s ease-in-out infinite' }} />
                 <span className="text-white/75 text-xs font-semibold tracking-wide">All Systems Operational</span>
               </div>
 
-              <h2 className="text-white font-bold leading-[1.12] mb-4" style={{ fontSize:'clamp(28px,3vw,38px)' }}>
+              <h2 className="text-white font-bold leading-[1.12] mb-3" style={{ fontSize:'clamp(24px,2.6vw,34px)' }}>
                 Smarter Hospital<br />
                 Operations,<br />
                 <span className="text-white/40">All in One Place.</span>
@@ -199,14 +200,13 @@ export default function LoginPage() {
             </div>
 
             {/* Stat cards */}
-            <div className="space-y-2.5 mb-10">
+            <div className="space-y-2 mb-8">
               {branding?.bedCapacity && (
-                <FloatCard icon={Bed}          value={`${branding.bedCapacity}+ Beds`} label="Total hospital capacity"  delay=".18s" />
+                <FloatCard icon={Bed}        value={`${branding.bedCapacity}+ Beds`} label="Total hospital capacity"  delay=".18s" />
               )}
-              
-              <FloatCard   icon={TrendingUp}   value="Real-time Dashboards"           label="Live analytics & reports"  delay=".34s" />
+              <FloatCard   icon={TrendingUp} value="Real-time Dashboards"           label="Live analytics & reports"  delay=".34s" />
               {branding?.emergencyNumber && (
-                <FloatCard icon={Phone}        value={branding.emergencyNumber}       label="24/7 Emergency line"       delay=".42s" />
+                <FloatCard icon={Phone}      value={branding.emergencyNumber}       label="24/7 Emergency line"       delay=".42s" />
               )}
             </div>
 
@@ -224,7 +224,7 @@ export default function LoginPage() {
             </div>
 
             {/* Footer */}
-            <div className="mt-8 pt-5 border-t border-white/10"
+            <div className="mt-6 pt-4 border-t border-white/10"
               style={{ animation:'lp-up .55s ease .6s both' }}>
               {branding?.city && (
                 <div className="flex items-center gap-2 text-white/30 text-xs mb-1">
@@ -237,12 +237,12 @@ export default function LoginPage() {
           </div>
         </div>
 
-        {/* ═══════════════ RIGHT — Login form ════════════════════════════ */}
-        <div className="flex-1 flex items-center justify-center bg-slate-50 p-6 overflow-y-auto">
-          <div className="w-full max-w-[400px] py-8" style={{ animation:'lp-up .6s ease .12s both' }}>
+        {/* ═══════════════ RIGHT — Login form (no scroll) ════════════════ */}
+        <div className="flex-1 flex items-center justify-center bg-slate-50 overflow-hidden">
+          <div className="w-full max-w-[400px] px-6" style={{ animation:'lp-up .6s ease .12s both' }}>
 
             {/* Mobile logo */}
-            <div className="flex items-center gap-3 mb-8 lg:hidden">
+            <div className="flex items-center gap-3 mb-7 lg:hidden">
               <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background:primary }}>
                 <Activity size={17} className="text-white" strokeWidth={2.5} />
               </div>
@@ -250,29 +250,29 @@ export default function LoginPage() {
             </div>
 
             {/* Heading */}
-            <div className="mb-8">
-              <h2 className="text-[30px] font-bold text-slate-900 tracking-tight leading-tight mb-1.5">Welcome back</h2>
+            <div className="mb-6">
+              <h2 className="text-[28px] font-bold text-slate-900 tracking-tight leading-tight mb-1">Welcome back</h2>
               <p className="text-slate-400 text-sm">Sign in to access your workspace</p>
             </div>
 
             {/* Error */}
             {error && (
-              <div className="mb-5 flex items-start gap-3 p-4 rounded-2xl bg-red-50 border border-red-100 animate-fade-in">
+              <div className="mb-4 flex items-start gap-3 p-3.5 rounded-2xl bg-red-50 border border-red-100">
                 <div className="w-5 h-5 rounded-full bg-red-100 border border-red-200 flex items-center justify-center flex-shrink-0 mt-0.5 text-red-500 font-bold text-xs">!</div>
                 <p className="text-red-600 text-sm leading-snug">{error}</p>
               </div>
             )}
 
             {/* Form */}
-            <form onSubmit={handleSubmit} className="space-y-4">
+            <form onSubmit={handleSubmit} className="space-y-3.5">
 
-              {/* Username field */}
+              {/* Username */}
               <div>
-                <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-[.1em] mb-2">
+                <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-[.1em] mb-1.5">
                   Username or Email
                 </label>
                 <div className={`lp-field ${focused === 'u' ? 'active' : ''}`}>
-                  <div className="flex items-center gap-3 px-4 py-[14px]">
+                  <div className="flex items-center gap-3 px-4 py-[13px]">
                     <svg width="15" height="15" fill="none"
                       stroke={focused === 'u' ? primary : '#cbd5e1'}
                       strokeWidth="2" viewBox="0 0 24 24"
@@ -292,9 +292,9 @@ export default function LoginPage() {
                 </div>
               </div>
 
-              {/* Password field */}
+              {/* Password */}
               <div>
-                <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center justify-between mb-1.5">
                   <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-[.1em]">Password</label>
                   <Link to="/forgot-password"
                     className="text-xs font-bold hover:underline"
@@ -303,7 +303,7 @@ export default function LoginPage() {
                   </Link>
                 </div>
                 <div className={`lp-field ${focused === 'p' ? 'active' : ''}`}>
-                  <div className="flex items-center gap-3 px-4 py-[14px]">
+                  <div className="flex items-center gap-3 px-4 py-[13px]">
                     <svg width="15" height="15" fill="none"
                       stroke={focused === 'p' ? primary : '#cbd5e1'}
                       strokeWidth="2" viewBox="0 0 24 24"
@@ -331,7 +331,7 @@ export default function LoginPage() {
               <button
                 type="submit"
                 disabled={loading}
-                className="lp-submit w-full flex items-center justify-center gap-2.5 py-[15px] rounded-2xl font-bold text-white text-sm disabled:opacity-60 mt-1">
+                className="lp-submit w-full flex items-center justify-center gap-2.5 py-[14px] rounded-2xl font-bold text-white text-sm disabled:opacity-60 mt-1">
                 {loading
                   ? <><div className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin" /> Signing in…</>
                   : <>Sign in <ArrowRight size={15} /></>
@@ -340,7 +340,7 @@ export default function LoginPage() {
             </form>
 
             {/* Divider */}
-            <div className="flex items-center gap-3 my-6">
+            <div className="flex items-center gap-3 my-5">
               <div className="flex-1 h-px bg-slate-200" />
               <span className="text-slate-300 text-xs font-semibold tracking-wide">NEW HERE?</span>
               <div className="flex-1 h-px bg-slate-200" />
@@ -354,7 +354,7 @@ export default function LoginPage() {
                 { to:'/register/staff',   label:'Staff',   icon:Briefcase },
               ].map(({ to, label, icon: Icon }) => (
                 <Link key={to} to={to}
-                  className="lp-reg flex flex-col items-center gap-2 py-4 rounded-2xl bg-white border border-slate-200 shadow-sm text-xs font-bold text-slate-600">
+                  className="lp-reg flex flex-col items-center gap-2 py-3.5 rounded-2xl bg-white border border-slate-200 shadow-sm text-xs font-bold text-slate-600">
                   <div className="w-8 h-8 rounded-xl flex items-center justify-center"
                     style={{ background:`${primary}14` }}>
                     <Icon size={14} style={{ color:primary }} />
@@ -366,8 +366,8 @@ export default function LoginPage() {
 
             {/* Dev credentials */}
             {import.meta.env.DEV && (
-              <div className="mt-4 px-4 py-3.5 rounded-2xl bg-white border border-slate-200 shadow-sm">
-                <div className="flex items-center gap-2 mb-2">
+              <div className="mt-4 px-4 py-3 rounded-2xl bg-white border border-slate-200 shadow-sm">
+                <div className="flex items-center gap-2 mb-1.5">
                   <Shield size={11} className="text-slate-300" />
                   <span className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">Dev credentials</span>
                 </div>

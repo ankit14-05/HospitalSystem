@@ -4,7 +4,7 @@ import {
   Calendar, FileText, Pill, Receipt, Phone, Heart, Activity,
   User, Camera, X, Check, Clock, Download, Plus, Shield,
   CheckCircle, XCircle, RefreshCw, Loader, Edit2, Bell,
-  Thermometer, Droplets, Weight, Zap, ArrowRight, AlertCircle, FlaskConical
+  Thermometer, Droplets, Weight, ArrowRight, AlertCircle, FlaskConical
 } from 'lucide-react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -17,6 +17,16 @@ import {
   TEAL, BLUE, Sk, StatCard, StatusBadge, Empty,
   SectionHeader, Card, Modal, fmtDate, fmtTime, initials, InfoBadge
 } from '../../components/ui';
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+// Safely parse a date — returns null for invalid/missing values instead of NaN
+const safeDate = (val) => {
+  if (!val) return null;
+  const d = new Date(val);
+  return isNaN(d.getTime()) ? null : d;
+};
+const safeDay   = (val) => safeDate(val)?.getDate()                                    ?? '—';
+const safeMon   = (val) => safeDate(val)?.toLocaleString('en', { month: 'short' })     ?? '';
 
 // ─── Vital Card ───────────────────────────────────────────────────────────────
 const VitalCard = ({ icon: Icon, label, value, unit, normal, color, loading }) => (
@@ -32,7 +42,7 @@ const VitalCard = ({ icon: Icon, label, value, unit, normal, color, loading }) =
     {loading ? <><Sk w="w-20" h="h-7" /><Sk w="w-16" h="h-3" /></> : (
       <>
         <div>
-          <p className="text-2xl font-bold text-slate-800 leading-none">{value ?? '—'}</p>
+          <p className="text-2xl font-bold text-slate-800 leading-none">{value != null ? value : '—'}</p>
           <p className="text-xs text-slate-400 mt-0.5">{unit}</p>
         </div>
         <p className="text-xs font-medium text-slate-500">{label}</p>
@@ -41,7 +51,6 @@ const VitalCard = ({ icon: Icon, label, value, unit, normal, color, loading }) =
   </div>
 );
 
-// ─── Skeleton row ─────────────────────────────────────────────────────────────
 const SkRow = () => (
   <div className="flex items-center gap-4 px-6 py-4 border-b border-slate-50">
     <Sk w="w-11" h="h-11" r="rounded-2xl" />
@@ -50,7 +59,6 @@ const SkRow = () => (
   </div>
 );
 
-// ─── Chart tooltip ────────────────────────────────────────────────────────────
 const ChartTip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
   return (
@@ -82,11 +90,21 @@ const ProfileModal = ({ profile, onClose, onSave }) => {
   const [saving,  setSaving]  = useState(false);
   const fileRef = useRef();
 
+  useEffect(() => {
+    return () => {
+      if (preview && preview.startsWith('blob:')) {
+        URL.revokeObjectURL(preview);
+      }
+    };
+  }, [preview]);
+
   const save = async () => {
     setSaving(true);
     try {
       const fd = new FormData();
-      Object.entries(form).forEach(([k, v]) => v && fd.append(k, v));
+      Object.entries(form).forEach(([k, v]) => {
+        if (v != null) fd.append(k, v);
+      });
       if (fileRef.current?.files[0]) fd.append('profilePic', fileRef.current.files[0]);
       await api.patch('/patients/profile', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       toast.success('Profile updated');
@@ -102,7 +120,6 @@ const ProfileModal = ({ profile, onClose, onSave }) => {
         <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-xl"><X size={14} className="text-slate-400" /></button>
       </div>
       <div className="flex-1 overflow-y-auto px-7 py-6 space-y-5">
-        {/* Photo */}
         <div className="flex items-center gap-4 p-4 rounded-2xl bg-blue-50 border border-blue-100">
           <div className="relative">
             {preview
@@ -124,7 +141,13 @@ const ProfileModal = ({ profile, onClose, onSave }) => {
               Change photo
             </button>
             <input ref={fileRef} type="file" accept="image/*" className="hidden"
-              onChange={e => { const f = e.target.files[0]; if (f) setPreview(URL.createObjectURL(f)); }} />
+              onChange={e => {
+                const f = e.target.files[0];
+                if (f) {
+                  if (preview && preview.startsWith('blob:')) URL.revokeObjectURL(preview);
+                  setPreview(URL.createObjectURL(f));
+                }
+              }} />
           </div>
         </div>
 
@@ -159,7 +182,7 @@ const ProfileModal = ({ profile, onClose, onSave }) => {
               className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2"
               style={{ '--tw-ring-color': `${BLUE}40` }}>
               <option value="">Select</option>
-              {['A+','A-','B+','B-','AB+','AB-','O+','O-'].map(g => <option key={g}>{g}</option>)}
+              {['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'].map(g => <option key={g}>{g}</option>)}
             </select>
           </div>
           <div>
@@ -201,46 +224,80 @@ const ProfileModal = ({ profile, onClose, onSave }) => {
 
 // ─── Book Appointment Modal ───────────────────────────────────────────────────
 const BookModal = ({ onClose, onSuccess }) => {
-  const [step,        setStep]        = useState(1);
-  const [departments, setDepts]       = useState([]);
-  const [doctors,     setDoctors]     = useState([]);
-  const [slots,       setSlots]       = useState([]);
-  const [ldDepts,     setLdDepts]     = useState(true);
-  const [ldDocs,      setLdDocs]      = useState(false);
-  const [ldSlots,     setLdSlots]     = useState(false);
-  const [submitting,  setSubmitting]  = useState(false);
-  const [form, setForm] = useState({ departmentId: '', doctorId: '', date: '', slotId: '', type: 'consultation', reason: '' });
+  const [step,        setStep]       = useState(1);
+  const [departments, setDepts]      = useState([]);
+  const [doctors,     setDoctors]    = useState([]);
+  const [slots,       setSlots]      = useState([]);
+  const [ldDepts,     setLdDepts]    = useState(true);
+  const [ldDocs,      setLdDocs]     = useState(false);
+  const [ldSlots,     setLdSlots]    = useState(false);
+  const [submitting,  setSubmitting] = useState(false);
 
+  // All IDs stored as strings for reliable === comparison
+  const [departmentId, setDepartmentId] = useState('');
+  const [doctorId,     setDoctorId]     = useState('');
+  const [slotId,       setSlotId]       = useState('');
+  const [visitDate,    setVisitDate]    = useState('');
+  const [visitType,    setVisitType]    = useState('consultation');
+  const [reason,       setReason]       = useState('');
+
+  // Load departments once on mount
   useEffect(() => {
-    api.get('/departments').then(r => setDepts(r?.data || r || [])).catch(() => {}).finally(() => setLdDepts(false));
+    api.get('/departments')
+      .then(r => setDepts(r?.data?.data || r?.data || []))
+      .catch(() => {})
+      .finally(() => setLdDepts(false));
   }, []);
 
-  useEffect(() => {
-    if (!form.departmentId) return;
-    setLdDocs(true); setDoctors([]); setForm(f => ({ ...f, doctorId: '', slotId: '' }));
-    api.get(`/doctors?departmentId=${form.departmentId}&isActive=1`).then(r => setDoctors(r?.data || r || [])).finally(() => setLdDocs(false));
-  }, [form.departmentId]);
+  // NO useEffect for doctors/slots — fetch is triggered directly by user clicks
+  // This completely avoids StrictMode double-invoke wiping selections
 
-  useEffect(() => {
-    if (!form.doctorId || !form.date) return;
-    setLdSlots(true); setSlots([]); setForm(f => ({ ...f, slotId: '' }));
-    api.get(`/appointments/slots?doctorId=${form.doctorId}&date=${form.date}`).then(r => setSlots(r?.data || r || [])).finally(() => setLdSlots(false));
-  }, [form.doctorId, form.date]);
+  // API confirmed: doctors use UserId, slots use Id
+  const getDoctorId = (doc)  => doc.UserId  != null ? String(doc.UserId)  : '';
+  const getSlotId   = (slot) => slot.Id     != null ? String(slot.Id)     :
+                                slot.SlotId != null ? String(slot.SlotId) : '';
 
-  const selDoc  = doctors.find(d => String(d.Id || d.id) === String(form.doctorId));
-  const selSlot = slots.find(s   => String(s.Id || s.id) === String(form.slotId));
+  const fetchDoctors = (deptId) => {
+    setDepartmentId(deptId);
+    setDoctorId('');
+    setSlotId('');
+    setDoctors([]);
+    setSlots([]);
+    setLdDocs(true);
+    api.get(`/doctors?departmentId=${deptId}&isActive=1`)
+      .then(r => setDoctors(r?.data?.data || r?.data || []))
+      .catch(() => setDoctors([]))
+      .finally(() => setLdDocs(false));
+  };
+
+  const fetchSlots = (docId, date) => {
+    if (!docId || !date) return;
+    setSlotId('');
+    setSlots([]);
+    setLdSlots(true);
+    api.get(`/appointments/slots?doctorId=${docId}&date=${date}`)
+      .then(r => setSlots(r?.data?.data || r?.data || []))
+      .catch(() => setSlots([]))
+      .finally(() => setLdSlots(false));
+  };
+
+  const selDoc  = doctors.find(d => getDoctorId(d) === doctorId);
+  const selSlot = slots.find(s   => getSlotId(s)   === slotId);
 
   const next = () => {
-    if (step === 1 && (!form.departmentId || !form.doctorId)) return toast.error('Select department and doctor');
-    if (step === 2 && (!form.date || !form.slotId))           return toast.error('Select date and slot');
+    if (step === 1 && (!departmentId || !doctorId)) return toast.error('Select department and doctor');
+    if (step === 2 && (!visitDate   || !slotId))    return toast.error('Select date and slot');
     setStep(s => s + 1);
   };
 
   const submit = async () => {
-    if (!form.reason.trim()) return toast.error('Please describe your reason for visit');
+    if (!reason.trim()) return toast.error('Please describe your reason for visit');
     setSubmitting(true);
     try {
-      await api.post('/appointments', { ...form });
+      await api.post('/appointments', {
+        departmentId, doctorId, slotId,
+        date: visitDate, type: visitType, reason,
+      });
       toast.success('Appointment booked successfully!');
       onSuccess();
     } catch (e) { toast.error(e.response?.data?.message || 'Booking failed'); }
@@ -251,7 +308,6 @@ const BookModal = ({ onClose, onSuccess }) => {
 
   return (
     <Modal onClose={onClose}>
-      {/* Header */}
       <div className="px-7 pt-6 pb-4 flex-shrink-0 bg-gradient-to-r from-blue-50 to-white border-b border-slate-100">
         <div className="flex items-start justify-between mb-4">
           <div>
@@ -263,7 +319,6 @@ const BookModal = ({ onClose, onSuccess }) => {
           </div>
           <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-xl"><X size={14} className="text-slate-400" /></button>
         </div>
-        {/* Progress bar */}
         <div className="flex gap-1.5">
           {[1, 2, 3].map(n => (
             <div key={n} className={`h-1.5 flex-1 rounded-full transition-all duration-300 ${n <= step ? '' : 'bg-slate-100'}`}
@@ -280,46 +335,56 @@ const BookModal = ({ onClose, onSuccess }) => {
               {ldDepts
                 ? <div className="grid grid-cols-2 gap-2">{[...Array(6)].map((_, i) => <Sk key={i} h="h-11" r="rounded-xl" />)}</div>
                 : <div className="grid grid-cols-2 gap-2">
-                    {departments.map(d => (
-                      <button key={d.Id || d.id} onClick={() => setForm(f => ({ ...f, departmentId: d.Id || d.id }))}
-                        className={`px-3 py-2.5 rounded-xl text-sm font-medium border text-left transition-all ${
-                          String(form.departmentId) === String(d.Id || d.id)
-                            ? 'border-blue-400 bg-blue-50 text-blue-700'
-                            : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-                        }`}>
-                        {d.Name || d.name}
-                      </button>
-                    ))}
+                    {departments.map(d => {
+                      const deptId = String(d.Id ?? d.id ?? '');
+                      return (
+                        <button key={deptId} onClick={() => fetchDoctors(deptId)}
+                          className={`px-3 py-2.5 rounded-xl text-sm font-medium border text-left transition-all ${
+                            departmentId === deptId
+                              ? 'border-blue-400 bg-blue-50 text-blue-700'
+                              : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+                          {d.Name || d.name}
+                        </button>
+                      );
+                    })}
                   </div>
               }
             </div>
-            {form.departmentId && (
+            {departmentId && (
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Doctor</label>
                 {ldDocs ? <Sk h="h-20" r="rounded-xl" /> :
                   doctors.length === 0
                     ? <p className="text-sm text-slate-400 text-center py-4">No doctors available in this department</p>
                     : <div className="space-y-2">
-                        {doctors.map(doc => (
-                          <button key={doc.Id || doc.id} onClick={() => setForm(f => ({ ...f, doctorId: doc.Id || doc.id }))}
-                            className={`w-full flex items-center gap-3 p-4 rounded-2xl border text-left transition-all ${
-                              String(form.doctorId) === String(doc.Id || doc.id)
-                                ? 'border-blue-400 bg-blue-50'
-                                : 'border-slate-200 hover:bg-slate-50'
-                            }`}>
-                            <div className="w-11 h-11 rounded-2xl flex items-center justify-center font-bold text-white text-sm flex-shrink-0"
-                              style={{ background: `linear-gradient(135deg,${BLUE},#0ea5e9)` }}>
-                              {(doc.FirstName || doc.firstName)?.[0]}{(doc.LastName || doc.lastName)?.[0]}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="font-bold text-slate-800 text-sm">Dr. {doc.FirstName || doc.firstName} {doc.LastName || doc.lastName}</p>
-                              <p className="text-xs text-slate-400">{doc.Designation || doc.designation || 'Specialist'}</p>
-                            </div>
-                            {doc.ConsultationFee && (
-                              <p className="text-sm font-bold flex-shrink-0" style={{ color: BLUE }}>₹{doc.ConsultationFee || doc.consultationFee}</p>
-                            )}
-                          </button>
-                        ))}
+                        {doctors.map(doc => {
+                          const docId = getDoctorId(doc);
+                          const isSelected = docId !== '' && doctorId === docId;
+                          const consultFee = doc.ConsultationFee ?? doc.consultationFee;
+                          return (
+                            <button key={docId} onClick={() => {
+                              setDoctorId(docId);
+                              if (visitDate) fetchSlots(docId, visitDate);
+                            }}
+                              className={`w-full flex items-center gap-3 p-4 rounded-2xl border text-left transition-all ${
+                                isSelected
+                                  ? 'border-blue-400 bg-blue-50'
+                                  : 'border-slate-200 hover:bg-slate-50'}`}>
+                              <div className="w-11 h-11 rounded-2xl flex items-center justify-center font-bold text-white text-sm flex-shrink-0"
+                                style={{ background: `linear-gradient(135deg,${BLUE},#0ea5e9)` }}>
+                                {(doc.FirstName || doc.firstName)?.[0]}{(doc.LastName || doc.lastName)?.[0]}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="font-bold text-slate-800 text-sm">Dr. {doc.FirstName || doc.firstName} {doc.LastName || doc.lastName}</p>
+                                <p className="text-xs text-slate-400">{doc.Designation || doc.designation || 'Specialist'}</p>
+                              </div>
+                              {/* ✅ FIX: use ?? so fee of 0 is still shown */}
+                              {consultFee != null && (
+                                <p className="text-sm font-bold flex-shrink-0" style={{ color: BLUE }}>₹{consultFee}</p>
+                              )}
+                            </button>
+                          );
+                        })}
                       </div>
                 }
               </div>
@@ -333,12 +398,11 @@ const BookModal = ({ onClose, onSuccess }) => {
               <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Visit Type</label>
               <div className="grid grid-cols-2 gap-2">
                 {['Consultation', 'Follow-up', 'Review', 'Emergency'].map(t => (
-                  <button key={t} onClick={() => setForm(f => ({ ...f, type: t.toLowerCase() }))}
+                  <button key={t} onClick={() => setVisitType(t.toLowerCase())}
                     className={`py-3 rounded-xl text-sm font-semibold border transition-all ${
-                      form.type === t.toLowerCase()
+                      visitType === t.toLowerCase()
                         ? 'border-blue-400 bg-blue-50 text-blue-700'
-                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-                    }`}>
+                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
                     {t}
                   </button>
                 ))}
@@ -346,31 +410,38 @@ const BookModal = ({ onClose, onSuccess }) => {
             </div>
             <div>
               <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Preferred Date</label>
-              <input type="date" value={form.date} min={new Date().toISOString().split('T')[0]}
-                onChange={e => setForm(f => ({ ...f, date: e.target.value }))}
+              <input type="date" value={visitDate} min={new Date().toISOString().split('T')[0]}
+                onChange={e => {
+                  setVisitDate(e.target.value);
+                  if (doctorId) fetchSlots(doctorId, e.target.value);
+                }}
                 className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2"
                 style={{ '--tw-ring-color': `${BLUE}40` }} />
             </div>
-            {form.date && (
+            {visitDate && (
               <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2 flex items-center gap-2">
-                  Available Slots {ldSlots && <Loader size={11} className="animate-spin text-slate-400" />}
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">
+                  <span className="flex items-center gap-2">
+                    Available Slots {ldSlots && <Loader size={11} className="animate-spin text-slate-400" />}
+                  </span>
                 </label>
                 {!ldSlots && slots.length === 0 && (
                   <p className="text-sm text-slate-400 text-center py-4 bg-slate-50 rounded-xl">No slots available for this date</p>
                 )}
                 <div className="grid grid-cols-3 gap-2">
-                  {slots.map(s => (
-                    <button key={s.Id || s.id} disabled={s.IsBooked || s.isBooked}
-                      onClick={() => setForm(f => ({ ...f, slotId: s.Id || s.id }))}
-                      className={`py-2.5 rounded-xl text-xs font-bold border transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
-                        String(form.slotId) === String(s.Id || s.id)
-                          ? 'border-blue-400 bg-blue-50 text-blue-700'
-                          : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-                      }`}>
-                      {s.StartTime || s.time}
-                    </button>
-                  ))}
+                  {slots.map(s => {
+                    const sId = getSlotId(s);
+                    return (
+                      <button key={sId} disabled={s.IsBooked || s.isBooked}
+                        onClick={() => setSlotId(sId)}
+                        className={`py-2.5 rounded-xl text-xs font-bold border transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+                          slotId === sId
+                            ? 'border-blue-400 bg-blue-50 text-blue-700'
+                            : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+                        {s.StartTime || s.time}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -381,20 +452,21 @@ const BookModal = ({ onClose, onSuccess }) => {
           <>
             <div>
               <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Reason for Visit</label>
-              <textarea value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))}
+              <textarea value={reason} onChange={e => setReason(e.target.value)}
                 rows={3} className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm resize-none focus:outline-none focus:ring-2"
                 style={{ '--tw-ring-color': `${BLUE}40` }}
                 placeholder="Describe your symptoms or reason for the visit…" />
             </div>
-            {/* Summary */}
             <div className="rounded-2xl bg-blue-50 border border-blue-100 p-5 space-y-3">
               <p className="text-xs font-bold text-blue-400 uppercase tracking-widest">Booking Summary</p>
               {[
                 ['Doctor', selDoc ? `Dr. ${selDoc.FirstName || selDoc.firstName} ${selDoc.LastName || selDoc.lastName}` : '—'],
-                ['Date',   fmtDate(form.date)],
+                ['Date',   fmtDate(visitDate)],
                 ['Time',   selSlot?.StartTime || selSlot?.time || '—'],
-                ['Type',   form.type],
-                ['Fee',    selDoc?.ConsultationFee ? `₹${selDoc.ConsultationFee}` : 'N/A'],
+                ['Type',   visitType],
+                ['Fee',    (selDoc?.ConsultationFee ?? selDoc?.consultationFee) != null
+                            ? `₹${selDoc.ConsultationFee ?? selDoc.consultationFee}`
+                            : 'N/A'],
               ].map(([k, v]) => (
                 <div key={k} className="flex justify-between items-center">
                   <span className="text-sm text-slate-400">{k}</span>
@@ -434,34 +506,28 @@ const OverviewTab = ({ profile, appointments, prescriptions, vitals, healthChart
 
   return (
     <div className="space-y-5">
-      {/* Vitals */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         {[
-          { icon: Activity,    label: 'Blood Pressure', value: vitals?.SystolicBP    || vitals?.systolicBP,    unit: 'mmHg', color: '#ef4444', normal: (vitals?.SystolicBP || vitals?.systolicBP || 120) < 140 },
-          { icon: Heart,       label: 'Heart Rate',     value: vitals?.HeartRate     || vitals?.heartRate,     unit: 'BPM',  color: '#f43f5e', normal: true },
-          { icon: Droplets,    label: 'Blood Sugar',    value: vitals?.BloodSugar    || vitals?.bloodSugar,    unit: 'mg/dL',color: '#f59e0b', normal: (vitals?.BloodSugar || vitals?.bloodSugar || 100) < 140 },
-          { icon: Weight,      label: 'Weight',         value: vitals?.Weight        || vitals?.weight,        unit: 'kg',   color: BLUE,      normal: true },
-          { icon: Thermometer, label: 'Temperature',    value: vitals?.Temperature   || vitals?.temperature,   unit: '°C',   color: '#8b5cf6', normal: (vitals?.Temperature || vitals?.temperature || 37) < 37.5 },
+          { icon: Activity,    label: 'Blood Pressure', value: vitals?.SystolicBP  || vitals?.systolicBP,  unit: 'mmHg', color: '#ef4444', normal: (vitals?.SystolicBP  || vitals?.systolicBP  || 120) < 140 },
+          { icon: Heart,       label: 'Heart Rate',     value: vitals?.HeartRate   || vitals?.heartRate,   unit: 'BPM',  color: '#f43f5e', normal: true },
+          { icon: Droplets,    label: 'Blood Sugar',    value: vitals?.BloodSugar  || vitals?.bloodSugar,  unit: 'mg/dL',color: '#f59e0b', normal: (vitals?.BloodSugar  || vitals?.bloodSugar  || 100) < 140 },
+          { icon: Weight,      label: 'Weight',         value: vitals?.Weight      || vitals?.weight,      unit: 'kg',   color: BLUE,      normal: true },
+          { icon: Thermometer, label: 'Temperature',    value: vitals?.Temperature || vitals?.temperature, unit: '°C',   color: '#8b5cf6', normal: (vitals?.Temperature || vitals?.temperature || 37) < 37.5 },
         ].map(v => <VitalCard key={v.label} {...v} loading={loading.vitals} />)}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        {/* Health chart */}
         <Card className="lg:col-span-2 p-6">
           <div className="flex items-center justify-between mb-5">
             <div>
               <h3 className="font-bold text-slate-800">Health Report</h3>
-              <p className="text-xs text-slate-400 mt-0.5">
-                Last checkup · {vitals?.RecordedAt ? fmtDate(vitals.RecordedAt) : '—'}
-              </p>
+              <p className="text-xs text-slate-400 mt-0.5">Last checkup · {vitals?.RecordedAt ? fmtDate(vitals.RecordedAt) : '—'}</p>
             </div>
             <InfoBadge color={BLUE}>Heart Rate Trend</InfoBadge>
           </div>
           {loading.vitals ? <Sk h="h-44" r="rounded-2xl" /> :
             healthChart.length === 0
-              ? <div className="h-44 rounded-2xl bg-slate-50 flex items-center justify-center text-slate-400 text-sm">
-                  No health data available
-                </div>
+              ? <div className="h-44 rounded-2xl bg-slate-50 flex items-center justify-center text-slate-400 text-sm">No health data available</div>
               : <div className="h-44">
                   <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={healthChart} margin={{ top: 4, right: 4, left: -24, bottom: 0 }}>
@@ -473,7 +539,7 @@ const OverviewTab = ({ profile, appointments, prescriptions, vitals, healthChart
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
                       <XAxis dataKey="time" tick={{ fontSize: 10, fill: '#94a3b8' }} tickLine={false} axisLine={false} />
-                      <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} tickLine={false} axisLine={false} />
+                      <YAxis                tick={{ fontSize: 10, fill: '#94a3b8' }} tickLine={false} axisLine={false} />
                       <Tooltip content={<ChartTip />} />
                       <Area type="monotone" dataKey="hr" name="Heart Rate" stroke={BLUE} strokeWidth={2.5} fill="url(#blueGrad)" dot={false} activeDot={{ r: 4, fill: BLUE }} />
                     </AreaChart>
@@ -482,15 +548,11 @@ const OverviewTab = ({ profile, appointments, prescriptions, vitals, healthChart
           }
         </Card>
 
-        {/* Right sidebar */}
         <div className="space-y-4">
-          {/* Next appointment */}
           <Card>
             <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
               <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Next Appointment</p>
-              <button onClick={onBook}
-                className="flex items-center gap-1 text-xs font-bold px-3 py-1.5 rounded-xl text-white"
-                style={{ background: BLUE }}>
+              <button onClick={onBook} className="flex items-center gap-1 text-xs font-bold px-3 py-1.5 rounded-xl text-white" style={{ background: BLUE }}>
                 <Plus size={11} /> Book
               </button>
             </div>
@@ -499,16 +561,15 @@ const OverviewTab = ({ profile, appointments, prescriptions, vitals, healthChart
               : nextAppt
                 ? <div className="p-4">
                     <div className="rounded-2xl p-4 flex items-center gap-3" style={{ background: `${BLUE}08`, border: `1.5px solid ${BLUE}20` }}>
-                      <div className="w-12 h-12 rounded-2xl flex flex-col items-center justify-center flex-shrink-0 text-white"
-                        style={{ background: BLUE }}>
-                        <span className="font-black text-lg leading-none">{new Date(nextAppt.Date || nextAppt.date).getDate()}</span>
-                        <span className="text-white/70 text-[9px] font-bold">{new Date(nextAppt.Date || nextAppt.date).toLocaleString('en', { month: 'short' })}</span>
+                      <div className="w-12 h-12 rounded-2xl flex flex-col items-center justify-center flex-shrink-0 text-white" style={{ background: BLUE }}>
+                        <span className="font-black text-lg leading-none">{safeDay(nextAppt.AppointmentDate || nextAppt.Date || nextAppt.date)}</span>
+                        <span className="text-white/70 text-[9px] font-bold">{safeMon(nextAppt.AppointmentDate || nextAppt.Date || nextAppt.date)}</span>
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="font-bold text-slate-800 text-sm truncate">{nextAppt.DoctorName || nextAppt.doctorName}</p>
-                        <p className="text-xs text-slate-400 mt-0.5">{nextAppt.StartTime || nextAppt.time}</p>
+                        <p className="text-xs text-slate-400 mt-0.5">{nextAppt.AppointmentTime || nextAppt.StartTime || nextAppt.time}</p>
                         <span className="inline-block text-xs font-semibold px-2 py-0.5 rounded-full mt-1" style={{ background: `${BLUE}15`, color: BLUE }}>
-                          Token {nextAppt.Token || nextAppt.token || '—'}
+                          Token {nextAppt.TokenNumber || nextAppt.Token || nextAppt.token || '—'}
                         </span>
                       </div>
                     </div>
@@ -521,13 +582,17 @@ const OverviewTab = ({ profile, appointments, prescriptions, vitals, healthChart
             }
           </Card>
 
-          {/* Active meds */}
           <Card>
             <div className="px-5 py-3 border-b border-slate-100">
               <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Active Medications</p>
             </div>
             {loading.prescriptions
-              ? [1,2].map(i => <div key={i} className="flex gap-3 px-5 py-3 border-b border-slate-50"><Sk w="w-8" h="h-8" r="rounded-xl" /><div className="flex-1 space-y-1.5"><Sk h="h-3.5" /><Sk w="w-24" h="h-3" /></div></div>)
+              ? [1, 2].map(i => (
+                  <div key={i} className="flex gap-3 px-5 py-3 border-b border-slate-50">
+                    <Sk w="w-8" h="h-8" r="rounded-xl" />
+                    <div className="flex-1 space-y-1.5"><Sk h="h-3.5" /><Sk w="w-24" h="h-3" /></div>
+                  </div>
+                ))
               : prescriptions.filter(x => x.IsActive || x.isActive).length === 0
                 ? <div className="py-6 text-center text-slate-400"><Pill size={18} className="mx-auto mb-2 text-slate-200" /><p className="text-xs">No active medications</p></div>
                 : prescriptions.filter(x => x.IsActive || x.isActive).map(rx => (
@@ -545,7 +610,6 @@ const OverviewTab = ({ profile, appointments, prescriptions, vitals, healthChart
             }
           </Card>
 
-          {/* Emergency */}
           <div className="rounded-2xl p-4 flex items-center gap-3 border bg-red-50 border-red-100">
             <div className="w-10 h-10 rounded-2xl bg-red-100 flex items-center justify-center flex-shrink-0">
               <Phone size={16} className="text-red-600" />
@@ -561,7 +625,6 @@ const OverviewTab = ({ profile, appointments, prescriptions, vitals, healthChart
         </div>
       </div>
 
-      {/* Recent appointments */}
       <Card>
         <SectionHeader title="Recent Appointments" icon={Calendar}>
           <button onClick={() => onTab('appointments')} className="text-xs font-bold hover:underline flex items-center gap-1" style={{ color: BLUE }}>
@@ -569,16 +632,16 @@ const OverviewTab = ({ profile, appointments, prescriptions, vitals, healthChart
           </button>
         </SectionHeader>
         {loading.appointments
-          ? [1,2,3].map(i => <SkRow key={i} />)
+          ? [1, 2, 3].map(i => <SkRow key={i} />)
           : appointments.slice(0, 5).map(a => (
               <div key={a.Id || a.id} className="flex items-center gap-4 px-6 py-3.5 border-b border-slate-50 last:border-0 hover:bg-slate-50 transition-colors">
                 <div className="w-11 h-11 rounded-2xl flex flex-col items-center justify-center flex-shrink-0 border"
                   style={{ background: `${BLUE}08`, borderColor: `${BLUE}20` }}>
-                  <span className="font-black text-sm leading-none" style={{ color: BLUE }}>{new Date(a.Date || a.date).getDate()}</span>
-                  <span className="text-[9px] font-bold" style={{ color: `${BLUE}80` }}>{new Date(a.Date || a.date).toLocaleString('en', { month: 'short' })}</span>
+                  <span className="font-black text-sm leading-none" style={{ color: BLUE }}>{safeDay(a.AppointmentDate || a.Date || a.date)}</span>
+                  <span className="text-[9px] font-bold" style={{ color: `${BLUE}80` }}>{safeMon(a.AppointmentDate || a.Date || a.date)}</span>
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-bold text-slate-800 truncate">{a.DoctorName || a.doctorName || 'Doctor'}</p>
+                  <p className="text-sm font-bold text-slate-800 truncate">{a.DoctorName || a.doctorName || a.FullName || 'Doctor'}</p>
                   <p className="text-xs text-slate-400 mt-0.5">{a.DepartmentName || a.departmentName} · {a.StartTime || a.time}</p>
                 </div>
                 <StatusBadge status={a.Status || a.status} />
@@ -602,7 +665,7 @@ const AppointmentsTab = ({ appointments, loading, onRefresh, onBook, onCancel })
         <Plus size={13} /> Book New
       </button>
     </SectionHeader>
-    {loading ? [1,2,3,4].map(i => <SkRow key={i} />) :
+    {loading ? [1, 2, 3, 4].map(i => <SkRow key={i} />) :
       appointments.length === 0
         ? <Empty icon={Calendar} text="No appointments found" action="Book Appointment" onAction={onBook} />
         : <div className="divide-y divide-slate-50">
@@ -610,16 +673,17 @@ const AppointmentsTab = ({ appointments, loading, onRefresh, onBook, onCancel })
               <div key={a.Id || a.id} className="flex items-center gap-4 px-6 py-4 hover:bg-slate-50 transition-colors flex-wrap">
                 <div className="w-12 h-12 rounded-2xl flex flex-col items-center justify-center flex-shrink-0"
                   style={{ background: `${BLUE}0c`, border: `1.5px solid ${BLUE}20` }}>
-                  <span className="font-black text-base leading-none" style={{ color: BLUE }}>{new Date(a.Date || a.date).getDate()}</span>
-                  <span className="text-[10px] font-bold" style={{ color: `${BLUE}80` }}>{new Date(a.Date || a.date).toLocaleString('en', { month: 'short' })}</span>
+                  <span className="font-black text-base leading-none" style={{ color: BLUE }}>{safeDay(a.AppointmentDate || a.Date || a.date)}</span>
+                  <span className="text-[10px] font-bold" style={{ color: `${BLUE}80` }}>{safeMon(a.AppointmentDate || a.Date || a.date)}</span>
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-bold text-slate-800 text-sm">{a.DoctorName || a.doctorName || 'Doctor'}</p>
-                  <p className="text-xs text-slate-400 mt-0.5">{a.DepartmentName || a.departmentName} · {a.StartTime || a.time} · Token: {a.Token || a.token || 'N/A'}</p>
-                  <p className="text-xs text-slate-400 capitalize">{a.Type || a.type}</p>
+                  <p className="font-bold text-slate-800 text-sm">{a.DoctorName || a.doctorName || a.FullName || 'Doctor'}</p>
+                  <p className="text-xs text-slate-400 mt-0.5">{a.DepartmentName || a.departmentName} · {a.AppointmentTime || a.StartTime || a.time} · Token: {a.TokenNumber || a.Token || a.token || 'N/A'}</p>
+                  <p className="text-xs text-slate-400 capitalize">{a.VisitType || a.Type || a.type}</p>
                 </div>
-                {a.ConsultationFee !== undefined && (
-                  <p className="font-bold text-slate-700 text-sm">₹{a.ConsultationFee || a.fee || 0}</p>
+                {/* ✅ FIX: use ?? so fee of 0 is still shown */}
+                {((a.ConsultationFee ?? a.fee) != null) && (
+                  <p className="font-bold text-slate-700 text-sm">₹{a.ConsultationFee ?? a.fee ?? 0}</p>
                 )}
                 <StatusBadge status={a.Status || a.status} />
                 {(a.Status || a.status)?.toLowerCase() === 'upcoming' && (
@@ -641,7 +705,7 @@ const PrescriptionsTab = ({ prescriptions, loading, onRefresh }) => (
     <SectionHeader title="Prescriptions" icon={Pill}>
       <button onClick={onRefresh} className="p-2 hover:bg-slate-100 rounded-xl"><RefreshCw size={13} className="text-slate-400" /></button>
     </SectionHeader>
-    {loading ? [1,2,3].map(i => <SkRow key={i} />) :
+    {loading ? [1, 2, 3].map(i => <SkRow key={i} />) :
       prescriptions.length === 0
         ? <Empty icon={Pill} text="No prescriptions on record" />
         : <div className="divide-y divide-slate-50">
@@ -674,7 +738,7 @@ const ReportsTab = ({ reports, loading, onRefresh }) => (
     <SectionHeader title="Medical Reports" icon={FileText}>
       <button onClick={onRefresh} className="p-2 hover:bg-slate-100 rounded-xl"><RefreshCw size={13} className="text-slate-400" /></button>
     </SectionHeader>
-    {loading ? [1,2,3].map(i => <SkRow key={i} />) :
+    {loading ? [1, 2, 3].map(i => <SkRow key={i} />) :
       reports.length === 0
         ? <Empty icon={FileText} text="No reports available yet" />
         : <div className="divide-y divide-slate-50">
@@ -702,21 +766,20 @@ const ReportsTab = ({ reports, loading, onRefresh }) => (
 
 // ─── Billing Tab ──────────────────────────────────────────────────────────────
 const BillingTab = ({ bills, loading, onRefresh }) => {
-  const totalPaid = bills.filter(b => (b.Status || b.status || '').toLowerCase() === 'paid').reduce((s, b) => s + (b.Amount || b.amount || 0), 0);
-  const totalPending = bills.filter(b => (b.Status || b.status || '').toLowerCase() === 'pending').reduce((s, b) => s + (b.Amount || b.amount || 0), 0);
-
+  const totalPaid    = bills.filter(b => (b.Status || b.status || '').toLowerCase() === 'paid').reduce((s, b) => s + (parseFloat(b.Amount ?? b.amount) || 0), 0);
+  const totalPending = bills.filter(b => (b.Status || b.status || '').toLowerCase() === 'pending').reduce((s, b) => s + (parseFloat(b.Amount ?? b.amount) || 0), 0);
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-3 gap-3">
         <StatCard icon={CheckCircle} label="Total Paid"     color="#059669" value={loading ? null : `₹${totalPaid.toLocaleString()}`}    loading={loading} />
-        <StatCard icon={Clock}       label="Pending"        color="#d97706" value={loading ? null : `₹${totalPending.toLocaleString()}`}  loading={loading} />
-        <StatCard icon={Receipt}     label="Total Invoices" color={BLUE}    value={loading ? null : bills.length}                         loading={loading} />
+        <StatCard icon={Clock}       label="Pending"        color="#d97706" value={loading ? null : `₹${totalPending.toLocaleString()}`} loading={loading} />
+        <StatCard icon={Receipt}     label="Total Invoices" color={BLUE}    value={loading ? null : bills.length}                        loading={loading} />
       </div>
       <Card>
         <SectionHeader title="Invoice History" icon={Receipt}>
           <button onClick={onRefresh} className="p-2 hover:bg-slate-100 rounded-xl"><RefreshCw size={13} className="text-slate-400" /></button>
         </SectionHeader>
-        {loading ? [1,2,3].map(i => <SkRow key={i} />) :
+        {loading ? [1, 2, 3].map(i => <SkRow key={i} />) :
           bills.length === 0
             ? <Empty icon={Receipt} text="No bills found" />
             : <div className="divide-y divide-slate-50">
@@ -729,7 +792,7 @@ const BillingTab = ({ bills, loading, onRefresh }) => {
                       <p className="font-bold text-slate-800 text-sm">{b.Description || b.desc || b.InvoiceNo || b.invoiceNo}</p>
                       <p className="text-xs text-slate-400 mt-0.5">{b.InvoiceNo || b.invoiceNo} · {fmtDate(b.Date || b.date)}</p>
                     </div>
-                    <p className="font-bold text-slate-800">₹{(b.Amount || b.amount || 0).toLocaleString()}</p>
+                    <p className="font-bold text-slate-800">₹{(parseFloat(b.Amount ?? b.amount) || 0).toLocaleString()}</p>
                     <StatusBadge status={b.Status || b.status} />
                     <button className="p-2 rounded-xl hover:bg-slate-100 text-slate-300 hover:text-slate-600 transition-colors">
                       <Download size={13} />
@@ -748,9 +811,9 @@ const VitalsTab = ({ vitals, healthChart, loading }) => (
   <div className="space-y-5">
     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
       {[
-        { icon: Activity,    label: 'Blood Pressure', value: vitals?.SystolicBP  || vitals?.systolicBP,  unit: 'mmHg', color: '#ef4444', normal: (vitals?.SystolicBP || vitals?.systolicBP || 120) < 140 },
+        { icon: Activity,    label: 'Blood Pressure', value: vitals?.SystolicBP  || vitals?.systolicBP,  unit: 'mmHg', color: '#ef4444', normal: (vitals?.SystolicBP  || vitals?.systolicBP  || 120) < 140 },
         { icon: Heart,       label: 'Heart Rate',     value: vitals?.HeartRate   || vitals?.heartRate,   unit: 'BPM',  color: '#f43f5e', normal: true },
-        { icon: Droplets,    label: 'Blood Sugar',    value: vitals?.BloodSugar  || vitals?.bloodSugar,  unit: 'mg/dL',color: '#f59e0b', normal: (vitals?.BloodSugar || vitals?.bloodSugar || 100) < 140 },
+        { icon: Droplets,    label: 'Blood Sugar',    value: vitals?.BloodSugar  || vitals?.bloodSugar,  unit: 'mg/dL',color: '#f59e0b', normal: (vitals?.BloodSugar  || vitals?.bloodSugar  || 100) < 140 },
         { icon: Weight,      label: 'Weight',         value: vitals?.Weight      || vitals?.weight,      unit: 'kg',   color: BLUE,      normal: true },
         { icon: Thermometer, label: 'Temperature',    value: vitals?.Temperature || vitals?.temperature, unit: '°C',   color: '#8b5cf6', normal: (vitals?.Temperature || vitals?.temperature || 37) < 37.5 },
       ].map(v => <VitalCard key={v.label} {...v} loading={loading} />)}
@@ -771,7 +834,7 @@ const VitalsTab = ({ vitals, healthChart, loading }) => (
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
                   <XAxis dataKey="time" tick={{ fontSize: 10, fill: '#94a3b8' }} tickLine={false} axisLine={false} />
-                  <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} tickLine={false} axisLine={false} />
+                  <YAxis                tick={{ fontSize: 10, fill: '#94a3b8' }} tickLine={false} axisLine={false} />
                   <Tooltip content={<ChartTip />} />
                   <Area type="monotone" dataKey="hr" name="Heart Rate" stroke={BLUE} strokeWidth={2.5} fill="url(#blueGrad2)" dot={false} activeDot={{ r: 4, fill: BLUE }} />
                 </AreaChart>
@@ -794,28 +857,59 @@ export default function PatientDashboard() {
   const [vitals,        setVitals]        = useState(null);
   const [healthChart,   setHealthChart]   = useState([]);
 
-  const [loading,    setLoading]    = useState({ profile: true, appointments: true, prescriptions: true, reports: true, bills: true, vitals: true });
-  const [activeTab,  setActiveTab]  = useState('overview');
-  const [showBook,   setShowBook]   = useState(false);
-  const [showProfile,setShowProfile]= useState(false);
+  const [loading,     setLoading]     = useState({ profile: true, appointments: true, prescriptions: true, reports: true, bills: true, vitals: true });
+  const [activeTab,   setActiveTab]   = useState('overview');
+  const [showBook,    setShowBook]    = useState(false);
+  const [showProfile, setShowProfile] = useState(false);
 
-  const setL = (k, v) => setLoading(l => ({ ...l, [k]: v }));
+  const setL = useCallback((k, v) => setLoading(l => ({ ...l, [k]: v })), []);
 
   const fetchAll = useCallback(async () => {
-    api.get('/patients/profile').then(r => setProfile(r?.data || r)).catch(() => {}).finally(() => setL('profile', false));
-    api.get('/appointments/my').then(r => setAppointments(r?.data || r || [])).catch(() => setAppointments([])).finally(() => setL('appointments', false));
-    api.get('/prescriptions/my').then(r => setPrescriptions(r?.data || r || [])).catch(() => setPrescriptions([])).finally(() => setL('prescriptions', false));
-    api.get('/reports/my').then(r => setReports(r?.data || r || [])).catch(() => setReports([])).finally(() => setL('reports', false));
-    api.get('/bills/my').then(r => setBills(r?.data || r || [])).catch(() => setBills([])).finally(() => setL('bills', false));
-    api.get('/patients/vitals').then(r => {
-      const d = r?.data || r;
-      setVitals(d?.latest || d);
-      const hist = d?.history || d?.chartData || [];
-      setHealthChart(hist.map(h => ({ time: h.Time || h.time || h.RecordedAt || '', hr: h.HeartRate || h.heartRate || h.hr || 0, bp: h.SystolicBP || h.systolicBP || h.bp || 0 })));
-    }).catch(() => {}).finally(() => setL('vitals', false));
-  }, []);
+    setLoading({ profile: true, appointments: true, prescriptions: true, reports: true, bills: true, vitals: true });
 
-  useEffect(() => { fetchAll(); }, []);
+    api.get('/patients/profile')
+      .then(r => setProfile(r?.data?.data || r?.data || {}))
+      .catch(() => {})
+      .finally(() => setL('profile', false));
+
+    api.get('/appointments/my')
+      .then(r => setAppointments(r?.data?.data || []))
+      .catch(() => setAppointments([]))
+      .finally(() => setL('appointments', false));
+
+    api.get('/prescriptions/my')
+      .then(r => setPrescriptions(r?.data?.data || []))
+      .catch(() => setPrescriptions([]))
+      .finally(() => setL('prescriptions', false));
+
+    api.get('/reports/my')
+      .then(r => setReports(r?.data?.data || []))
+      .catch(() => setReports([]))
+      .finally(() => setL('reports', false));
+
+    api.get('/bills/my')
+      .then(r => setBills(r?.data?.data || []))
+      .catch(() => setBills([]))
+      .finally(() => setL('bills', false));
+
+    api.get('/patients/vitals')
+      .then(r => {
+        const d = r?.data?.data || r?.data || {};
+        setVitals(d?.latest || d);
+        const hist = d?.history || d?.chartData || [];
+        setHealthChart(
+          hist.map(h => ({
+            time: h.Time || h.time || h.RecordedAt || '',
+            hr:   h.HeartRate  || h.heartRate  || h.hr || 0,
+            bp:   h.SystolicBP || h.systolicBP || h.bp || 0,
+          }))
+        );
+      })
+      .catch(() => {})
+      .finally(() => setL('vitals', false));
+  }, [setL]);
+
+  useEffect(() => { fetchAll(); }, [fetchAll]);
 
   const p           = profile || {};
   const displayName = `${p.FirstName || user?.firstName || ''} ${p.LastName || user?.lastName || ''}`.trim() || 'Patient';
@@ -830,10 +924,48 @@ export default function PatientDashboard() {
     } catch { toast.error('Failed to cancel'); }
   };
 
-  const refreshAppointments = () => {
+  const refreshAppointments = useCallback(() => {
     setL('appointments', true);
-    api.get('/appointments/my').then(r => setAppointments(r?.data || r || [])).catch(() => {}).finally(() => setL('appointments', false));
-  };
+    api.get('/appointments/my')
+      .then(r => setAppointments(r?.data?.data || []))
+      .catch(() => {})
+      .finally(() => setL('appointments', false));
+  }, [setL]);
+
+  const refreshPrescriptions = useCallback(() => {
+    setL('prescriptions', true);
+    api.get('/prescriptions/my')
+      .then(r => setPrescriptions(r?.data?.data || r?.data || []))
+      .catch(() => {})
+      .finally(() => setL('prescriptions', false));
+  }, [setL]);
+
+  const refreshReports = useCallback(() => {
+    setL('reports', true);
+    api.get('/reports/my')
+      .then(r => setReports(r?.data?.data || r?.data || []))
+      .catch(() => {})
+      .finally(() => setL('reports', false));
+  }, [setL]);
+
+  const refreshBills = useCallback(() => {
+    setL('bills', true);
+    api.get('/bills/my')
+      .then(r => setBills(r?.data?.data || r?.data || []))
+      .catch(() => {})
+      .finally(() => setL('bills', false));
+  }, [setL]);
+
+  const TABS = [
+    { key: 'overview',      label: 'Dashboard',       icon: Activity                            },
+    { key: 'appointments',  label: 'Appointments',    icon: Calendar, badge: upcoming.length    },
+    { key: 'prescriptions', label: 'Prescriptions',   icon: Pill,     badge: activeMeds.length  },
+    { key: 'emr',           label: 'Medical Records', icon: FileText                            },
+    { key: 'reports',       label: 'Lab Reports',     icon: FlaskConical                        },
+    { key: 'billing',       label: 'Billing',         icon: Receipt                             },
+    { key: 'vitals',        label: 'Health Vitals',   icon: Heart                               },
+    { key: 'profile',       label: 'My Profile',      icon: User                                },
+  ];
 
   const tabContent = {
     overview: (
@@ -847,24 +979,18 @@ export default function PatientDashboard() {
     ),
     prescriptions: (
       <PrescriptionsTab prescriptions={prescriptions} loading={loading.prescriptions}
-        onRefresh={() => { setL('prescriptions', true); api.get('/prescriptions/my').then(r => setPrescriptions(r?.data || r || [])).finally(() => setL('prescriptions', false)); }} />
+        onRefresh={refreshPrescriptions} />
     ),
-    emr: (
-      <Card className="p-8">
-        <Empty icon={FileText} text="Electronic Medical Records coming soon" />
-      </Card>
-    ),
+    emr: <Card className="p-8"><Empty icon={FileText} text="Electronic Medical Records coming soon" /></Card>,
     reports: (
       <ReportsTab reports={reports} loading={loading.reports}
-        onRefresh={() => { setL('reports', true); api.get('/reports/my').then(r => setReports(r?.data || r || [])).finally(() => setL('reports', false)); }} />
+        onRefresh={refreshReports} />
     ),
     billing: (
       <BillingTab bills={bills} loading={loading.bills}
-        onRefresh={() => { setL('bills', true); api.get('/bills/my').then(r => setBills(r?.data || r || [])).finally(() => setL('bills', false)); }} />
+        onRefresh={refreshBills} />
     ),
-    vitals: (
-      <VitalsTab vitals={vitals} healthChart={healthChart} loading={loading.vitals} />
-    ),
+    vitals: <VitalsTab vitals={vitals} healthChart={healthChart} loading={loading.vitals} />,
     profile: (
       <Card className="p-6">
         <div className="flex items-center gap-5 mb-6">
@@ -893,14 +1019,14 @@ export default function PatientDashboard() {
         </div>
         <div className="grid grid-cols-2 gap-3">
           {[
-            ['UHID',            p.UHID || user?.uhid      || '—'],
-            ['Phone',           p.Phone || user?.phone    || '—'],
-            ['Email',           p.Email || user?.email    || '—'],
-            ['Blood Group',     p.BloodGroup              || '—'],
-            ['Emergency',       p.EmergencyName           || '—'],
-            ['Emergency Phone', p.EmergencyPhone          || '—'],
-            ['Allergies',       p.KnownAllergies          || 'None on record'],
-            ['Address',         p.Street1 || p.address    || '—'],
+            ['UHID',            p.UHID          || user?.uhid  || '—'],
+            ['Phone',           p.Phone         || user?.phone || '—'],
+            ['Email',           p.Email         || user?.email || '—'],
+            ['Blood Group',     p.BloodGroup                   || '—'],
+            ['Emergency',       p.EmergencyName                || '—'],
+            ['Emergency Phone', p.EmergencyPhone               || '—'],
+            ['Allergies',       p.KnownAllergies               || 'None on record'],
+            ['Address',         p.Street1       || p.address   || '—'],
           ].map(([k, v]) => (
             <div key={k} className="p-4 rounded-xl bg-slate-50 border border-slate-100">
               <p className="text-xs text-slate-400 mb-0.5">{k}</p>
@@ -912,35 +1038,19 @@ export default function PatientDashboard() {
     ),
   };
 
-  // ── Tab definitions ──────────────────────────────────────────────────────────
-  const TABS = [
-    { key: 'overview',      label: 'Dashboard',       icon: Activity                          },
-    { key: 'appointments',  label: 'Appointments',    icon: Calendar, badge: upcoming.length  },
-    { key: 'prescriptions', label: 'Prescriptions',   icon: Pill,     badge: activeMeds.length},
-    { key: 'emr',           label: 'Medical Records', icon: FileText                          },
-    { key: 'reports',       label: 'Lab Reports',     icon: FlaskConical                      },
-    { key: 'billing',       label: 'Billing',         icon: Receipt                           },
-    { key: 'vitals',        label: 'Health Vitals',   icon: Heart                             },
-    { key: 'profile',       label: 'My Profile',      icon: User                              },
-  ];
-
   return (
     <div className="space-y-5">
 
-      {/* ── Page header ── */}
+      {/* ── Header ── */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-bold text-slate-900">{displayName}</h1>
           <p className="text-sm text-slate-400 mt-0.5 flex items-center gap-2">
             {(p.UHID || user?.uhid) && (
-              <span className="flex items-center gap-1">
-                <Shield size={11} /> {p.UHID || user.uhid}
-              </span>
+              <span className="flex items-center gap-1"><Shield size={11} /> {p.UHID || user.uhid}</span>
             )}
             {p.BloodGroup && (
-              <span className="flex items-center gap-1 text-red-500 font-semibold">
-                <Heart size={11} /> {p.BloodGroup}
-              </span>
+              <span className="flex items-center gap-1 text-red-500 font-semibold"><Heart size={11} /> {p.BloodGroup}</span>
             )}
             {p.Gender && <span>{p.Gender}{p.Age ? ` · ${p.Age} yrs` : ''}</span>}
           </p>
@@ -952,23 +1062,19 @@ export default function PatientDashboard() {
         </button>
       </div>
 
-      {/* ── Horizontal tab bar ── */}
+      {/* ── Tab bar ── */}
       <div className="flex gap-0.5 flex-wrap border-b border-slate-200">
         {TABS.map(({ key, label, icon: Icon, badge }) => (
           <button key={key} onClick={() => setActiveTab(key)}
-            className={`
-              flex items-center gap-2 px-4 py-2.5 text-sm font-semibold rounded-t-xl border-b-2 transition-all
+            className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold rounded-t-xl border-b-2 transition-all
               ${activeTab === key
                 ? 'border-blue-600 text-blue-700 bg-blue-50'
-                : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-50'
-              }
-            `}>
+                : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-50'}`}>
             <Icon size={14} />
             {label}
             {badge > 0 && (
-              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
-                activeTab === key ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-600'
-              }`}>
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full
+                ${activeTab === key ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-600'}`}>
                 {badge}
               </span>
             )}
@@ -977,11 +1083,11 @@ export default function PatientDashboard() {
       </div>
 
       {/* ── Tab content ── */}
-      {tabContent[activeTab] || null}
+      {tabContent[activeTab] ?? null}
 
       {/* ── Modals ── */}
-      {showBook    && <BookModal onClose={() => setShowBook(false)} onSuccess={() => { setShowBook(false); fetchAll(); }} />}
-      {showProfile && <ProfileModal profile={profile || user} onClose={() => setShowProfile(false)} onSave={d => { setProfile(pr => ({ ...pr, ...d })); setShowProfile(false); }} />}
+      {showBook    && <BookModal    onClose={() => setShowBook(false)}    onSuccess={() => { setShowBook(false);    fetchAll(); }} />}
+      {showProfile && <ProfileModal profile={profile || user}            onClose={() => setShowProfile(false)} onSave={d => { setProfile(pr => ({ ...pr, ...d })); setShowProfile(false); }} />}
     </div>
   );
 }

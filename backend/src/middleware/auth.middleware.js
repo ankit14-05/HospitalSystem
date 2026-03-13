@@ -1,28 +1,21 @@
 // src/middleware/auth.middleware.js
-const jwt = require('jsonwebtoken');
+const jwt    = require('jsonwebtoken');
 const { query, sql } = require('../config/database');
 const AppError = require('../utils/AppError');
 
-/**
- * Verify JWT and attach user to req.user
- */
 const authenticate = async (req, res, next) => {
   try {
     let token = null;
 
-    // 1. Try Authorization header: Bearer <token>
     const authHeader = req.headers['authorization'];
     if (authHeader && authHeader.startsWith('Bearer ')) {
       token = authHeader.slice(7);
-    }
-    // 2. Try cookie
-    else if (req.cookies && req.cookies.accessToken) {
+    } else if (req.cookies && req.cookies.accessToken) {
       token = req.cookies.accessToken;
     }
 
     if (!token) throw new AppError('No authentication token provided.', 401);
 
-    // Verify token
     let decoded;
     try {
       decoded = jwt.verify(token, process.env.JWT_SECRET);
@@ -31,7 +24,6 @@ const authenticate = async (req, res, next) => {
       throw new AppError('Invalid token. Please log in again.', 401);
     }
 
-    // Check session is still active in DB
     const sessionResult = await query(
       `SELECT s.Id, s.IsActive, s.ExpiresAt, u.IsActive AS UserActive, u.DeletedAt
        FROM dbo.AuthSessions s
@@ -49,18 +41,15 @@ const authenticate = async (req, res, next) => {
       throw new AppError('Your account has been deactivated.', 403);
     }
 
-    req.user = decoded;
-    req.sessionId = session.Id;
+    req.user         = decoded;
+    req.user.id      = decoded.userId;   // ← THE FIX: normalise userId → id
+    req.sessionId    = session.Id;
     next();
   } catch (err) {
     next(err);
   }
 };
 
-/**
- * Role-based access control
- * @param {...string} roles
- */
 const authorize = (...roles) => {
   return (req, res, next) => {
     if (!req.user) return next(new AppError('Not authenticated.', 401));
@@ -71,13 +60,8 @@ const authorize = (...roles) => {
   };
 };
 
-/**
- * Ensure user belongs to the hospital in the request
- * Superadmin bypasses this check
- */
 const hospitalScope = (req, res, next) => {
   if (req.user.role === 'superadmin') return next();
-
   const hospitalId = parseInt(req.headers['x-hospital-id'] || req.params.hospitalId || req.body.hospitalId);
   if (!hospitalId || hospitalId !== req.user.hospitalId) {
     return next(new AppError('Access denied to this hospital resource.', 403));
