@@ -28,7 +28,9 @@ import DoctorApprovalPanel from './pages/admin/DoctorApprovalPanel';
 import StaffApprovalPanel  from './pages/admin/StaffApprovalPanel';
 
 // Scheduling
-import SchedulingDashboard from './pages/scheduling/SchedulingDashboard';
+import SchedulingDashboard  from './pages/scheduling/SchedulingDashboard';
+import AdminScheduleManager from './pages/scheduling/AdminScheduleManager';
+import DoctorSchedulePage   from './pages/scheduling/DoctorSchedulePage';
 
 // Setup pages
 import HospitalSetupPage from './pages/setup/HospitalSetupPage';
@@ -37,7 +39,8 @@ import GeoSetupPage      from './pages/setup/GeoSetupPage';
 import NotFoundPage      from './pages/NotFoundPage';
 
 // Appointments
-import AppointmentsPage from './pages/appointments/AppointmentsPage';
+import AppointmentsPage     from './pages/appointments/AppointmentsPage';
+import BookAppointmentPage  from './pages/appointments/BookAppointmentPage';
 
 // ── Shared role map ───────────────────────────────────────────────────────────
 const ROLE_ROUTES = {
@@ -196,6 +199,22 @@ export default function App() {
                 </RequireRole>
               }
             />
+            <Route
+              path="admin/schedule-manager"
+              element={
+                <RequireRole roles={['superadmin', 'admin']}>
+                  <AdminScheduleManager />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="doctor/schedule"
+              element={
+                <RequireRole roles={['doctor']}>
+                  <DoctorSchedulePage />
+                </RequireRole>
+              }
+            />
 
             {/* ── Appointments ── */}
             <Route
@@ -203,6 +222,14 @@ export default function App() {
               element={
                 <RequireRole roles={['superadmin', 'admin', 'doctor', 'nurse', 'receptionist', 'pharmacist', 'labtech', 'patient', 'auditor']}>
                   <AppointmentsPage />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="appointments/book"
+              element={
+                <RequireRole roles={['patient']}>
+                  <BookAppointmentPage />
                 </RequireRole>
               }
             />

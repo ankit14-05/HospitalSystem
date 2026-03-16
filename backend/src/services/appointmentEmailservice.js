@@ -298,3 +298,99 @@ module.exports = {
   sendReminderPatient,
   sendCompletedPatient,
 };
+// ─────────────────────────────────────────────────────────────────────────────
+// 9. TOKEN CONFIRMATION — Patient (detailed, professional)
+// ─────────────────────────────────────────────────────────────────────────────
+const sendTokenConfirmation = async ({
+  to, patientName, doctorName, specialization, department,
+  date, time, token, appointmentNo, visitType, reason, fee,
+  hospitalName = BRAND,
+}) => {
+  const subject = `🎫 Token #${token} Confirmed — ${date} at ${time} | ${hospitalName}`;
+
+  const body = `
+    <p style="margin:0 0 4px;font-size:24px;font-weight:900;color:#0f172a;letter-spacing:-0.5px;">
+      Appointment Confirmed! 🎉
+    </p>
+    <p style="margin:0 0 28px;font-size:14px;color:#64748b;line-height:1.7;">
+      Hello <strong>${patientName}</strong>, your appointment has been booked successfully.
+      Your details are below.
+    </p>
+
+    <!-- Token highlight -->
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px;">
+      <tr>
+        <td style="background:linear-gradient(135deg,#0d9488,#0891b2);border-radius:16px;padding:28px;text-align:center;">
+          <p style="margin:0 0 6px;font-size:11px;font-weight:700;color:rgba(255,255,255,0.7);letter-spacing:3px;text-transform:uppercase;">Your Token Number</p>
+          <p style="margin:0;font-size:64px;font-weight:900;color:#ffffff;line-height:1;font-family:Georgia,serif;">${token}</p>
+          <p style="margin:8px 0 0;font-size:12px;color:rgba(255,255,255,0.6);font-family:monospace;">Ref: ${appointmentNo}</p>
+        </td>
+      </tr>
+    </table>
+
+    <!-- Appointment details table -->
+    <table width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;border-radius:14px;border:1px solid #e2e8f0;overflow:hidden;margin:0 0 24px;">
+      <tr>
+        <td colspan="2" style="background:#0d948808;padding:12px 20px;border-bottom:1px solid #e2e8f0;">
+          <p style="margin:0;font-size:11px;font-weight:700;color:#0d9488;letter-spacing:2px;text-transform:uppercase;">Appointment Details</p>
+        </td>
+      </tr>
+      ${[
+        ['👨‍⚕️ Doctor',     `Dr. ${doctorName}`],
+        ['🔬 Specialization', specialization || 'Specialist'],
+        department ? ['🏥 Department',  department] : null,
+        ['📅 Date',          date],
+        ['⏰ Time',           time],
+        visitType ? ['🩺 Visit Type',   visitType] : null,
+        reason    ? ['📋 Reason',       reason]    : null,
+        fee       ? ['💰 Fee',          `₹${fee}`] : null,
+      ].filter(Boolean).map(([label, val], i) => `
+        <tr style="${i % 2 === 0 ? '' : 'background:#f1f5f9;'}">
+          <td style="padding:11px 20px;font-size:12px;color:#64748b;width:40%;">${label}</td>
+          <td style="padding:11px 20px;font-size:13px;font-weight:600;color:#1e293b;">${val}</td>
+        </tr>
+      `).join('')}
+    </table>
+
+    <!-- What to bring -->
+    <table width="100%" cellpadding="0" cellspacing="0" style="background:#eff6ff;border-radius:12px;border:1px solid #bfdbfe;margin:0 0 20px;">
+      <tr>
+        <td style="padding:16px 20px;">
+          <p style="margin:0 0 10px;font-size:13px;font-weight:700;color:#1e40af;">📋 What to bring</p>
+          <table cellpadding="0" cellspacing="0">
+            ${['Government-issued ID (Aadhaar / PAN / Passport)', 'Insurance card or health policy document', 'Previous prescriptions or medical records', 'Any recent test reports or scans'].map(item => `
+            <tr>
+              <td style="padding:3px 0;font-size:12px;color:#3b82f6;">✓&nbsp;</td>
+              <td style="padding:3px 0;font-size:12px;color:#1e3a8a;">${item}</td>
+            </tr>`).join('')}
+          </table>
+        </td>
+      </tr>
+    </table>
+
+    <!-- Reminder -->
+    <div style="background:#fefce8;border-left:4px solid #eab308;border-radius:0 10px 10px 0;padding:14px 16px;margin:0 0 20px;">
+      <p style="margin:0;font-size:13px;color:#713f12;line-height:1.6;">
+        ⏰ <strong>Reminder:</strong> Please arrive at least <strong>15 minutes early</strong> to complete registration formalities.
+      </p>
+    </div>
+
+    <p style="margin:0;font-size:12px;color:#94a3b8;line-height:1.6;">
+      Need to cancel or reschedule? Log in to your patient portal or contact the hospital reception.
+    </p>
+  `;
+
+  return sendEmail({ to, subject, html: layout(body, '#0d9488') });
+};
+
+module.exports = {
+  sendBookingConfirmedPatient,
+  sendBookingConfirmedDoctor,
+  sendCancelledPatient,
+  sendCancelledDoctor,
+  sendRescheduledPatient,
+  sendRescheduledDoctor,
+  sendReminderPatient,
+  sendCompletedPatient,
+  sendTokenConfirmation,
+};

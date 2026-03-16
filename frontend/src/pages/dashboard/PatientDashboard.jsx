@@ -1,5 +1,6 @@
 // src/pages/dashboard/PatientDashboard.jsx
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Calendar, FileText, Pill, Receipt, Phone, Heart, Activity,
   User, Camera, X, Check, Clock, Download, Plus, Shield,
@@ -848,6 +849,7 @@ const VitalsTab = ({ vitals, healthChart, loading }) => (
 // ═════════════════════════════════════════════════════════════════════════════
 export default function PatientDashboard() {
   const { user } = useAuth();
+  const navigate  = useNavigate();
 
   const [profile,       setProfile]       = useState(null);
   const [appointments,  setAppointments]  = useState([]);
@@ -862,6 +864,7 @@ export default function PatientDashboard() {
   const [showBook,    setShowBook]    = useState(false);
   const [showProfile, setShowProfile] = useState(false);
 
+  const handleBook = () => navigate('/appointments/book');
   const setL = useCallback((k, v) => setLoading(l => ({ ...l, [k]: v })), []);
 
   const fetchAll = useCallback(async () => {
@@ -971,11 +974,11 @@ export default function PatientDashboard() {
     overview: (
       <OverviewTab profile={p} appointments={appointments} prescriptions={prescriptions}
         vitals={vitals} healthChart={healthChart} loading={loading}
-        onBook={() => setShowBook(true)} onTab={setActiveTab} />
+        onBook={handleBook} onTab={setActiveTab} />
     ),
     appointments: (
       <AppointmentsTab appointments={appointments} loading={loading.appointments}
-        onRefresh={refreshAppointments} onBook={() => setShowBook(true)} onCancel={cancelAppt} />
+        onRefresh={refreshAppointments} onBook={handleBook} onCancel={cancelAppt} />
     ),
     prescriptions: (
       <PrescriptionsTab prescriptions={prescriptions} loading={loading.prescriptions}
@@ -1055,7 +1058,7 @@ export default function PatientDashboard() {
             {p.Gender && <span>{p.Gender}{p.Age ? ` · ${p.Age} yrs` : ''}</span>}
           </p>
         </div>
-        <button onClick={() => setShowBook(true)}
+        <button onClick={handleBook}
           className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-white text-sm font-semibold shadow-sm hover:opacity-90 transition-opacity"
           style={{ background: BLUE }}>
           <Plus size={14} /> Schedule Appointment

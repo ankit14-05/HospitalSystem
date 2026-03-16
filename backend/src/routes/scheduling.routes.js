@@ -1,4 +1,5 @@
-// src/routes/doctor-schedule.routes.js
+// src/routes/scheduling.routes.js  (merged doctor-schedule routes here)
+// NOTE: Original file header was doctor-schedule.routes.js
 // Doctor-facing scheduling endpoints — authenticated doctor only.
 // Covers: schedule blocks (OPD, surgery, ward round, etc.), leaves, today view.
 //
@@ -19,6 +20,7 @@ const router   = express.Router();
 const { query, sql } = require('../config/database');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const AppError = require('../utils/AppError');
+const dsCtrl   = require('../controllers/doctorSchedule.controller');
 
 // All routes require authenticated doctor (or admin who can proxy)
 router.use(authenticate);
@@ -66,20 +68,9 @@ const getDoctorProfileId = async (userId) => {
 // );
 // ═════════════════════════════════════════════════════════════════════════════
 
-// GET /doctors/my-schedule
-router.get('/my-schedule', authorize('doctor','admin','superadmin'), async (req, res, next) => {
-  try {
-    const { Id: doctorId, HospitalId: hospitalId } = await getDoctorProfileId(req.user.id);
-
-    const result = await query(
-      `SELECT * FROM dbo.DoctorScheduleBlocks
-       WHERE DoctorId = @DoctorId AND IsActive = 1
-       ORDER BY DayOfWeek, StartTime`,
-      { DoctorId: { type: sql.BigInt, value: doctorId } }
-    );
-    ok(res, result.recordset);
-  } catch (err) { next(err); }
-});
+// GET /my-schedule — doctor views their admin-assigned schedule (DoctorSchedules table)
+// NOTE: overrides the old DoctorScheduleBlocks version above
+router.get('/my-schedule', authorize('doctor','admin','superadmin'), (...args) => dsCtrl.getMySchedule(...args));
 
 // POST /doctors/my-schedule
 router.post('/my-schedule', authorize('doctor','admin','superadmin'), async (req, res, next) => {
@@ -365,5 +356,19 @@ router.get('/today-schedule', authorize('doctor','admin','superadmin'), async (r
     });
   } catch (err) { next(err); }
 });
+
+// ═══════════════════════════════════════════════════════════════════════
+// ADMIN-ASSIGNED DOCTOR SCHEDULES (uses DoctorSchedules table)
+// ═══════════════════════════════════════════════════════════════════════
+// Admin routes — manage any doctor's schedule
+router.get('/doctor-schedules',        authenticate, authorize('admin','superadmin','auditor'), dsCtrl.getAllDoctorSchedules);
+router.get('/doctor-schedules/:id',    authenticate, authorize('admin','superadmin','auditor'), dsCtrl.getDoctorScheduleById);
+router.post('/doctor-schedules',       authenticate, authorize('admin','superadmin'),           dsCtrl.createDoctorSchedule);
+router.put('/doctor-schedules/:id',    authenticate, authorize('admin','superadmin'),           dsCtrl.updateDoctorSchedule);
+router.delete('/doctor-schedules/:id', authenticate, authorize('admin','superadmin'),           dsCtrl.deleteDoctorSchedule);
+
+// Doctors list for dropdown (admin only)
+router.get('/doctors-list',            authenticate, authorize('admin','superadmin','auditor'), dsCtrl.getDoctorsList);
+
 
 module.exports = router;

@@ -470,20 +470,57 @@ router.get('/:id/slots', async (req, res, next) => {
     );
 
     const slots = [];
-    if (doc.AvailableFrom && doc.AvailableTo) {
-      const [fromH, fromM] = doc.AvailableFrom.toString().slice(0, 5).split(':').map(Number);
-      const [toH,   toM  ] = doc.AvailableTo.toString().slice(0, 5).split(':').map(Number);
-      let h = fromH, m = fromM;
-      while (h < toH || (h === toH && m < toM)) {
+
+    const toMins = t => {
+      const s = t?.toString().slice(0, 5) || '';
+      const [h, m] = s.split(':').map(Number);
+      return (h||0)*60 + (m||0);
+    };
+
+    const pushSlots = (fromStr, toStr, durMins) => {
+      if (!fromStr || !toStr) return;
+      let cur = toMins(fromStr);
+      const end = toMins(toStr);
+      if (end <= cur) return;
+      while (cur < end) {
+        const h = Math.floor(cur / 60);
+        const m = cur % 60;
         const timeStr = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
         slots.push({ time: timeStr, available: !bookedTimes.has(timeStr) });
-        m += 30;
-        if (m >= 60) { h += 1; m -= 60; }
+        cur += durMins;
+      }
+    };
+
+    if (doc.AvailableFrom && doc.AvailableTo) {
+      // Use profile availability (set during registration)
+      pushSlots(doc.AvailableFrom, doc.AvailableTo, 30);
+    } else {
+      // Fall back to DoctorSchedules table (set by admin)
+      const dow = new Date(date).getDay();
+      const schResult2 = await pool.request()
+        .input('doctorId',  id)
+        .input('dayOfWeek', dow)
+        .input('date',      date)
+        .query(`
+          SELECT
+            CONVERT(VARCHAR(8), StartTime, 108) AS StartTime,
+            CONVERT(VARCHAR(8), EndTime,   108) AS EndTime,
+            SlotDurationMins
+          FROM dbo.DoctorSchedules
+          WHERE DoctorId   = @doctorId
+            AND DayOfWeek  = @dayOfWeek
+            AND IsActive   = 1
+            AND EffectiveFrom <= @date
+            AND (EffectiveTo IS NULL OR EffectiveTo >= @date)
+        `);
+
+      for (const sch of schResult2.recordset) {
+        pushSlots(sch.StartTime, sch.EndTime, sch.SlotDurationMins || 30);
       }
     }
 
     res.json({
-      success: true, available: true, date,
+      success: true, available: slots.length > 0, date,
       totalSlots:     slots.length,
       availableSlots: slots.filter(s =>  s.available).length,
       bookedSlots:    slots.filter(s => !s.available).length,

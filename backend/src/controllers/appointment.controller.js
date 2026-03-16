@@ -41,7 +41,15 @@ const fireNotificationsAndEmails = async (type, appt, extra = {}) => {
   try {
     if (type === 'booked') {
       await notifService.notifyBooked(notifBase);
-      if (PatientEmail) emailService.sendBookingConfirmedPatient({ to: PatientEmail, patientName, doctorName, date, time, department: DepartmentName, visitType: VisitType, token: TokenNumber, reason: Reason, appointmentNo }).catch(console.error);
+      if (PatientEmail) {
+        emailService.sendTokenConfirmation({
+          to: PatientEmail, patientName, doctorName, date, time,
+          token: TokenNumber, appointmentNo,
+          specialization: appt.DoctorSpecialization || appt.Specialization,
+          department: DepartmentName, visitType: VisitType,
+          reason: Reason, fee: appt.ConsultationFee,
+        }).catch(console.error);
+      }
       if (DoctorEmail)  emailService.sendBookingConfirmedDoctor ({ to: DoctorEmail,  doctorName,  patientName, date, time, department: DepartmentName, visitType: VisitType, token: TokenNumber, reason: Reason, appointmentNo }).catch(console.error);
     }
     if (type === 'cancelled') {
