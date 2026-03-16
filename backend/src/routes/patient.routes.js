@@ -273,4 +273,132 @@ router.get('/',
   }
 );
 
+// ── GET /patients/:id  — full patient detail for doctors ─────────────────────
+router.get('/:id',
+  authorize('admin', 'superadmin', 'receptionist', 'doctor', 'nurse'),
+  async (req, res, next) => {
+    try {
+      const pool = await getPool();
+      const id   = parseInt(req.params.id);
+
+      // Full profile
+      const profileRes = await pool.request()
+        .input('Id', id)
+        .query(`
+          SELECT
+            p.Id, p.UHID, p.HospitalId,
+            p.FirstName, p.LastName, p.FirstName + ' ' + p.LastName AS FullName,
+            p.Gender, p.DateOfBirth, p.AgeYears, p.BloodGroup,
+            p.Nationality, p.MaritalStatus, p.Occupation,
+            p.Religion, p.MotherTongue, p.PhotoUrl,
+            p.Phone, p.PhoneCountryCode, p.AltPhone, p.Email,
+            p.Aadhaar, p.AbhaNumber,
+            p.Street1, p.Street2, p.City, p.PincodeText,
+            p.EmergencyName, p.EmergencyPhone, p.EmergencyRelation,
+            p.KnownAllergies, p.ChronicConditions, p.CurrentMedications,
+            p.InsuranceProvider, p.InsurancePolicyNo, p.InsuranceValidUntil,
+            p.CreatedAt AS RegisteredAt,
+            u.Username, u.Email AS UserEmail
+          FROM dbo.PatientProfiles p
+          LEFT JOIN dbo.Users u ON u.Id = p.UserId
+          WHERE p.Id = @Id AND p.DeletedAt IS NULL
+        `);
+
+      if (!profileRes.recordset.length)
+        return res.status(404).json({ success: false, message: 'Patient not found' });
+
+      // Past appointments (last 20)
+      const apptRes = await pool.request()
+        .input('PatientId', id)
+        .query(`
+          SELECT TOP 20
+            a.Id, a.AppointmentNo, a.AppointmentDate,
+            CONVERT(VARCHAR(8), a.AppointmentTime, 108) AS AppointmentTime,
+            a.VisitType, a.Status, a.Priority, a.Reason, a.Notes,
+            a.TokenNumber, a.CancelReason,
+            u.FirstName + ' ' + u.LastName AS DoctorName,
+            sp.Name AS Specialization,
+            d.Name  AS DepartmentName
+          FROM dbo.Appointments a
+          JOIN dbo.DoctorProfiles  dp ON dp.Id = a.DoctorId
+          JOIN dbo.Users           u  ON u.Id  = dp.UserId
+          LEFT JOIN dbo.Specializations sp ON sp.Id = dp.SpecializationId
+          LEFT JOIN dbo.Departments     d  ON d.Id  = a.DepartmentId
+          WHERE a.PatientId = @PatientId
+          ORDER BY a.AppointmentDate DESC, a.AppointmentTime DESC
+        `);
+
+      // Past prescriptions (last 10)
+      const rxRes = await pool.request()
+        .input('PatientId', id)
+        .query(`
+          SELECT TOP 10
+            rx.Id, rx.RxNumber, rx.RxDate, rx.Diagnosis,
+            rx.Notes, rx.Status, rx.ValidUntil,
+            u.FirstName + ' ' + u.LastName AS DoctorName,
+            (
+              SELECT rxi.MedicineName, rxi.Dosage, rxi.Frequency, rxi.Duration, rxi.Instructions
+              FROM dbo.PrescriptionItems rxi
+              WHERE rxi.PrescriptionId = rx.Id
+              FOR JSON PATH
+            ) AS Items
+          FROM dbo.Prescriptions rx
+          JOIN dbo.DoctorProfiles dp ON dp.Id = rx.DoctorId
+          JOIN dbo.Users          u  ON u.Id  = dp.UserId
+          WHERE rx.PatientId = @PatientId
+          ORDER BY rx.RxDate DESC
+        `);
+
+      // Latest vitals — table may not exist, handle gracefully
+      let vitalsRes = { recordset: [] };
+      try {
+        vitalsRes = await pool.request()
+          .input('PatientId', id)
+          .query(`
+            SELECT TOP 1
+              v.RecordedAt, v.BloodPressureSystolic, v.BloodPressureDiastolic,
+              v.HeartRate, v.Temperature, v.OxygenSaturation,
+              v.Weight, v.Height, v.BMI, v.Notes
+            FROM dbo.PatientVitals v
+            WHERE v.PatientId = @PatientId
+            ORDER BY v.RecordedAt DESC
+          `);
+      } catch (_) { /* vitals table may not exist */ }
+
+      // Lab orders summary (last 5)
+      const labRes = await pool.request()
+        .input('PatientId', id)
+        .query(`
+          SELECT TOP 5
+            lo.Id, lo.OrderNumber, lo.OrderDate, lo.Status, lo.Priority,
+            u.FirstName + ' ' + u.LastName AS OrderedByName
+          FROM dbo.LabOrders lo
+          LEFT JOIN dbo.Users u ON u.Id = lo.OrderedBy
+          WHERE lo.PatientId = @PatientId
+          ORDER BY lo.OrderDate DESC
+        `);
+
+      const prescriptions = rxRes.recordset.map(r => ({
+        ...r,
+        Items: r.Items ? JSON.parse(r.Items) : [],
+      }));
+
+      res.json({
+        success: true,
+        data: {
+          profile:       {
+            ...profileRes.recordset[0],
+            EmergencyContactName:  profileRes.recordset[0]?.EmergencyName,
+            EmergencyContactPhone: profileRes.recordset[0]?.EmergencyPhone,
+          },
+          appointments:  apptRes.recordset,
+          prescriptions,
+          vitals:        vitalsRes.recordset[0] || null,
+          labOrders:     labRes.recordset,
+        },
+      });
+    } catch (err) { next(err); }
+  }
+);
+
 module.exports = router;

@@ -3,8 +3,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Users, Calendar, Pill, Clock, RefreshCw, Loader,
   Check, CheckCircle, XCircle, X, Plus, Search,
-  Edit2, Download, Camera, BarChart2,
-  Activity, Stethoscope, ArrowRight, Bell
+  Edit2, Download, Camera, BarChart2, FlaskConical,
+  Activity, Stethoscope, ArrowRight, Bell, Eye, AlertCircle, CalendarDays
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -182,6 +182,445 @@ const RxModal = ({ patient, onClose, onSave }) => {
           className="flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl text-white text-sm font-semibold disabled:opacity-60"
           style={{ background: TEAL }}>
           {saving ? <><Loader size={14} className="animate-spin" />Issuing…</> : <><Check size={14} />Issue Prescription</>}
+        </button>
+      </div>
+    </Modal>
+  );
+};
+
+
+// ─── Patient History Modal ────────────────────────────────────────────────────
+const PatientHistoryModal = ({ patientId, patientName, onClose, onRx }) => {
+  const [data,    setData]    = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [tab,     setTab]     = useState('overview');
+
+  useEffect(() => {
+    if (!patientId) return;
+    setLoading(true);
+    api.get(`/patients/${patientId}`)
+      .then(r => setData(r?.data ?? r))
+      .catch(() => setData(null))
+      .finally(() => setLoading(false));
+  }, [patientId]);
+
+  const profile = data?.profile || {};
+  const appts   = data?.appointments   || [];
+  const rxList  = data?.prescriptions  || [];
+  const vitals  = data?.vitals         || null;
+  const labs    = data?.labOrders      || [];
+
+  const age = profile.DateOfBirth
+    ? Math.floor((Date.now() - new Date(profile.DateOfBirth)) / 3.156e10)
+    : profile.AgeYears;
+
+  const statusColors = {
+    Scheduled:  'bg-blue-100 text-blue-700',
+    Confirmed:  'bg-teal-100 text-teal-700',
+    Completed:  'bg-purple-100 text-purple-700',
+    Cancelled:  'bg-red-100 text-red-600',
+    NoShow:     'bg-orange-100 text-orange-700',
+  };
+
+  const TABS = [
+    { key:'overview',      label:'Overview'       },
+    { key:'appointments',  label:`History (${appts.length})` },
+    { key:'prescriptions', label:`Rx (${rxList.length})`     },
+    { key:'vitals',        label:'Vitals'         },
+    { key:'labs',          label:`Labs (${labs.length})`     },
+  ];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+         style={{ background:'rgba(15,23,42,0.6)', backdropFilter:'blur(6px)' }}>
+      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden">
+
+        {/* Header */}
+        <div className="flex items-start justify-between px-6 py-5 border-b border-slate-100 bg-gradient-to-r from-slate-800 to-slate-700 rounded-t-3xl flex-shrink-0">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center text-lg font-black text-white border border-white/20">
+              {(profile.FirstName || patientName || 'P')[0]}
+            </div>
+            <div>
+              <h2 className="font-black text-white text-lg leading-tight">
+                {profile.FullName || profile.FirstName && `${profile.FirstName} ${profile.LastName}` || patientName}
+              </h2>
+              <div className="flex items-center gap-3 mt-1">
+                {profile.UHID && <span className="text-xs font-mono text-slate-300 bg-white/10 px-2 py-0.5 rounded-full">{profile.UHID}</span>}
+                {age  && <span className="text-xs text-slate-300">{age}y</span>}
+                {profile.Gender && <span className="text-xs text-slate-300 capitalize">{profile.Gender}</span>}
+                {profile.BloodGroup && (
+                  <span className="text-xs font-bold text-red-300 bg-red-500/20 px-1.5 py-0.5 rounded-full">
+                    🩸 {profile.BloodGroup}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={() => onRx({ PatientId: patientId, Name: profile.FullName || patientName })}
+              className="flex items-center gap-1.5 px-3 py-2 bg-teal-500 hover:bg-teal-600 text-white text-xs font-bold rounded-xl transition-colors">
+              <Pill size={12} /> New Rx
+            </button>
+            <button onClick={onClose} className="w-8 h-8 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-colors">
+              <X size={15} />
+            </button>
+          </div>
+        </div>
+
+        {/* Tab bar */}
+        <div className="flex gap-1 px-5 py-2 border-b border-slate-100 overflow-x-auto flex-shrink-0 bg-slate-50">
+          {TABS.map(t => (
+            <button key={t.key} onClick={() => setTab(t.key)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all
+                ${tab === t.key ? 'bg-white text-slate-700 shadow-sm border border-slate-200' : 'text-slate-500 hover:text-slate-700'}`}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Body */}
+        <div className="overflow-y-auto flex-1 p-5">
+          {loading ? (
+            <div className="space-y-3">
+              {[1,2,3,4].map(i => <div key={i} className="h-16 bg-slate-100 rounded-2xl animate-pulse" />)}
+            </div>
+          ) : !data ? (
+            <div className="text-center py-12 text-slate-400">
+              <AlertCircle size={28} className="mx-auto mb-2 text-slate-300" />
+              <p>Could not load patient data</p>
+            </div>
+          ) : (
+            <>
+              {/* Overview */}
+              {tab === 'overview' && (
+                <div className="space-y-4">
+                  {/* Quick stats */}
+                  <div className="grid grid-cols-4 gap-3">
+                    {[
+                      { label:'Total Visits',   value: appts.length,                            color:'#0d9488' },
+                      { label:'Prescriptions',  value: rxList.length,                           color:'#7c3aed' },
+                      { label:'Lab Orders',     value: labs.length,                             color:'#2563eb' },
+                      { label:'Last Visit',     value: appts[0] ? fmtDate(appts[0].AppointmentDate) : '—', color:'#d97706', small: true },
+                    ].map(s => (
+                      <div key={s.label} className="bg-slate-50 rounded-2xl p-3 text-center border border-slate-100">
+                        <p className={`${s.small ? 'text-sm' : 'text-2xl'} font-black`} style={{ color: s.color }}>{s.value}</p>
+                        <p className="text-[10px] text-slate-400 font-medium mt-0.5">{s.label}</p>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Contact & identity */}
+                  <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
+                    <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Contact & Identity</p>
+                    <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+                      {[
+                        ['Phone',        profile.Phone],
+                        ['Email',        profile.Email || profile.UserEmail],
+                        ['Marital',      profile.MaritalStatus],
+                        ['Occupation',   profile.Occupation],
+                        ['Blood Group',  profile.BloodGroup],
+                        ['Nationality',  profile.Nationality],
+                        ['ABHA No.',     profile.AbhaNumber],
+                        ['Emergency',    profile.EmergencyName && `${profile.EmergencyName} (${profile.EmergencyRelation || ''}) — ${profile.EmergencyPhone}`],
+                        ['Insurance',    profile.InsuranceProvider && `${profile.InsuranceProvider} · ${profile.InsurancePolicyNo || ''}`],
+                      ].filter(([,v]) => v).map(([k, v]) => (
+                        <div key={k} className="flex gap-2">
+                          <span className="text-slate-400 text-xs w-20 flex-shrink-0">{k}</span>
+                          <span className="text-slate-700 text-xs font-medium truncate">{v}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Critical medical context */}
+                  {(profile.KnownAllergies || profile.ChronicConditions || profile.CurrentMedications) && (
+                    <div className="rounded-2xl p-4 border border-red-100 bg-red-50/50">
+                      <p className="text-xs font-bold text-red-600 uppercase tracking-wider mb-3">⚠️ Critical Medical Info</p>
+                      <div className="space-y-2">
+                        {profile.KnownAllergies && (
+                          <div className="bg-white rounded-xl px-3 py-2 border border-red-100">
+                            <p className="text-[10px] font-bold text-red-500 uppercase tracking-widest mb-0.5">Known Allergies</p>
+                            <p className="text-xs text-slate-700 font-medium">{profile.KnownAllergies}</p>
+                          </div>
+                        )}
+                        {profile.ChronicConditions && (
+                          <div className="bg-white rounded-xl px-3 py-2 border border-amber-100">
+                            <p className="text-[10px] font-bold text-amber-600 uppercase tracking-widest mb-0.5">Chronic Conditions</p>
+                            <p className="text-xs text-slate-700 font-medium">{profile.ChronicConditions}</p>
+                          </div>
+                        )}
+                        {profile.CurrentMedications && (
+                          <div className="bg-white rounded-xl px-3 py-2 border border-blue-100">
+                            <p className="text-[10px] font-bold text-blue-600 uppercase tracking-widest mb-0.5">Current Medications</p>
+                            <p className="text-xs text-slate-700 font-medium">{profile.CurrentMedications}</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Latest vitals snapshot */}
+                  {vitals && (
+                    <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
+                      <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">
+                        Latest Vitals · <span className="normal-case font-normal text-slate-400">{fmtDate(vitals.RecordedAt)}</span>
+                      </p>
+                      <div className="grid grid-cols-3 gap-2">
+                        {[
+                          { label:'BP', value: vitals.BloodPressureSystolic ? `${vitals.BloodPressureSystolic}/${vitals.BloodPressureDiastolic}` : null, unit:'mmHg', color:'#dc2626' },
+                          { label:'Heart Rate', value: vitals.HeartRate,    unit:'bpm',  color:'#e11d48' },
+                          { label:'SpO₂',       value: vitals.OxygenSaturation, unit:'%', color:'#0ea5e9' },
+                          { label:'Temp',       value: vitals.Temperature,  unit:'°F',   color:'#f97316' },
+                          { label:'Weight',     value: vitals.Weight,       unit:'kg',   color:'#7c3aed' },
+                          { label:'BMI',        value: vitals.BMI,          unit:'',     color:'#16a34a' },
+                        ].filter(v => v.value).map(v => (
+                          <div key={v.label} className="bg-white rounded-xl p-2.5 text-center border border-slate-100">
+                            <p className="text-base font-black" style={{ color: v.color }}>{v.value}<span className="text-[10px] font-normal ml-0.5">{v.unit}</span></p>
+                            <p className="text-[10px] text-slate-400">{v.label}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Recent appointment */}
+                  {appts[0] && (
+                    <div className="bg-blue-50 rounded-2xl p-4 border border-blue-100">
+                      <p className="text-xs font-bold text-blue-600 uppercase tracking-wider mb-2">Last Visit</p>
+                      <p className="text-sm font-bold text-slate-700">{fmtDate(appts[0].AppointmentDate)} · {appts[0].DoctorName}</p>
+                      <p className="text-xs text-slate-500 mt-1">{appts[0].Reason || '—'}</p>
+                      <span className={`inline-block mt-2 text-[10px] font-bold px-2 py-0.5 rounded-full ${statusColors[appts[0].Status] || 'bg-slate-100 text-slate-500'}`}>
+                        {appts[0].Status}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Appointment History */}
+              {tab === 'appointments' && (
+                <div className="space-y-2">
+                  {appts.length === 0
+                    ? <p className="text-center py-8 text-slate-400 text-sm">No appointment history</p>
+                    : appts.map(a => (
+                      <div key={a.Id} className="bg-white border border-slate-100 rounded-2xl p-4 hover:border-slate-200 transition-all">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-sm font-bold text-slate-700">{fmtDate(a.AppointmentDate)}</span>
+                              {a.AppointmentTime && <span className="text-xs text-slate-400">at {fmtTime(a.AppointmentTime)}</span>}
+                              <span className="text-[10px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full font-medium">{a.VisitType}</span>
+                              {a.TokenNumber && <span className="text-[10px] text-teal-600 font-mono">Token #{a.TokenNumber}</span>}
+                            </div>
+                            <p className="text-xs text-teal-600 font-medium mt-0.5">{a.DoctorName} · {a.Specialization || a.DepartmentName}</p>
+                            {a.Reason && <p className="text-xs text-slate-500 italic mt-1">"{a.Reason}"</p>}
+                          </div>
+                          <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full flex-shrink-0 ${statusColors[a.Status] || 'bg-slate-100 text-slate-500'}`}>
+                            {a.Status}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              )}
+
+              {/* Prescriptions */}
+              {tab === 'prescriptions' && (
+                <div className="space-y-3">
+                  {rxList.length === 0
+                    ? <p className="text-center py-8 text-slate-400 text-sm">No prescriptions found</p>
+                    : rxList.map(rx => (
+                      <div key={rx.Id} className="bg-white border border-slate-100 rounded-2xl p-4 hover:border-slate-200 transition-all">
+                        <div className="flex items-start justify-between gap-2 mb-3">
+                          <div>
+                            <p className="text-sm font-bold text-slate-700">{rx.RxNumber}</p>
+                            <p className="text-xs text-slate-400">{fmtDate(rx.RxDate)} · Dr. {rx.DoctorName}</p>
+                            {rx.Diagnosis && <p className="text-xs text-blue-600 font-medium mt-0.5">Dx: {rx.Diagnosis}</p>}
+                          </div>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${rx.Status === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                            {rx.Status}
+                          </span>
+                        </div>
+                        {rx.Items?.length > 0 && (
+                          <div className="space-y-1.5 border-t border-slate-50 pt-3">
+                            {rx.Items.map((item, i) => (
+                              <div key={i} className="flex items-start gap-2 text-xs">
+                                <span className="w-4 h-4 rounded-full bg-teal-100 text-teal-700 font-bold flex items-center justify-center text-[9px] flex-shrink-0 mt-0.5">{i+1}</span>
+                                <div>
+                                  <span className="font-semibold text-slate-700">{item.MedicineName}</span>
+                                  {item.Dosage && <span className="text-slate-400 ml-1">— {item.Dosage}</span>}
+                                  {item.Frequency && <span className="text-slate-400">, {item.Frequency}</span>}
+                                  {item.Duration && <span className="text-slate-400">, {item.Duration}</span>}
+                                  {item.Instructions && <p className="text-slate-400 italic text-[10px] mt-0.5">{item.Instructions}</p>}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                </div>
+              )}
+
+              {/* Vitals */}
+              {tab === 'vitals' && (
+                <div>
+                  {!vitals
+                    ? <p className="text-center py-8 text-slate-400 text-sm">No vitals recorded yet</p>
+                    : (
+                      <div className="space-y-4">
+                        <p className="text-xs text-slate-400">Recorded: {fmtDate(vitals.RecordedAt)}</p>
+                        <div className="grid grid-cols-2 gap-3">
+                          {[
+                            { label:'Blood Pressure',   value: vitals.BloodPressureSystolic ? `${vitals.BloodPressureSystolic}/${vitals.BloodPressureDiastolic} mmHg` : null, color:'#dc2626' },
+                            { label:'Heart Rate',        value: vitals.HeartRate    ? `${vitals.HeartRate} bpm`  : null, color:'#e11d48' },
+                            { label:'Oxygen Saturation', value: vitals.OxygenSaturation ? `${vitals.OxygenSaturation}%` : null, color:'#0ea5e9' },
+                            { label:'Temperature',        value: vitals.Temperature  ? `${vitals.Temperature} °F` : null, color:'#f97316' },
+                            { label:'Weight',             value: vitals.Weight       ? `${vitals.Weight} kg`      : null, color:'#7c3aed' },
+                            { label:'Height',             value: vitals.Height       ? `${vitals.Height} cm`      : null, color:'#16a34a' },
+                            { label:'BMI',                value: vitals.BMI          ? `${vitals.BMI}`            : null, color:'#0891b2' },
+                          ].filter(v => v.value).map(v => (
+                            <div key={v.label} className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
+                              <p className="text-xl font-black" style={{ color: v.color }}>{v.value}</p>
+                              <p className="text-xs text-slate-400 mt-1">{v.label}</p>
+                            </div>
+                          ))}
+                        </div>
+                        {vitals.Notes && (
+                          <div className="bg-amber-50 border border-amber-100 rounded-2xl p-4">
+                            <p className="text-xs font-bold text-amber-700 mb-1">Notes</p>
+                            <p className="text-sm text-amber-800">{vitals.Notes}</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                </div>
+              )}
+
+              {/* Lab Orders */}
+              {tab === 'labs' && (
+                <div className="space-y-2">
+                  {labs.length === 0
+                    ? <p className="text-center py-8 text-slate-400 text-sm">No lab orders found</p>
+                    : labs.map(lab => (
+                      <div key={lab.Id} className="bg-white border border-slate-100 rounded-2xl p-4 flex items-center gap-3 hover:border-slate-200 transition-all">
+                        <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center flex-shrink-0">
+                          <FlaskConical size={14} className="text-blue-500" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-bold text-slate-700">{lab.OrderNumber}</p>
+                          <p className="text-xs text-slate-400">{fmtDate(lab.OrderDate)} · {lab.OrderedByName || 'Unknown'}</p>
+                        </div>
+                        <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full
+                          ${lab.Status === 'Completed' ? 'bg-emerald-100 text-emerald-700'
+                          : lab.Status === 'Pending'   ? 'bg-amber-100 text-amber-700'
+                          : 'bg-slate-100 text-slate-500'}`}>
+                          {lab.Status}
+                        </span>
+                      </div>
+                    ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+
+// ─── Complete Appointment Modal ───────────────────────────────────────────────
+const CompleteModal = ({ appointment, onClose, onDone }) => {
+  const [notes,      setNotes]      = useState('');
+  const [diagnosis,  setDiagnosis]  = useState('');
+  const [followUp,   setFollowUp]   = useState('');
+  const [followNote, setFollowNote] = useState('');
+  const [saving,     setSaving]     = useState(false);
+
+  const handleComplete = async () => {
+    setSaving(true);
+    try {
+      const id = appointment?.AppointmentId || appointment?.Id || appointment?.id;
+      await api.patch(`/appointments/${id}/complete`, {
+        consultationNotes: notes,
+        diagnosis,
+        followUpDate:  followUp   || undefined,
+        followUpNotes: followNote || undefined,
+      });
+      toast.success('Appointment marked as completed');
+      onDone();
+    } catch (e) {
+      toast.error(e?.response?.data?.message || 'Could not complete appointment');
+    } finally { setSaving(false); }
+  };
+
+  const patName = appointment?.PatientFullName || appointment?.PatientName || appointment?.Name || 'Patient';
+
+  return (
+    <Modal onClose={onClose} wide>
+      <div className="px-6 py-5 border-b border-slate-100 bg-gradient-to-r from-emerald-50 to-white">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-emerald-100 flex items-center justify-center">
+            <CheckCircle size={17} className="text-emerald-600" />
+          </div>
+          <div>
+            <h3 className="font-bold text-slate-800 text-sm">Complete Consultation</h3>
+            <p className="text-xs text-slate-500">Patient: <strong>{patName}</strong></p>
+          </div>
+        </div>
+      </div>
+      <div className="px-6 py-5 space-y-4">
+        <div>
+          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">
+            Primary Diagnosis
+          </label>
+          <input value={diagnosis} onChange={e => setDiagnosis(e.target.value)}
+            placeholder="e.g. Acute pharyngitis, Hypertension..."
+            className="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400 outline-none" />
+        </div>
+        <div>
+          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">
+            Consultation Notes
+          </label>
+          <textarea rows={4} value={notes} onChange={e => setNotes(e.target.value)}
+            placeholder="Clinical observations, treatment given, patient response, instructions given..."
+            className="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400 outline-none resize-none" />
+        </div>
+        <div className="grid grid-cols-2 gap-3 pt-1 border-t border-slate-100">
+          <div>
+            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">
+              Follow-up Date
+            </label>
+            <input type="date" value={followUp} onChange={e => setFollowUp(e.target.value)}
+              min={new Date().toISOString().slice(0,10)}
+              className="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400 outline-none" />
+          </div>
+          <div>
+            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">
+              Follow-up Instructions
+            </label>
+            <input value={followNote} onChange={e => setFollowNote(e.target.value)}
+              placeholder="e.g. Return if fever persists..."
+              className="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400 outline-none" />
+          </div>
+        </div>
+        {followUp && (
+          <div className="bg-blue-50 border border-blue-100 rounded-xl px-3 py-2.5 text-xs text-blue-700 flex items-center gap-2">
+            <CalendarDays size={12} />
+            Follow-up scheduled for {new Date(followUp).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}
+          </div>
+        )}
+      </div>
+      <div className="flex items-center justify-between px-6 py-4 border-t border-slate-100 bg-slate-50">
+        <button onClick={onClose} className="px-4 py-2.5 text-sm font-medium border border-slate-200 rounded-xl hover:bg-white transition-all">
+          Cancel
+        </button>
+        <button onClick={handleComplete} disabled={saving}
+          className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl transition-all text-sm disabled:opacity-60">
+          {saving ? <Loader size={14} className="animate-spin" /> : <CheckCircle size={14} />}
+          Mark as Completed
         </button>
       </div>
     </Modal>
@@ -422,9 +861,9 @@ const OverviewTab = ({ profile, queue, weeklyStats, loading }) => {
 };
 
 // ─── Queue Tab ────────────────────────────────────────────────────────────────
-const QueueTab = ({ queue, loading, onRefresh, onCallIn, onMarkDone, onRx, search, setSearch }) => {
+const QueueTab = ({ queue, loading, onRefresh, onCallIn, onMarkDone, onRx, search, setSearch, onComplete, onViewPatient }) => {
   const filtered = search
-    ? queue.filter(p => (p.Name||p.name||'').toLowerCase().includes(search.toLowerCase()) || (p.Token||p.token||'').toString().includes(search))
+    ? queue.filter(p => (p.PatientFullName||p.PatientName||p.Name||p.name||'').toLowerCase().includes(search.toLowerCase()) || (p.TokenNumber||p.Token||p.token||'').toString().includes(search))
     : queue;
 
   return (
@@ -450,22 +889,25 @@ const QueueTab = ({ queue, loading, onRefresh, onCallIn, onMarkDone, onRx, searc
               </div>
               <div className="divide-y divide-slate-50">
                 {filtered.map(pt => {
-                  const st  = ((pt.Status||pt.status)||'waiting').toLowerCase();
+                  const rawSt = (pt.QueueStatus||pt.Status||pt.status||'waiting').toLowerCase();
+                  // Map appointment statuses to queue display statuses
+                  const stMap = { scheduled:'waiting', confirmed:'waiting', 'in progress':'current', completed:'done', cancelled:'done', noshow:'done' };
+                  const st = stMap[rawSt] || rawSt;
                   const tok = Q_STATUS[st] || Q_STATUS.waiting;
                   const id  = pt.Id||pt.id;
                   return (
                     <div key={id} className={`grid grid-cols-1 lg:grid-cols-[56px_1fr_64px_1fr_130px_180px] items-center gap-3 px-6 py-4 hover:bg-slate-50/70 transition-colors ${st==='done'?'opacity-50':''}`}>
                       <div className={`w-11 h-11 rounded-xl flex items-center justify-center font-bold text-xs ${tok.ring} ${tok.bg}`}>
-                        {pt.Token||pt.token}
+                        {pt.TokenNumber||pt.Token||pt.token||'—'}
                       </div>
                       <div className="min-w-0">
-                        <p className="font-semibold text-slate-800 text-sm truncate">{pt.Name||pt.name}</p>
-                        <p className="text-xs text-slate-400 mt-0.5">{pt.Gender||pt.gender} · {pt.Phone||pt.phone}</p>
+                        <p className="font-semibold text-slate-800 text-sm truncate">{pt.PatientFullName||pt.PatientName||pt.Name||pt.name||'—'}</p>
+                        <p className="text-xs text-slate-400 mt-0.5">{pt.Gender||pt.gender} · {pt.PatientPhone||pt.Phone||pt.phone}</p>
                       </div>
                       <p className="text-sm text-slate-600">{(pt.Age||pt.age)?`${pt.Age||pt.age}yr`:'—'}</p>
-                      <p className="text-xs text-slate-500 line-clamp-2">{pt.Reason||pt.reason||pt.Type||pt.type||'—'}</p>
+                      <p className="text-xs text-slate-500 line-clamp-2">{pt.Reason||pt.reason||pt.VisitType||pt.Type||pt.type||'—'}</p>
                       <div>
-                        <p className="text-sm font-semibold text-slate-700">{fmtTime(pt.StartTime||pt.time)}</p>
+                        <p className="text-sm font-semibold text-slate-700">{fmtTime(String(pt.AppointmentTime||pt.StartTime||pt.time||'').slice(0,8))}</p>
                         <span className={`inline-flex items-center gap-1 mt-1 px-2.5 py-0.5 rounded-full text-xs font-semibold ${tok.bg}`}>
                           <span className={`w-1.5 h-1.5 rounded-full ${tok.dot}`} />
                           {tok.label}
@@ -481,15 +923,21 @@ const QueueTab = ({ queue, loading, onRefresh, onCallIn, onMarkDone, onRx, searc
                         )}
                         {st==='current' && (
                           <>
+                            <button onClick={() => onViewPatient && onViewPatient(pt.PatientId||pt.patientId||pt.id, pt.PatientFullName||pt.PatientName||pt.Name||pt.name)}
+                              className="p-2 rounded-xl border transition-colors"
+                              style={{ color:'#64748b', borderColor:'#e2e8f0', background:'#f8fafc' }}
+                              title="View history">
+                              <Eye size={13} />
+                            </button>
                             <button onClick={() => onRx(pt)}
                               className="p-2 rounded-xl border transition-colors"
                               style={{ color:BLUE, borderColor:`${BLUE}25`, background:`${BLUE}0c` }}>
                               <Pill size={13} />
                             </button>
-                            <button onClick={() => onMarkDone(id)}
-                              className="px-3 py-1.5 rounded-xl text-white text-xs font-bold hover:opacity-90 transition-opacity"
+                            <button onClick={() => onComplete && onComplete(pt)}
+                              className="flex items-center gap-1 px-3 py-1.5 rounded-xl text-white text-xs font-bold hover:opacity-90 transition-opacity"
                               style={{ background:'#059669' }}>
-                              Mark Done
+                              <CheckCircle size={11} /> Complete
                             </button>
                           </>
                         )}
@@ -510,7 +958,7 @@ const QueueTab = ({ queue, loading, onRefresh, onCallIn, onMarkDone, onRx, searc
 };
 
 // ─── Requests Tab ─────────────────────────────────────────────────────────────
-const RequestsTab = ({ requests, loading, onRefresh, onApprove, onReject, approvingId, rejectingId }) => (
+const RequestsTab = ({ requests, loading, onRefresh, onApprove, onReject, approvingId, rejectingId, onViewPatient }) => (
   <Card>
     <SectionHeader title="Appointment Requests" icon={Calendar}
       badge={requests.filter(r => (r.Status||r.status||'').toLowerCase()==='pending').length}>
@@ -522,20 +970,42 @@ const RequestsTab = ({ requests, loading, onRefresh, onApprove, onReject, approv
         ? <Empty icon={Calendar} text="No appointment requests" />
         : <div className="divide-y divide-slate-50">
             {requests.map(req => {
-              const id = req.Id||req.id;
-              const st = (req.Status||req.status||'pending').toLowerCase();
+              const id        = req.Id||req.id;
+              const patientId = req.PatientId||req.patientId;
+              const st        = (req.Status||req.status||'pending').toLowerCase();
+              const name      = req.PatientName||req.patientName||'Patient';
               return (
                 <div key={id} className="flex items-start gap-4 px-6 py-4 hover:bg-slate-50 transition-colors flex-wrap">
-                  <div className="w-11 h-11 rounded-2xl flex items-center justify-center font-bold text-lg flex-shrink-0 border"
+                  {/* Clickable avatar → opens patient history */}
+                  <button
+                    onClick={() => patientId && onViewPatient(patientId, name)}
+                    title="View patient history"
+                    className="w-11 h-11 rounded-2xl flex items-center justify-center font-bold text-lg flex-shrink-0 border hover:ring-2 hover:ring-teal-300 transition-all"
                     style={{ background:`${TEAL}0c`, borderColor:`${TEAL}20`, color:TEAL }}>
-                    {(req.PatientName||req.patientName||'P')[0]}
-                  </div>
+                    {name[0]}
+                  </button>
                   <div className="flex-1 min-w-0">
-                    <p className="font-bold text-slate-800 text-sm">{req.PatientName||req.patientName||'Patient'}</p>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => patientId && onViewPatient(patientId, name)}
+                        className="font-bold text-slate-800 text-sm hover:text-teal-600 hover:underline transition-colors text-left">
+                        {name}
+                      </button>
+                      {patientId && (
+                        <button onClick={() => onViewPatient(patientId, name)}
+                          className="flex items-center gap-1 text-[10px] text-teal-600 bg-teal-50 px-1.5 py-0.5 rounded-full hover:bg-teal-100 transition-colors font-semibold">
+                          <Eye size={9}/> History
+                        </button>
+                      )}
+                    </div>
                     <div className="flex flex-wrap gap-x-3 mt-0.5">
                       {(req.Age||req.age) && <span className="text-xs text-slate-400">{req.Age||req.age} yrs</span>}
-                      <span className="text-xs text-slate-400 capitalize">{req.Type||req.type||'consultation'}</span>
-                      <span className="text-xs text-slate-400">{fmtDate(req.Date||req.date)} · {fmtTime(req.StartTime||req.time)}</span>
+                      {(req.Gender||req.gender) && <span className="text-xs text-slate-400 capitalize">{req.Gender||req.gender}</span>}
+                      <span className="text-xs text-slate-400 capitalize">{req.VisitType||req.Type||req.type||'OPD'}</span>
+                      <span className="text-xs text-slate-400">
+                        {fmtDate((req.AppointmentDate||req.Date||req.date||'').toString().slice(0,10))}
+                        {(req.AppointmentTime||req.StartTime) && <> · {fmtTime(String(req.AppointmentTime||req.StartTime||'').slice(0,8))}</>}
+                      </span>
+                      {(req.UHID||req.uhid) && <span className="text-xs font-mono text-slate-400">{req.UHID||req.uhid}</span>}
                     </div>
                     {(req.Reason||req.reason) && (
                       <p className="text-xs text-slate-400 italic mt-1">"{req.Reason||req.reason}"</p>
@@ -543,17 +1013,22 @@ const RequestsTab = ({ requests, loading, onRefresh, onApprove, onReject, approv
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
                     <StatusBadge status={req.Status||req.status||'pending'} />
-                    {st==='pending' && (
+                    {(st==='pending' || st==='scheduled') && (
                       <>
                         <button onClick={() => onApprove(id)} disabled={approvingId===id}
                           className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border bg-emerald-50 text-emerald-700 border-emerald-100 hover:bg-emerald-100 disabled:opacity-50">
-                          {approvingId===id ? <Loader size={11} className="animate-spin" /> : <CheckCircle size={11} />} Approve
+                          {approvingId===id ? <Loader size={11} className="animate-spin" /> : <CheckCircle size={11} />} Confirm
                         </button>
                         <button onClick={() => onReject(id)} disabled={rejectingId===id}
                           className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border bg-red-50 text-red-600 border-red-100 hover:bg-red-100 disabled:opacity-50">
-                          {rejectingId===id ? <Loader size={11} className="animate-spin" /> : <XCircle size={11} />} Reject
+                          {rejectingId===id ? <Loader size={11} className="animate-spin" /> : <XCircle size={11} />} Cancel
                         </button>
                       </>
+                    )}
+                    {st==='completed' && (
+                      <span className="flex items-center gap-1 text-xs text-emerald-600 font-semibold bg-emerald-50 px-2.5 py-1 rounded-full">
+                        <CheckCircle size={10}/> Completed
+                      </span>
                     )}
                   </div>
                 </div>
@@ -705,7 +1180,9 @@ export default function DoctorDashboard() {
   const [loading,     setLoading]     = useState({ profile:true, queue:true, requests:true, prescriptions:true, schedule:true });
   const [activeTab,   setActiveTab]   = useState('overview');
   const [search,      setSearch]      = useState('');
-  const [showProfile, setShowProfile] = useState(false);
+  const [showProfile,  setShowProfile]  = useState(false);
+  const [showPatient,  setShowPatient]  = useState(null); // { patientId, patientName }
+  const [showComplete, setShowComplete] = useState(null); // appointment to complete
   const [showRx,      setShowRx]      = useState(null);
   const [profilePic,  setProfilePic]  = useState(null);
   const [approvingId, setApprovingId] = useState(null);
@@ -828,42 +1305,44 @@ export default function DoctorDashboard() {
 
   const markDone = async (id) => {
     try {
-      await api.patch(`/appointments/${id}/complete`);
-      setQueue(q => q.map(p => (p.Id||p.id)===id ? { ...p, Status:'done', status:'done' } : p));
-      toast.success('Consultation complete');
-    } catch { toast.error('Update failed'); }
-  };
+      await api.patch(`/appointments/${id}/status`, { status: 'Completed' });
+      setQueue(q => q.map(p => (p.Id||p.id)===id ? { ...p, Status:'Completed', status:'done' } : p));
+    } catch { toast.error('Could not update status'); }
+  };;
 
   const handleApprove = async (id) => {
     setApprovingId(id);
     try {
-      await api.patch(`/appointments/${id}/approve`);
-      setRequests(r => r.map(a => (a.Id||a.id)===id ? { ...a, Status:'approved', status:'approved' } : a));
-      toast.success('Appointment approved');
+      await api.patch(`/appointments/${id}/status`, { status: 'Confirmed' });
+      setRequests(r => r.map(a => (a.Id||a.id)===id ? { ...a, Status:'Confirmed', status:'confirmed' } : a));
+      toast.success('Appointment confirmed');
     } catch { toast.error('Failed to approve'); }
     finally { setApprovingId(null); }
   };
 
   const handleReject = async (id) => {
-    setRejectingId(id);
     try {
-      await api.patch(`/appointments/${id}/reject`);
-      setRequests(r => r.map(a => (a.Id||a.id)===id ? { ...a, Status:'rejected', status:'rejected' } : a));
-      toast.success('Appointment rejected');
-    } catch { toast.error('Failed to reject'); }
-    finally { setRejectingId(null); }
-  };
+      await api.patch(`/appointments/${id}/cancel`, { cancelReason: 'Cancelled by doctor' });
+      setRequests(r => r.map(a => (a.Id||a.id)===id ? { ...a, Status:'Cancelled', status:'cancelled' } : a));
+      toast.success('Appointment cancelled');
+    } catch { toast.error('Failed to cancel'); }
+  };;
 
   const p          = profile || {};
   const doctorName = `Dr. ${p.FirstName||user?.firstName||''} ${p.LastName||user?.lastName||''}`.trim();
-  const pending    = requests.filter(x => (x.Status||x.status||'').toLowerCase()==='pending');
+  // Filter: show non-completed, non-cancelled requests
+  const activeRequests = requests.filter(x => {
+    const st = (x.Status||x.status||'').toLowerCase();
+    return st !== 'completed' && st !== 'cancelled' && st !== 'noshow';
+  });
+  const pending = requests.filter(x => (x.Status||x.status||'').toLowerCase()==='pending');
   const waiting    = queue.filter(x   => (x.Status||x.status)==='waiting');
   const current    = queue.find(x    => (x.Status||x.status)==='current');
 
   const TABS = [
     { key:'overview',  label:'Overview',       icon:Activity   },
     { key:'queue',     label:"Today's Queue",  icon:Users,    badge:waiting.length  },
-    { key:'requests',  label:'Requests',       icon:Calendar, badge:pending.length  },
+    { key:'requests',  label:'Requests',       icon:Calendar, badge:activeRequests.length },
     { key:'rx',        label:'Prescriptions',  icon:Pill                            },
     { key:'schedule',  label:'Schedule',       icon:Clock                           },
     { key:'analytics', label:'Analytics',      icon:BarChart2                       },
@@ -874,11 +1353,14 @@ export default function DoctorDashboard() {
     overview: <OverviewTab profile={p} queue={queue} weeklyStats={weeklyStats} loading={loading} />,
     queue: (
       <QueueTab queue={queue} loading={loading.queue} onRefresh={fetchQueue}
+        onViewPatient={(patientId, name) => setShowPatient({ patientId, patientName: name })}
+        onComplete={pt => setShowComplete(pt)}
         onCallIn={callPatient} onMarkDone={markDone} onRx={setShowRx}
         search={search} setSearch={setSearch} />
     ),
     requests: (
-      <RequestsTab requests={requests} loading={loading.requests} onRefresh={fetchRequests}
+      <RequestsTab requests={activeRequests} loading={loading.requests} onRefresh={fetchRequests}
+        onViewPatient={(patientId, name) => setShowPatient({ patientId, patientName: name })}
         onApprove={handleApprove} onReject={handleReject}
         approvingId={approvingId} rejectingId={rejectingId} />
     ),
@@ -1020,6 +1502,21 @@ export default function DoctorDashboard() {
       {tabContent[activeTab] || null}
 
       {/* ── Modals ── */}
+      {showComplete && (
+        <CompleteModal
+          appointment={showComplete}
+          onClose={() => setShowComplete(null)}
+          onDone={() => { setShowComplete(null); fetchQueue(); fetchRequests(); }}
+        />
+      )}
+      {showPatient && (
+        <PatientHistoryModal
+          patientId={showPatient.patientId}
+          patientName={showPatient.patientName}
+          onClose={() => setShowPatient(null)}
+          onRx={p => { setShowRx(p); setShowPatient(null); }}
+        />
+      )}
       {showProfile && (
         <ProfileModal profile={profile||user} avatar={profilePic} onClose={() => setShowProfile(false)}
           onSave={d => { setProfile(pr => ({ ...pr, ...d })); setProfilePic(d.profilePicUrl); fetchSchedule(); setShowProfile(false); }} />

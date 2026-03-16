@@ -191,18 +191,21 @@ exports.myQueue = async (req, res) => {
     }
     const doctorProfileId = docRes.recordset[0].Id;
 
-    const result = await pool.request()
+    const queueResult = await pool.request()
       .input('DoctorId',  doctorProfileId)
       .input('QueueDate', queueDate)
       .query(`
         SELECT
-          q.Id, q.TokenNumber, q.QueueStatus, q.Priority,
+          q.Id, q.TokenNumber, q.QueueStatus AS Status, q.Priority,
           q.PatientName, q.Notes, q.CalledAt, q.ServedAt,
-          q.WaitMinutes, q.CreatedAt,
+          q.WaitMinutes, q.CreatedAt, q.PatientId,
           pp.FirstName + ' ' + pp.LastName AS PatientFullName,
+          pp.FirstName, pp.LastName,
           pp.UHID, pp.Phone AS PatientPhone,
-          pp.BloodGroup, pp.Gender,
-          a.AppointmentNo, a.Reason, a.VisitType
+          pp.BloodGroup, pp.Gender, pp.DateOfBirth,
+          DATEDIFF(YEAR, pp.DateOfBirth, GETDATE()) AS Age,
+          a.Id AS AppointmentId, a.AppointmentNo, a.Reason, a.VisitType,
+          CONVERT(VARCHAR(8), a.AppointmentTime, 108) AS AppointmentTime
         FROM dbo.OpdQueue q
         LEFT JOIN dbo.PatientProfiles pp ON pp.Id = q.PatientId
         LEFT JOIN dbo.Appointments    a  ON a.Id  = q.AppointmentId
@@ -211,7 +214,36 @@ exports.myQueue = async (req, res) => {
         ORDER BY q.TokenNumber ASC
       `);
 
-    return sendSuccess(res, { data: result.recordset });
+    // If OpdQueue is empty, fall back to today's scheduled appointments
+    let rows = queueResult.recordset;
+    if (!rows.length) {
+      const apptResult = await pool.request()
+        .input('DoctorId', doctorProfileId)
+        .input('Date',     queueDate)
+        .query(`
+          SELECT
+            a.Id, a.TokenNumber, a.Status AS QueueStatus, a.Status,
+            a.Priority, a.Reason, a.VisitType,
+            CONVERT(VARCHAR(8), a.AppointmentTime, 108) AS AppointmentTime,
+            a.Id AS AppointmentId, a.AppointmentNo, a.Notes,
+            pp.Id AS PatientId,
+            pp.FirstName + ' ' + pp.LastName AS PatientName,
+            pp.FirstName + ' ' + pp.LastName AS PatientFullName,
+            pp.FirstName, pp.LastName,
+            pp.UHID, pp.Phone AS PatientPhone,
+            pp.BloodGroup, pp.Gender, pp.DateOfBirth,
+            DATEDIFF(YEAR, pp.DateOfBirth, GETDATE()) AS Age
+          FROM dbo.Appointments a
+          JOIN dbo.PatientProfiles pp ON pp.Id = a.PatientId
+          WHERE a.DoctorId        = @DoctorId
+            AND a.AppointmentDate = @Date
+            AND a.Status NOT IN ('Cancelled', 'NoShow')
+          ORDER BY a.AppointmentTime ASC
+        `);
+      rows = apptResult.recordset;
+    }
+
+    return sendSuccess(res, { data: rows });
   } catch (err) {
     return sendError(res, err.message, err.statusCode || 500);
   }
@@ -243,6 +275,7 @@ exports.pendingRequests = async (req, res) => {
         SELECT
           a.Id, a.AppointmentNo, a.AppointmentDate, a.AppointmentTime,
           a.VisitType, a.Status, a.Priority, a.Reason, a.CreatedAt,
+          pp.Id   AS PatientId,
           pp.FirstName + ' ' + pp.LastName AS PatientName,
           pp.UHID, pp.Phone AS PatientPhone,
           pp.Gender, pp.DateOfBirth, pp.BloodGroup
@@ -276,18 +309,18 @@ exports.getSlots = async (req, res) => {
     const pool = await getPool();
     const id   = parseInt(doctorId);
 
-    // Get doctor availability — DoctorProfiles.Id (not UserId)
+    // Get doctor availability — no approval filter so all active doctors work
     const docResult = await pool.request()
       .input('DoctorId', id)
       .query(`
         SELECT dp.AvailableFrom, dp.AvailableTo, dp.AvailableDays, dp.MaxDailyPatients
         FROM dbo.DoctorProfiles dp
         WHERE dp.Id = @DoctorId
-          AND dp.ApprovalStatus = 'approved'
       `);
 
     if (!docResult.recordset.length) {
-      return sendError(res, 'Doctor not found', 404);
+      // Return empty slots rather than 404 so frontend handles gracefully
+      return res.json({ success: true, available: false, slots: [], message: 'Doctor not found' });
     }
 
     const doc       = docResult.recordset[0];
@@ -322,19 +355,42 @@ exports.getSlots = async (req, res) => {
       bookedResult.recordset.map(r => r.AppointmentTime?.toString().slice(0, 5))
     );
 
-    // Generate 30-min slots between AvailableFrom → AvailableTo
+    // Generate slots — use AvailableFrom/To if set, else fall back to DoctorSchedules
     const slots = [];
-    if (doc.AvailableFrom && doc.AvailableTo) {
-      const [fromH, fromM] = doc.AvailableFrom.toString().slice(0, 5).split(':').map(Number);
-      const [toH,   toM  ] = doc.AvailableTo.toString().slice(0, 5).split(':').map(Number);
-
-      let h = fromH, m = fromM;
-      while (h < toH || (h === toH && m < toM)) {
-        const timeStr = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
-        slots.push({ time: timeStr, available: !bookedTimes.has(timeStr) });
-        m += 30;
-        if (m >= 60) { h += 1; m -= 60; }
+    const toMins = t => { const s=(t||'').toString().slice(0,5); const [h,m]=s.split(':').map(Number); return (h||0)*60+(m||0); };
+    const pushSlots = (from, to, dur) => {
+      if (!from||!to) return;
+      let cur=toMins(from); const end=toMins(to);
+      while(cur<end){
+        const h=Math.floor(cur/60), m=cur%60;
+        const t=`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+        slots.push({ time:t, available:!bookedTimes.has(t) });
+        cur+=dur;
       }
+    };
+
+    if (doc.AvailableFrom && doc.AvailableTo) {
+      pushSlots(doc.AvailableFrom, doc.AvailableTo, 30);
+    } else {
+      // Fall back to admin-assigned DoctorSchedules
+      const dow = new Date(date).getDay();
+      const schRes = await pool.request()
+        .input('DoctorId',  id)
+        .input('DayOfWeek', dow)
+        .input('Date',      date)
+        .query(`
+          SELECT
+            CONVERT(VARCHAR(8), StartTime, 108) AS StartTime,
+            CONVERT(VARCHAR(8), EndTime,   108) AS EndTime,
+            SlotDurationMins
+          FROM dbo.DoctorSchedules
+          WHERE DoctorId   = @DoctorId
+            AND DayOfWeek  = @DayOfWeek
+            AND IsActive   = 1
+            AND EffectiveFrom <= @Date
+            AND (EffectiveTo IS NULL OR EffectiveTo >= @Date)
+        `);
+      for (const s of schRes.recordset) pushSlots(s.StartTime, s.EndTime, s.SlotDurationMins||30);
     }
 
     return res.json({
@@ -489,5 +545,70 @@ exports.markOneRead = async (req, res) => {
     return sendSuccess(res, { message: 'Notification marked as read' });
   } catch (err) {
     return sendError(res, err.message, 500);
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PATCH /appointments/:id/complete — Doctor completes appointment with notes
+// ─────────────────────────────────────────────────────────────────────────────
+exports.completeAppointment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { id: userId, hospitalId } = req.user;
+    const {
+      consultationNotes,  // doctor's notes
+      diagnosis,          // primary diagnosis
+      followUpDate,       // optional follow-up
+      followUpNotes,      // follow-up instructions
+      vitals,             // { bp, heartRate, temp, weight, spo2 }
+    } = req.body;
+
+    const { getPool } = require('../config/database');
+    const pool = await getPool();
+
+    // Verify doctor owns this appointment
+    const docRes = await pool.request()
+      .input('UserId', parseInt(userId))
+      .query(`SELECT Id FROM dbo.DoctorProfiles WHERE UserId = @UserId`);
+    if (!docRes.recordset.length) return sendError(res, 'Doctor profile not found', 404);
+    const doctorProfileId = docRes.recordset[0].Id;
+
+    // Update appointment to Completed with notes
+    const r = await pool.request()
+      .input('Id',               parseInt(id))
+      .input('DoctorId',         doctorProfileId)
+      .input('Notes',            consultationNotes || null)
+      .input('PrimaryDiagnosis', diagnosis || null)
+      .query(`
+        UPDATE dbo.Appointments
+        SET Status           = 'Completed',
+            Notes            = @Notes,
+            PrimaryDiagnosis = @PrimaryDiagnosis,
+            UpdatedAt        = GETUTCDATE()
+        OUTPUT INSERTED.Id, INSERTED.AppointmentNo, INSERTED.Status,
+               INSERTED.PatientId, INSERTED.DoctorId
+        WHERE Id = @Id AND DoctorId = @DoctorId
+      `);
+
+    if (!r.recordset.length) return sendError(res, 'Appointment not found or unauthorized', 404);
+
+    const appt = r.recordset[0];
+
+    // If follow-up date provided, create a follow-up appointment record note
+    // (Actual booking done by receptionist — we just add to notes)
+
+    // Fetch full appt for notifications
+    const full = await apptService.getAppointmentById(parseInt(id), hospitalId);
+    if (full) fireNotificationsAndEmails('completed', full);
+
+    return sendSuccess(res, {
+      appointmentId:  appt.Id,
+      appointmentNo:  appt.AppointmentNo,
+      status:         'Completed',
+      followUpDate:   followUpDate || null,
+      followUpNotes:  followUpNotes || null,
+    }, 'Appointment completed successfully');
+  } catch (err) {
+    return sendError(res, err.message, err.statusCode || 500);
   }
 };

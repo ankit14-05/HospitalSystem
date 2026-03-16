@@ -62,6 +62,12 @@ router.patch('/:id/status',
   ctrl.updateStatus
 );
 
+// ── Complete with notes ───────────────────────────────────────────────────────
+router.patch('/:id/complete',
+  authorize('doctor', 'admin', 'superadmin'),
+  ctrl.completeAppointment
+);
+
 // ── Cancel ────────────────────────────────────────────────────────────────────
 router.patch('/:id/cancel', ctrl.cancel);
 
