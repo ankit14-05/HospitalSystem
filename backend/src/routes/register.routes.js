@@ -41,19 +41,6 @@ const parseDate = (value, fieldName = 'Date', { mustBePast = false, mustBeFuture
   return d;
 };
 
-const formatTime = (t) => {
-  if (!t) return undefined;
-  const parts = t.trim().split(':');
-  if (parts.length < 2) return undefined;
-  const h = parseInt(parts[0], 10);
-  const m = parseInt(parts[1], 10);
-  const s = parts[2] ? parseInt(parts[2], 10) : 0;
-  if (isNaN(h) || isNaN(m) || isNaN(s)) return undefined;
-  const d = new Date();
-  d.setHours(h, m, s, 0);
-  return d;
-};
-
 // ── Phone sanitiser — strips non-digits, rejects leading 0 ───────────────────
 const sanitizePhone = (raw = '') => {
   const digits = String(raw).replace(/\D/g, '');
@@ -100,12 +87,9 @@ const generateUniquePatientId = async () => {
   throw new AppError('Failed to generate a unique Patient ID. Please try again.', 500);
 };
 
-// ── Doctor ID generator: DT-1234 (4 digits, 0000–9999 = 10,000 combinations) ──
-// Format: DT-1234  — simple, numeric, easy to read/communicate verbally
-// Zero-padded so DT-0042 is valid. Supports up to 9999 doctors per hospital.
+// ── Doctor ID generator: DT-1234 ─────────────────────────────────────────────
 const generateDoctorId = () => {
-  // Use crypto random bytes to get an unbiased number in [0, 9999]
-  const num = crypto.randomInt(0, 10000); // 0–9999 inclusive
+  const num = crypto.randomInt(0, 10000);
   return `DT-${String(num).padStart(4, '0')}`;
 };
 
@@ -197,19 +181,15 @@ const sendDoctorApprovalEmail = async ({ to, name, username, doctorId }) => {
     <p style="margin:0 0 28px;font-size:14px;color:#64748b;text-align:center;line-height:1.7;">
       Welcome aboard, <strong style="color:#1e293b;">Dr. ${name}</strong>! Your account is now active.
     </p>
-
-    <!-- Doctor ID highlight box -->
     <div style="background:linear-gradient(135deg,#eef2ff,#f5f3ff);border:2px solid #c7d2fe;border-radius:16px;padding:28px;text-align:center;margin-bottom:20px;">
       <p style="margin:0 0 4px;font-size:11px;font-weight:700;color:#6366f1;letter-spacing:2px;text-transform:uppercase;">Your Doctor ID</p>
       <p style="margin:0;font-size:36px;font-weight:900;letter-spacing:6px;color:#4338ca;font-family:'Courier New',monospace;">${doctorId}</p>
       <p style="margin:10px 0 0;font-size:12px;color:#818cf8;">Use this ID for all hospital records, prescriptions &amp; communications</p>
     </div>
-
     <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:16px 20px;margin-bottom:28px;">
       <p style="margin:0 0 4px;font-size:11px;font-weight:600;color:#94a3b8;letter-spacing:1px;text-transform:uppercase;">Login Username</p>
       <p style="margin:0;font-size:16px;font-weight:700;color:#1e293b;font-family:'Courier New',monospace;">${username}</p>
     </div>
-
     <div style="text-align:center;">
       <a href="${loginUrl}/login"
         style="display:inline-block;background:linear-gradient(135deg,#059669,#10b981);color:white;text-decoration:none;font-size:14px;font-weight:700;padding:14px 36px;border-radius:12px;letter-spacing:0.3px;">
@@ -559,7 +539,6 @@ router.post('/patient', [
       username: reqUsername,
     } = req.body;
 
-    // ── sanitise phone — strips non-digits, rejects leading 0 ─────────────
     const phone = sanitizePhone(req.body.phone);
 
     const dobValue = parseDate(dateOfBirth, 'Date of birth', { mustBePast: true });
@@ -747,6 +726,10 @@ router.post('/patient', [
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // POST /register/doctor
+// License and scheduling fields removed from registration form.
+// These fields (LicenseNumber, LicenseExpiry, ConsultationFee, FollowUpFee,
+// EmergencyFee, MaxDailyPatients, AvailableDays, AvailableFrom, AvailableTo)
+// are still nullable in the DB and can be filled in later by admin.
 // ═══════════════════════════════════════════════════════════════════════════════
 router.post('/doctor',
   upload.any(),
@@ -759,7 +742,6 @@ router.post('/doctor',
       .custom(v => { if (/^0/.test(v.replace(/\D/g,''))) throw new Error('Phone cannot start with 0'); return true; }),
     body('password').isLength({ min: 8 }).matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/)
       .withMessage('Password needs uppercase, lowercase and number'),
-    body('licenseNumber').trim().notEmpty().withMessage('License number required'),
     body('specializationId').isInt({ min: 1 }).withMessage('Specialization required'),
   ],
   async (req, res, next) => {
@@ -772,9 +754,8 @@ router.post('/doctor',
         gender, dateOfBirth, bloodGroup, nationality, maritalStatus,
         religion, occupation, motherTongue, designation,
         specializationId, qualificationId, medicalCouncilId, departmentId,
-        licenseNumber, licenseExpiry, experienceYears,
-        consultationFee, followUpFee, emergencyFee, maxDailyPatients,
-        languagesSpoken, availableDays, availableFrom, availableTo,
+        experienceYears,
+        languagesSpoken,
         bio, awards, publications,
         aadhaar, pan, passportNo, voterId, abhaNumber,
         street1, street2, city, countryId, stateId, pincode,
@@ -783,12 +764,10 @@ router.post('/doctor',
       // ── sanitise phone ───────────────────────────────────────────────────
       const phone = sanitizePhone(req.body.phone);
 
-      const dobValue    = parseDate(dateOfBirth,   'Date of birth',  { mustBePast: true });
-      const licExpValue = parseDate(licenseExpiry, 'License expiry', { mustBeFuture: true });
-      if (!licExpValue) throw new AppError('License expiry date is required.', 400);
-      const hid = parseInt(hospitalId);
+      const dobValue = parseDate(dateOfBirth, 'Date of birth', { mustBePast: true });
+      const hid      = parseInt(hospitalId);
 
-      // ── FIX 6: Verify email OTP was completed before doctor registration ──────
+      // ── Verify email OTP ─────────────────────────────────────────────────
       const otpCheck = await query(
         `SELECT TOP 1 Id FROM dbo.OtpTokens
          WHERE LOWER(Contact) = LOWER(@e) AND Purpose = @purpose AND IsVerified = 1 AND ExpiresAt > SYSUTCDATETIME()`,
@@ -801,6 +780,7 @@ router.post('/doctor',
         throw new AppError('Email address has not been verified. Please verify your email with the OTP before submitting.', 400);
       }
 
+      // ── Duplicate checks ─────────────────────────────────────────────────
       const dupEmail = await query(
         `SELECT Id FROM dbo.Users WHERE LOWER(Email) = LOWER(@e) AND DeletedAt IS NULL`,
         { e: { type: sql.NVarChar(255), value: email } }
@@ -827,6 +807,7 @@ router.post('/doctor',
       const safeCountryId = countryId && Number(countryId) > 0 ? parseInt(countryId) : null;
       const safeStateId   = stateId   && Number(stateId) > 0   ? parseInt(stateId)   : null;
 
+      // ── Insert into Users ────────────────────────────────────────────────
       const userRes = await query(
         `INSERT INTO dbo.Users
            (HospitalId, Username, Email, Phone, PhoneCountryCode, AltPhone,
@@ -857,66 +838,61 @@ router.post('/doctor',
 
       const cleanAadhaar = aadhaar ? aadhaar.replace(/\D/g,'').slice(0,12) : null;
       const cleanPan     = pan     ? pan.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,10) : null;
-      const fromValue    = formatTime(availableFrom);
-      const toValue      = formatTime(availableTo);
 
+      // ── Insert into DoctorProfiles ───────────────────────────────────────
+      // License, scheduling and fee fields are omitted from registration;
+      // they default to NULL and can be updated by admin post-approval.
       await query(
         `INSERT INTO dbo.DoctorProfiles
            (UserId, HospitalId, DepartmentId, SpecializationId, QualificationId,
-            MedicalCouncilId, LicenseNumber, LicenseExpiry, ExperienceYears,
-            ConsultationFee, FollowUpFee, EmergencyFee, MaxDailyPatients,
-            LanguagesSpoken, AvailableDays, AvailableFrom, AvailableTo,
+            MedicalCouncilId, ExperienceYears,
+            LanguagesSpoken,
             Bio, Awards, Publications,
             BloodGroup, Nationality, AltPhone, Aadhaar, PAN,
+            PassportNo, VoterId, AbhaNumber,
             Street1, Street2, City, CountryId, StateId, PincodeText,
             ApprovalStatus, CreatedBy)
          VALUES
            (@uid, @hid, @did, @spec, @qual,
-            @council, @lic, @licexp, @exp,
-            @fee, @followfee, @emergfee, @maxpat,
-            @langs, @days, @from, @to,
+            @council, @exp,
+            @langs,
             @bio, @awards, @pubs,
             @blood, @nation, @alt, @aadhaar, @pan,
+            @passport, @voter, @abha,
             @s1, @s2, @city, @cid, @sid, @ptext,
             'pending', NULL)`,
         {
-          uid:       { type: sql.BigInt,            value: userId },
-          hid:       { type: sql.BigInt,            value: hid },
-          did:       { type: sql.BigInt,            value: departmentId || null },
-          spec:      { type: sql.Int,               value: parseInt(specializationId) },
-          qual:      { type: sql.Int,               value: qualificationId || null },
-          council:   { type: sql.Int,               value: medicalCouncilId || null },
-          lic:       { type: sql.NVarChar(100),     value: licenseNumber.trim() },
-          licexp:    { type: sql.Date,              value: licExpValue },
-          exp:       { type: sql.SmallInt,          value: experienceYears ? parseInt(experienceYears) : null },
-          fee:       { type: sql.Decimal(10,2),     value: consultationFee ? parseFloat(consultationFee) : null },
-          followfee: { type: sql.Decimal(10,2),     value: followUpFee ? parseFloat(followUpFee) : null },
-          emergfee:  { type: sql.Decimal(10,2),     value: emergencyFee ? parseFloat(emergencyFee) : null },
-          maxpat:    { type: sql.SmallInt,          value: maxDailyPatients ? parseInt(maxDailyPatients) : null },
-          langs:     { type: sql.NVarChar(300),     value: languagesSpoken || null },
-          days:      { type: sql.NVarChar(100),     value: availableDays || null },
-          ...(fromValue!==undefined?{from:{type:sql.Time,value:fromValue}}:{from:{type:sql.NVarChar(10),value:null}}),
-          ...(toValue!==undefined  ?{to:  {type:sql.Time,value:toValue  }}:{to:  {type:sql.NVarChar(10),value:null}}),
-          bio:       { type: sql.NVarChar(sql.MAX), value: bio || null },
-          awards:    { type: sql.NVarChar(sql.MAX), value: awards || null },
-          pubs:      { type: sql.NVarChar(sql.MAX), value: publications || null },
-          blood:     { type: sql.NVarChar(5),       value: bloodGroup || null },
-          nation:    { type: sql.NVarChar(80),      value: nationality || 'Indian' },
-          alt:       { type: sql.NVarChar(20),      value: altPhone || null },
-          aadhaar:   { type: sql.NVarChar(12),      value: cleanAadhaar },
-          pan:       { type: sql.NVarChar(10),      value: cleanPan },
-          s1:        { type: sql.NVarChar(255),     value: street1 || null },
-          s2:        { type: sql.NVarChar(255),     value: street2 || null },
-          city:      { type: sql.NVarChar(100),     value: city || null },
-          cid:       { type: sql.Int,               value: safeCountryId },
-          sid:       { type: sql.Int,               value: safeStateId },
-          ptext:     { type: sql.NVarChar(20),      value: pincode || null },
+          uid:      { type: sql.BigInt,            value: userId },
+          hid:      { type: sql.BigInt,            value: hid },
+          did:      { type: sql.BigInt,            value: departmentId || null },
+          spec:     { type: sql.Int,               value: parseInt(specializationId) },
+          qual:     { type: sql.Int,               value: qualificationId || null },
+          council:  { type: sql.Int,               value: medicalCouncilId || null },
+          exp:      { type: sql.SmallInt,          value: experienceYears ? parseInt(experienceYears) : null },
+          langs:    { type: sql.NVarChar(300),     value: languagesSpoken || null },
+          bio:      { type: sql.NVarChar(sql.MAX), value: bio || null },
+          awards:   { type: sql.NVarChar(sql.MAX), value: awards || null },
+          pubs:     { type: sql.NVarChar(sql.MAX), value: publications || null },
+          blood:    { type: sql.NVarChar(5),       value: bloodGroup || null },
+          nation:   { type: sql.NVarChar(80),      value: nationality || 'Indian' },
+          alt:      { type: sql.NVarChar(20),      value: altPhone || null },
+          aadhaar:  { type: sql.NVarChar(12),      value: cleanAadhaar },
+          pan:      { type: sql.NVarChar(10),      value: cleanPan },
+          passport: { type: sql.NVarChar(30),      value: passportNo || null },
+          voter:    { type: sql.NVarChar(30),      value: voterId || null },
+          abha:     { type: sql.NVarChar(30),      value: abhaNumber || null },
+          s1:       { type: sql.NVarChar(255),     value: street1 || null },
+          s2:       { type: sql.NVarChar(255),     value: street2 || null },
+          city:     { type: sql.NVarChar(100),     value: city || null },
+          cid:      { type: sql.Int,               value: safeCountryId },
+          sid:      { type: sql.Int,               value: safeStateId },
+          ptext:    { type: sql.NVarChar(20),      value: pincode || null },
         }
       );
 
       if (req.files?.length) console.log(`📎 ${req.files.length} file(s) received for doctor ${userId}`);
 
-      // ── Send "pending review" email immediately after registration ──────────
+      // ── Send "pending review" email ──────────────────────────────────────
       sendDoctorSubmissionEmail({ to: email, name: firstName.trim(), username })
         .catch(err => console.error('Doctor submission email failed (non-fatal):', err.message));
 
@@ -966,7 +942,7 @@ router.post('/staff',
       const dobValue  = parseDate(dateOfBirth, 'Date of birth', { mustBePast: true });
       const joinValue = parseDate(joiningDate, 'Joining date');
 
-      // Verify email OTP was completed before staff registration
+      // Verify email OTP
       const staffOtpCheck = await query(
         `SELECT TOP 1 Id FROM dbo.OtpTokens
          WHERE LOWER(Contact) = LOWER(@e) AND Purpose = @purpose AND IsVerified = 1 AND ExpiresAt > SYSUTCDATETIME()`,
@@ -995,6 +971,22 @@ router.post('/staff',
       const safeCountryId = countryId&&Number(countryId)>0?parseInt(countryId):null;
       const safeStateId   = stateId&&Number(stateId)>0?parseInt(stateId):null;
 
+      const formatTime = (t) => {
+        if (!t) return undefined;
+        const parts = t.trim().split(':');
+        if (parts.length < 2) return undefined;
+        const h = parseInt(parts[0], 10);
+        const m = parseInt(parts[1], 10);
+        const s = parts[2] ? parseInt(parts[2], 10) : 0;
+        if (isNaN(h) || isNaN(m) || isNaN(s)) return undefined;
+        const d = new Date();
+        d.setHours(h, m, s, 0);
+        return d;
+      };
+
+      const fromValue = formatTime(workStartTime);
+      const toValue   = formatTime(workEndTime);
+
       const userRes = await query(
         `INSERT INTO dbo.Users (HospitalId,Username,Email,Phone,PhoneCountryCode,AltPhone,PasswordHash,Role,FirstName,LastName,Gender,DateOfBirth,IsActive,DepartmentId,EmployeeId,CreatedBy)
          OUTPUT INSERTED.Id VALUES (@hid,@uname,@email,@phone,@pcc,@alt,@hash,@role,@fname,@lname,@gender,@dob,0,@did,@empid,NULL)`,
@@ -1004,8 +996,6 @@ router.post('/staff',
 
       const cleanAadhaar = aadhaar?aadhaar.replace(/\D/g,'').slice(0,12):null;
       const cleanPan     = pan?pan.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,10):null;
-      const fromValue    = formatTime(workStartTime);
-      const toValue      = formatTime(workEndTime);
 
       await query(
         `INSERT INTO dbo.StaffProfiles (UserId,HospitalId,DepartmentId,EmployeeId,Shift,JoiningDate,ContractType,ReportingManager,WorkStartTime,WorkEndTime,WeeklyOff,BloodGroup,Nationality,AltPhone,Aadhaar,PAN,PassportNo,VoterId,AbhaNumber,Street1,Street2,City,CountryId,StateId,PincodeText,Qualification,LanguagesSpoken,PreviousEmployer,ExperienceYears,BankAccountNo,IfscCode,KnownAllergies,BloodDonor,MaritalStatus,Religion,MotherTongue,EmergencyName,EmergencyRelation,EmergencyPhone,ApprovalStatus,CreatedBy)
@@ -1033,7 +1023,6 @@ router.get('/pending-doctors', authenticate, authorize('superadmin','admin'), as
   try {
     const statusFilter=req.query.status||'pending';
     const hospitalId=req.user.role==='superadmin'?(parseInt(req.query.hospitalId)||null):req.user.hospitalId;
-    // DoctorId is NOT selected here — it's only assigned on approval. Avoids crash if migration not yet run.
     const result=await query(`SELECT dp.Id,dp.UserId,dp.ApprovalStatus AS Status,dp.LicenseNumber,dp.LicenseExpiry,dp.ExperienceYears,dp.ConsultationFee,dp.FollowUpFee,dp.EmergencyFee,dp.MaxDailyPatients,dp.AvailableDays,dp.AvailableFrom,dp.AvailableTo,dp.LanguagesSpoken,dp.Bio,dp.Awards,dp.Publications,dp.BloodGroup,dp.Nationality,dp.Aadhaar,dp.PAN,dp.PassportNo,dp.VoterId,dp.AbhaNumber,dp.Street1,dp.Street2,dp.City,dp.PincodeText AS Pincode,dp.RejectionReason,dp.ApprovedAt AS ReviewedAt,dp.CreatedAt,u.FirstName,u.LastName,u.Email,u.Phone,u.AltPhone,u.Gender,u.DateOfBirth,u.Designation,u.Username,sp.Name AS SpecializationName,q.Code AS QualificationCode,q.FullName AS QualificationName,dep.Name AS DepartmentName,mc.Name AS MedicalCouncilName,co.Name AS CountryName,st.Name AS StateName FROM dbo.DoctorProfiles dp JOIN dbo.Users u ON u.Id=dp.UserId LEFT JOIN dbo.Specializations sp ON sp.Id=dp.SpecializationId LEFT JOIN dbo.Qualifications q ON q.Id=dp.QualificationId LEFT JOIN dbo.Departments dep ON dep.Id=dp.DepartmentId LEFT JOIN dbo.MedicalCouncils mc ON mc.Id=dp.MedicalCouncilId LEFT JOIN dbo.Countries co ON co.Id=dp.CountryId LEFT JOIN dbo.States st ON st.Id=dp.StateId WHERE (@status='all' OR dp.ApprovalStatus=@status) AND (@hid IS NULL OR dp.HospitalId=@hid) ORDER BY dp.CreatedAt DESC`,{status:{type:sql.NVarChar(20),value:statusFilter},hid:{type:sql.BigInt,value:hospitalId}});
     success(res,result.recordset);
   } catch(err){next(err);}
@@ -1041,7 +1030,6 @@ router.get('/pending-doctors', authenticate, authorize('superadmin','admin'), as
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PATCH /register/approve-doctor/:id
-// Generates DT-1234 (4-digit zero-padded) on approval, stores it, emails it
 // ═══════════════════════════════════════════════════════════════════════════════
 router.patch('/approve-doctor/:id', authenticate, authorize('superadmin','admin'),
   [
@@ -1054,9 +1042,6 @@ router.patch('/approve-doctor/:id', authenticate, authorize('superadmin','admin'
       const { action, rejectionReason } = req.body;
       const doctorProfileId = parseInt(req.params.id);
 
-      // ── Run add_doctorid_migration.sql before approving any doctor ──────────
-      // DoctorId column is added by migration; SELECT uses COL_LENGTH guard so
-      // query doesn't crash if migration was somehow skipped.
       const drRes = await query(
         `SELECT dp.Id, dp.UserId,
                 CASE WHEN COL_LENGTH('dbo.DoctorProfiles','DoctorId') IS NOT NULL
@@ -1071,7 +1056,6 @@ router.patch('/approve-doctor/:id', authenticate, authorize('superadmin','admin'
       if (!dr) throw new AppError('Doctor profile not found.', 404);
 
       if (action === 'approved') {
-        // Generate DT-1234 format Doctor ID if not already assigned
         let doctorId = dr.DoctorId;
         if (!doctorId) {
           doctorId = await generateUniqueDoctorId();
@@ -1092,13 +1076,11 @@ router.patch('/approve-doctor/:id', authenticate, authorize('superadmin','admin'
           }
         );
 
-        // Activate the user account
         await query(
           `UPDATE dbo.Users SET IsActive = 1 WHERE Id = @uid`,
           { uid: { type: sql.BigInt, value: dr.UserId } }
         );
 
-        // Send approval email with Doctor ID
         if (dr.Email) {
           sendDoctorApprovalEmail({
             to: dr.Email, name: dr.FirstName, username: dr.Username, doctorId,
@@ -1109,7 +1091,6 @@ router.patch('/approve-doctor/:id', authenticate, authorize('superadmin','admin'
         return success(res, { doctorId }, 'Doctor approved successfully.');
       }
 
-      // Rejected or deferred
       await query(
         `UPDATE dbo.DoctorProfiles
          SET ApprovalStatus  = @status,
@@ -1171,7 +1152,6 @@ router.get('/check-phone', async(req,res,next)=>{
   try{
     const raw=(req.query.phone||'').replace(/\D/g,'');
     if(!raw||raw.length<7) return success(res,{available:false});
-    // Block leading 0 on check as well
     if(raw.startsWith('0')) return success(res,{available:false,message:'Phone cannot start with 0'});
     const result=await query(`SELECT Id FROM dbo.Users WHERE Phone=@p AND DeletedAt IS NULL`,{p:{type:sql.NVarChar(20),value:raw}});
     success(res,{available:result.recordset.length===0});

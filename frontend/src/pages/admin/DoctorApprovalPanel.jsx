@@ -175,8 +175,8 @@ function DoctorDrawer({ doctor, onClose, onAction, actioning }) {
             <InfoRow label="Qualification" value={doctor.QualificationName} />
             <InfoRow label="Department" value={doctor.DepartmentName} />
             <InfoRow label="Medical Council" value={doctor.MedicalCouncilName} />
-            <InfoRow label="License No." value={doctor.LicenseNumber} mono />
-            <InfoRow label="License Expiry" value={fmtDate(doctor.LicenseExpiry)} />
+            
+            
             <InfoRow label="Experience" value={doctor.ExperienceYears ? `${doctor.ExperienceYears} years` : null} />
             <InfoRow label="Max Patients/Day" value={doctor.MaxDailyPatients} />
           </SectionCard>

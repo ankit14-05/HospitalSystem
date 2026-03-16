@@ -1,643 +1,368 @@
-// src/routes/scheduling.routes.js
+// src/routes/doctor-schedule.routes.js
+// Doctor-facing scheduling endpoints — authenticated doctor only.
+// Covers: schedule blocks (OPD, surgery, ward round, etc.), leaves, today view.
+//
+// Mount in server.js as:
+//   app.use('/api/v1/doctors', require('./routes/doctor-schedule.routes'));
+//
+// This file adds:
+//   GET    /doctors/my-schedule           — get own schedule blocks
+//   POST   /doctors/my-schedule           — create a block
+//   PUT    /doctors/my-schedule/:id       — update a block
+//   DELETE /doctors/my-schedule/:id       — soft-delete a block
+//   GET    /doctors/my-leaves             — get own leave requests
+//   POST   /doctors/my-leaves             — submit leave request
+//   GET    /doctors/today-schedule        — today's blocks + appointments
+
 const express  = require('express');
 const router   = express.Router();
-const { query, sql } = require('../config/database');   // same pattern as auth.middleware.js
+const { query, sql } = require('../config/database');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const AppError = require('../utils/AppError');
 
-// ── Helper ────────────────────────────────────────────────────────────────────
-const ok = (res, data, meta) =>
-  res.json({ success: true, data, ...(meta && { meta }) });
-
-// All scheduling routes require an authenticated admin or superadmin
+// All routes require authenticated doctor (or admin who can proxy)
 router.use(authenticate);
-router.use(authorize('admin', 'superadmin'));
 
-// ════════════════════════════════════════════════════════════════════════════
-// OPD ROOMS
-// ════════════════════════════════════════════════════════════════════════════
+const ok = (res, data, message) =>
+  res.json({ success: true, data, ...(message && { message }) });
 
-router.get('/rooms', async (req, res, next) => {
+// ─── Helper: resolve DoctorProfiles.Id from req.user.id ──────────────────────
+const getDoctorProfileId = async (userId) => {
+  const r = await query(
+    `SELECT Id, HospitalId FROM dbo.DoctorProfiles WHERE UserId = @UserId`,
+    { UserId: { type: sql.BigInt, value: parseInt(userId) } }
+  );
+  if (!r.recordset.length) throw new AppError('Doctor profile not found.', 404);
+  return r.recordset[0];
+};
+
+// ═════════════════════════════════════════════════════════════════════════════
+// DOCTOR SCHEDULE BLOCKS
+// Table: DoctorScheduleBlocks (see CREATE TABLE below in comments)
+//
+// CREATE TABLE dbo.DoctorScheduleBlocks (
+//   Id               BIGINT IDENTITY PRIMARY KEY,
+//   DoctorId         BIGINT NOT NULL REFERENCES dbo.DoctorProfiles(Id),
+//   HospitalId       BIGINT NOT NULL,
+//   BlockType        NVARCHAR(20)  NOT NULL DEFAULT 'opd',
+//     -- 'opd','surgery','ward_round','teleconsult','emergency','teaching','break','on_call'
+//   DayOfWeek        TINYINT NOT NULL,  -- 0=Sun … 6=Sat
+//   StartTime        NVARCHAR(8)  NOT NULL,
+//   EndTime          NVARCHAR(8)  NOT NULL,
+//   Title            NVARCHAR(200) NULL,
+//   Location         NVARCHAR(200) NULL,
+//   Notes            NVARCHAR(MAX) NULL,
+//   SlotDurationMins SMALLINT NULL,
+//   MaxPatients      SMALLINT NULL,
+//   PatientCount     SMALLINT NULL,
+//   Recurrence       NVARCHAR(20) NOT NULL DEFAULT 'weekly',
+//     -- 'none','daily','weekly','weekdays'
+//   EffectiveFrom    DATE NOT NULL DEFAULT GETUTCDATE(),
+//   EffectiveTo      DATE NULL,
+//   IsActive         BIT NOT NULL DEFAULT 1,
+//   CreatedAt        DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+//   UpdatedAt        DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+//   CreatedBy        BIGINT NULL
+// );
+// ═════════════════════════════════════════════════════════════════════════════
+
+// GET /doctors/my-schedule
+router.get('/my-schedule', authorize('doctor','admin','superadmin'), async (req, res, next) => {
   try {
-    const result = await query(
-      `SELECT r.*, d.Name AS DepartmentName
-       FROM dbo.OpdRooms r
-       JOIN dbo.Departments d ON d.Id = r.DepartmentId
-       WHERE r.HospitalId = @HospitalId AND r.IsActive = 1
-       ORDER BY r.RoomNumber`,
-      { HospitalId: { type: sql.BigInt, value: req.user.hospitalId } }
-    );
-    ok(res, result.recordset);
-  } catch (err) { next(err); }
-});
+    const { Id: doctorId, HospitalId: hospitalId } = await getDoctorProfileId(req.user.id);
 
-router.post('/rooms', async (req, res, next) => {
-  try {
-    const { DepartmentId, RoomNumber, RoomName, Floor, Notes } = req.body;
-    if (!DepartmentId || !RoomNumber)
-      throw new AppError('DepartmentId and RoomNumber are required.', 400);
     const result = await query(
-      `INSERT INTO dbo.OpdRooms
-         (HospitalId, DepartmentId, RoomNumber, RoomName, Floor, Notes, CreatedBy)
-       OUTPUT INSERTED.*
-       VALUES (@HospitalId,@DepartmentId,@RoomNumber,@RoomName,@Floor,@Notes,@CreatedBy)`,
-      {
-        HospitalId:   { type: sql.BigInt,        value: req.user.hospitalId },
-        DepartmentId: { type: sql.BigInt,        value: DepartmentId },
-        RoomNumber:   { type: sql.NVarChar(20),  value: RoomNumber },
-        RoomName:     { type: sql.NVarChar(100), value: RoomName || null },
-        Floor:        { type: sql.NVarChar(20),  value: Floor    || null },
-        Notes:        { type: sql.NVarChar(500), value: Notes    || null },
-        CreatedBy:    { type: sql.BigInt,        value: req.user.id },
-      }
-    );
-    ok(res, result.recordset[0]);
-  } catch (err) { next(err); }
-});
-
-router.patch('/rooms/:id', async (req, res, next) => {
-  try {
-    const { RoomName, Floor, Notes, IsActive } = req.body;
-    const result = await query(
-      `UPDATE dbo.OpdRooms
-       SET RoomName=@RoomName, Floor=@Floor, Notes=@Notes,
-           IsActive=@IsActive, UpdatedAt=GETUTCDATE()
-       OUTPUT INSERTED.*
-       WHERE Id=@Id AND HospitalId=@HospitalId`,
-      {
-        Id:         { type: sql.BigInt,        value: req.params.id },
-        HospitalId: { type: sql.BigInt,        value: req.user.hospitalId },
-        RoomName:   { type: sql.NVarChar(100), value: RoomName ?? null },
-        Floor:      { type: sql.NVarChar(20),  value: Floor    ?? null },
-        Notes:      { type: sql.NVarChar(500), value: Notes    ?? null },
-        IsActive:   { type: sql.Bit,           value: IsActive ?? 1 },
-      }
-    );
-    if (!result.recordset.length) throw new AppError('Room not found.', 404);
-    ok(res, result.recordset[0]);
-  } catch (err) { next(err); }
-});
-
-// ════════════════════════════════════════════════════════════════════════════
-// DOCTOR SCHEDULES
-// ════════════════════════════════════════════════════════════════════════════
-
-router.get('/doctor-schedules', async (req, res, next) => {
-  try {
-    const result = await query(
-      `SELECT * FROM dbo.V_DoctorScheduleSummary
-       WHERE HospitalId = @HospitalId
+      `SELECT * FROM dbo.DoctorScheduleBlocks
+       WHERE DoctorId = @DoctorId AND IsActive = 1
        ORDER BY DayOfWeek, StartTime`,
-      { HospitalId: { type: sql.BigInt, value: req.user.hospitalId } }
+      { DoctorId: { type: sql.BigInt, value: doctorId } }
     );
     ok(res, result.recordset);
   } catch (err) { next(err); }
 });
 
-router.post('/doctor-schedules', async (req, res, next) => {
+// POST /doctors/my-schedule
+router.post('/my-schedule', authorize('doctor','admin','superadmin'), async (req, res, next) => {
   try {
-    const { DoctorId, OpdRoomId, DayOfWeek, StartTime, EndTime,
-            SlotDurationMins, VisitType, EffectiveFrom, EffectiveTo, Notes } = req.body;
-    if (!DoctorId || DayOfWeek === undefined || !StartTime || !EndTime || !EffectiveFrom)
-      throw new AppError('DoctorId, DayOfWeek, StartTime, EndTime, EffectiveFrom are required.', 400);
+    const { Id: doctorId, HospitalId: hospitalId } = await getDoctorProfileId(req.user.id);
+
+    const {
+      BlockType, DayOfWeek, StartTime, EndTime,
+      Title, Location, Notes,
+      SlotDurationMins, MaxPatients, PatientCount,
+      Recurrence, EffectiveFrom, EffectiveTo,
+    } = req.body;
+
+    if (DayOfWeek === undefined || !StartTime || !EndTime)
+      throw new AppError('DayOfWeek, StartTime and EndTime are required.', 400);
+
+    // Overlap check within same day
+    const overlap = await query(
+      `SELECT Id FROM dbo.DoctorScheduleBlocks
+       WHERE DoctorId  = @DoctorId
+         AND DayOfWeek = @DayOfWeek
+         AND IsActive  = 1
+         AND StartTime < @EndTime
+         AND EndTime   > @StartTime`,
+      {
+        DoctorId:  { type: sql.BigInt,      value: doctorId },
+        DayOfWeek: { type: sql.TinyInt,     value: Number(DayOfWeek) },
+        StartTime: { type: sql.NVarChar(8), value: StartTime },
+        EndTime:   { type: sql.NVarChar(8), value: EndTime },
+      }
+    );
+    if (overlap.recordset.length) {
+      throw new AppError('This time block overlaps with an existing schedule entry.', 409);
+    }
+
     const result = await query(
-      `INSERT INTO dbo.DoctorSchedules
-         (HospitalId,DoctorId,OpdRoomId,DayOfWeek,StartTime,EndTime,
-          SlotDurationMins,VisitType,EffectiveFrom,EffectiveTo,Notes,CreatedBy)
+      `INSERT INTO dbo.DoctorScheduleBlocks
+         (DoctorId, HospitalId, BlockType, DayOfWeek, StartTime, EndTime,
+          Title, Location, Notes, SlotDurationMins, MaxPatients, PatientCount,
+          Recurrence, EffectiveFrom, EffectiveTo, CreatedBy)
        OUTPUT INSERTED.*
        VALUES
-         (@HospitalId,@DoctorId,@OpdRoomId,@DayOfWeek,@StartTime,@EndTime,
-          @SlotDurationMins,@VisitType,@EffectiveFrom,@EffectiveTo,@Notes,@CreatedBy)`,
+         (@DoctorId, @HospitalId, @BlockType, @DayOfWeek, @StartTime, @EndTime,
+          @Title, @Location, @Notes, @SlotDurationMins, @MaxPatients, @PatientCount,
+          @Recurrence, @EffectiveFrom, @EffectiveTo, @CreatedBy)`,
       {
-        HospitalId:       { type: sql.BigInt,        value: req.user.hospitalId },
-        DoctorId:         { type: sql.BigInt,        value: DoctorId },
-        OpdRoomId:        { type: sql.BigInt,        value: OpdRoomId        || null },
-        DayOfWeek:        { type: sql.TinyInt,       value: DayOfWeek },
-        StartTime:        { type: sql.NVarChar(8),   value: StartTime },
-        EndTime:          { type: sql.NVarChar(8),   value: EndTime },
-        SlotDurationMins: { type: sql.SmallInt,      value: SlotDurationMins || 15 },
-        VisitType:        { type: sql.NVarChar(20),  value: VisitType        || 'opd' },
-        EffectiveFrom:    { type: sql.Date,          value: EffectiveFrom },
-        EffectiveTo:      { type: sql.Date,          value: EffectiveTo      || null },
-        Notes:            { type: sql.NVarChar(500), value: Notes            || null },
-        CreatedBy:        { type: sql.BigInt,        value: req.user.id },
+        DoctorId:        { type: sql.BigInt,         value: doctorId },
+        HospitalId:      { type: sql.BigInt,         value: hospitalId },
+        BlockType:       { type: sql.NVarChar(20),   value: BlockType       || 'opd' },
+        DayOfWeek:       { type: sql.TinyInt,        value: Number(DayOfWeek) },
+        StartTime:       { type: sql.NVarChar(8),    value: StartTime },
+        EndTime:         { type: sql.NVarChar(8),    value: EndTime },
+        Title:           { type: sql.NVarChar(200),  value: Title           || null },
+        Location:        { type: sql.NVarChar(200),  value: Location        || null },
+        Notes:           { type: sql.NVarChar(sql.MAX), value: Notes         || null },
+        SlotDurationMins:{ type: sql.SmallInt,       value: SlotDurationMins ? parseInt(SlotDurationMins) : null },
+        MaxPatients:     { type: sql.SmallInt,       value: MaxPatients     ? parseInt(MaxPatients)     : null },
+        PatientCount:    { type: sql.SmallInt,       value: PatientCount    ? parseInt(PatientCount)    : null },
+        Recurrence:      { type: sql.NVarChar(20),   value: Recurrence      || 'weekly' },
+        EffectiveFrom:   { type: sql.Date,           value: EffectiveFrom   || new Date() },
+        EffectiveTo:     { type: sql.Date,           value: EffectiveTo     || null },
+        CreatedBy:       { type: sql.BigInt,         value: parseInt(req.user.id) },
       }
     );
-    ok(res, result.recordset[0]);
+    ok(res, result.recordset[0], 'Schedule block created.');
   } catch (err) { next(err); }
 });
 
-router.patch('/doctor-schedules/:id', async (req, res, next) => {
+// PUT /doctors/my-schedule/:id
+router.put('/my-schedule/:id', authorize('doctor','admin','superadmin'), async (req, res, next) => {
   try {
-    const { OpdRoomId, StartTime, EndTime, SlotDurationMins,
-            VisitType, EffectiveTo, IsActive, Notes } = req.body;
-    const result = await query(
-      `UPDATE dbo.DoctorSchedules
-       SET OpdRoomId=@OpdRoomId, StartTime=@StartTime, EndTime=@EndTime,
-           SlotDurationMins=@SlotDurationMins, VisitType=@VisitType,
-           EffectiveTo=@EffectiveTo, IsActive=@IsActive,
-           Notes=@Notes, UpdatedAt=GETUTCDATE(), UpdatedBy=@UpdatedBy
-       OUTPUT INSERTED.*
-       WHERE Id=@Id AND HospitalId=@HospitalId`,
-      {
-        Id:               { type: sql.BigInt,        value: req.params.id },
-        HospitalId:       { type: sql.BigInt,        value: req.user.hospitalId },
-        OpdRoomId:        { type: sql.BigInt,        value: OpdRoomId        ?? null },
-        StartTime:        { type: sql.NVarChar(8),   value: StartTime },
-        EndTime:          { type: sql.NVarChar(8),   value: EndTime },
-        SlotDurationMins: { type: sql.SmallInt,      value: SlotDurationMins || 15 },
-        VisitType:        { type: sql.NVarChar(20),  value: VisitType        || 'opd' },
-        EffectiveTo:      { type: sql.Date,          value: EffectiveTo      ?? null },
-        IsActive:         { type: sql.Bit,           value: IsActive         ?? 1 },
-        Notes:            { type: sql.NVarChar(500), value: Notes            ?? null },
-        UpdatedBy:        { type: sql.BigInt,        value: req.user.id },
-      }
-    );
-    if (!result.recordset.length) throw new AppError('Schedule not found.', 404);
-    ok(res, result.recordset[0]);
-  } catch (err) { next(err); }
-});
+    const { Id: doctorId } = await getDoctorProfileId(req.user.id);
+    const blockId = parseInt(req.params.id);
 
-router.delete('/doctor-schedules/:id', async (req, res, next) => {
-  try {
-    await query(
-      `UPDATE dbo.DoctorSchedules SET IsActive=0, UpdatedAt=GETUTCDATE(), UpdatedBy=@UpdatedBy
-       WHERE Id=@Id AND HospitalId=@HospitalId`,
-      {
-        Id:         { type: sql.BigInt, value: req.params.id },
-        HospitalId: { type: sql.BigInt, value: req.user.hospitalId },
-        UpdatedBy:  { type: sql.BigInt, value: req.user.id },
-      }
-    );
-    ok(res, { deleted: true });
-  } catch (err) { next(err); }
-});
+    const {
+      BlockType, DayOfWeek, StartTime, EndTime,
+      Title, Location, Notes,
+      SlotDurationMins, MaxPatients, PatientCount,
+      Recurrence, EffectiveFrom, EffectiveTo, IsActive,
+    } = req.body;
 
-// ════════════════════════════════════════════════════════════════════════════
-// STAFF SHIFTS
-// ════════════════════════════════════════════════════════════════════════════
-
-router.get('/staff-shifts', async (req, res, next) => {
-  try {
-    const result = await query(
-      `SELECT ss.*, u.FirstName + ' ' + u.LastName AS StaffName,
-              sp.Role, dep.Name AS DepartmentName
-       FROM dbo.StaffSchedules ss
-       JOIN dbo.StaffProfiles sp     ON sp.Id  = ss.StaffId
-       JOIN dbo.Users u              ON u.Id   = sp.UserId
-       LEFT JOIN dbo.Departments dep ON dep.Id = sp.DepartmentId
-       WHERE ss.HospitalId = @HospitalId AND ss.IsActive = 1
-       ORDER BY ss.DayOfWeek, ss.StartTime`,
-      { HospitalId: { type: sql.BigInt, value: req.user.hospitalId } }
-    );
-    ok(res, result.recordset);
-  } catch (err) { next(err); }
-});
-
-router.post('/staff-shifts', async (req, res, next) => {
-  try {
-    const { StaffId, DayOfWeek, ShiftType, StartTime, EndTime,
-            BreakStartTime, BreakEndTime, EffectiveFrom, EffectiveTo, Notes } = req.body;
-    if (!StaffId || DayOfWeek === undefined || !StartTime || !EndTime || !EffectiveFrom)
-      throw new AppError('StaffId, DayOfWeek, StartTime, EndTime, EffectiveFrom are required.', 400);
-    const result = await query(
-      `INSERT INTO dbo.StaffSchedules
-         (HospitalId,StaffId,DayOfWeek,ShiftType,StartTime,EndTime,
-          BreakStartTime,BreakEndTime,EffectiveFrom,EffectiveTo,Notes,CreatedBy)
-       OUTPUT INSERTED.*
-       VALUES
-         (@HospitalId,@StaffId,@DayOfWeek,@ShiftType,@StartTime,@EndTime,
-          @BreakStartTime,@BreakEndTime,@EffectiveFrom,@EffectiveTo,@Notes,@CreatedBy)`,
-      {
-        HospitalId:     { type: sql.BigInt,        value: req.user.hospitalId },
-        StaffId:        { type: sql.BigInt,        value: StaffId },
-        DayOfWeek:      { type: sql.TinyInt,       value: DayOfWeek },
-        ShiftType:      { type: sql.NVarChar(20),  value: ShiftType      || 'morning' },
-        StartTime:      { type: sql.NVarChar(8),   value: StartTime },
-        EndTime:        { type: sql.NVarChar(8),   value: EndTime },
-        BreakStartTime: { type: sql.NVarChar(8),   value: BreakStartTime || null },
-        BreakEndTime:   { type: sql.NVarChar(8),   value: BreakEndTime   || null },
-        EffectiveFrom:  { type: sql.Date,          value: EffectiveFrom },
-        EffectiveTo:    { type: sql.Date,          value: EffectiveTo    || null },
-        Notes:          { type: sql.NVarChar(500), value: Notes          || null },
-        CreatedBy:      { type: sql.BigInt,        value: req.user.id },
-      }
-    );
-    ok(res, result.recordset[0]);
-  } catch (err) { next(err); }
-});
-
-router.patch('/staff-shifts/:id', async (req, res, next) => {
-  try {
-    const { ShiftType, StartTime, EndTime, BreakStartTime,
-            BreakEndTime, EffectiveTo, IsActive, Notes } = req.body;
-    const result = await query(
-      `UPDATE dbo.StaffSchedules
-       SET ShiftType=@ShiftType, StartTime=@StartTime, EndTime=@EndTime,
-           BreakStartTime=@BreakStartTime, BreakEndTime=@BreakEndTime,
-           EffectiveTo=@EffectiveTo, IsActive=@IsActive,
-           Notes=@Notes, UpdatedAt=GETUTCDATE(), UpdatedBy=@UpdatedBy
-       OUTPUT INSERTED.*
-       WHERE Id=@Id AND HospitalId=@HospitalId`,
-      {
-        Id:             { type: sql.BigInt,        value: req.params.id },
-        HospitalId:     { type: sql.BigInt,        value: req.user.hospitalId },
-        ShiftType:      { type: sql.NVarChar(20),  value: ShiftType      || 'morning' },
-        StartTime:      { type: sql.NVarChar(8),   value: StartTime },
-        EndTime:        { type: sql.NVarChar(8),   value: EndTime },
-        BreakStartTime: { type: sql.NVarChar(8),   value: BreakStartTime ?? null },
-        BreakEndTime:   { type: sql.NVarChar(8),   value: BreakEndTime   ?? null },
-        EffectiveTo:    { type: sql.Date,          value: EffectiveTo    ?? null },
-        IsActive:       { type: sql.Bit,           value: IsActive       ?? 1 },
-        Notes:          { type: sql.NVarChar(500), value: Notes          ?? null },
-        UpdatedBy:      { type: sql.BigInt,        value: req.user.id },
-      }
-    );
-    if (!result.recordset.length) throw new AppError('Staff shift not found.', 404);
-    ok(res, result.recordset[0]);
-  } catch (err) { next(err); }
-});
-
-router.delete('/staff-shifts/:id', async (req, res, next) => {
-  try {
-    await query(
-      `UPDATE dbo.StaffSchedules SET IsActive=0, UpdatedAt=GETUTCDATE(), UpdatedBy=@UpdatedBy
-       WHERE Id=@Id AND HospitalId=@HospitalId`,
-      {
-        Id:         { type: sql.BigInt, value: req.params.id },
-        HospitalId: { type: sql.BigInt, value: req.user.hospitalId },
-        UpdatedBy:  { type: sql.BigInt, value: req.user.id },
-      }
-    );
-    ok(res, { deleted: true });
-  } catch (err) { next(err); }
-});
-
-// ════════════════════════════════════════════════════════════════════════════
-// APPOINTMENT SLOTS
-// ════════════════════════════════════════════════════════════════════════════
-
-// IMPORTANT: /slots/today/summary must come before /slots/:id routes
-router.get('/slots/today/summary', async (req, res, next) => {
-  try {
-    const result = await query(
-      `SELECT * FROM dbo.V_TodaySlotSummary
-       WHERE HospitalId = @HospitalId ORDER BY DoctorName`,
-      { HospitalId: { type: sql.BigInt, value: req.user.hospitalId } }
-    );
-    ok(res, result.recordset);
-  } catch (err) { next(err); }
-});
-
-router.get('/slots', async (req, res, next) => {
-  try {
-    const { doctorId, date, status } = req.query;
-    const result = await query(
-      `SELECT s.*, u.FirstName + ' ' + u.LastName AS DoctorName, r.RoomNumber
-       FROM dbo.AppointmentSlots s
-       JOIN dbo.DoctorProfiles dp ON dp.Id = s.DoctorId
-       JOIN dbo.Users u           ON u.Id  = dp.UserId
-       LEFT JOIN dbo.OpdRooms r   ON r.Id  = s.OpdRoomId
-       WHERE s.HospitalId = @HospitalId
-         AND s.SlotDate   = @SlotDate
-         AND (@DoctorId   IS NULL OR s.DoctorId = @DoctorId)
-         AND (@Status     IS NULL OR s.Status   = @Status)
-       ORDER BY s.StartTime`,
-      {
-        HospitalId: { type: sql.BigInt,       value: req.user.hospitalId },
-        SlotDate:   { type: sql.Date,         value: date     || new Date().toISOString().split('T')[0] },
-        DoctorId:   { type: sql.BigInt,       value: doctorId || null },
-        Status:     { type: sql.NVarChar(20), value: status   || null },
-      }
-    );
-    ok(res, result.recordset);
-  } catch (err) { next(err); }
-});
-
-router.post('/slots/generate', async (req, res, next) => {
-  try {
-    const { fromDate, toDate } = req.body;
-    if (!fromDate || !toDate)
-      throw new AppError('fromDate and toDate are required.', 400);
-    await query(
-      `EXEC dbo.sp_GenerateDoctorSlots @HospitalId=@HospitalId, @FromDate=@FromDate, @ToDate=@ToDate`,
-      {
-        HospitalId: { type: sql.BigInt, value: req.user.hospitalId },
-        FromDate:   { type: sql.Date,   value: fromDate },
-        ToDate:     { type: sql.Date,   value: toDate },
-      }
-    );
-    ok(res, { generated: true, fromDate, toDate });
-  } catch (err) { next(err); }
-});
-
-router.patch('/slots/:id/block', async (req, res, next) => {
-  try {
-    const { blocked, reason } = req.body;
-    const result = await query(
-      `UPDATE dbo.AppointmentSlots
-       SET Status=@Status, BlockedReason=@BlockedReason, UpdatedAt=GETUTCDATE()
-       OUTPUT INSERTED.*
-       WHERE Id=@Id AND HospitalId=@HospitalId`,
-      {
-        Id:            { type: sql.BigInt,        value: req.params.id },
-        HospitalId:    { type: sql.BigInt,        value: req.user.hospitalId },
-        Status:        { type: sql.NVarChar(20),  value: blocked ? 'blocked' : 'available' },
-        BlockedReason: { type: sql.NVarChar(200), value: reason  || null },
-      }
-    );
-    if (!result.recordset.length) throw new AppError('Slot not found.', 404);
-    ok(res, result.recordset[0]);
-  } catch (err) { next(err); }
-});
-
-// ════════════════════════════════════════════════════════════════════════════
-// LEAVES  (combined doctor + staff)
-// ════════════════════════════════════════════════════════════════════════════
-
-router.get('/leaves', async (req, res, next) => {
-  try {
-    const { status, type } = req.query;
-    const hospId = req.user.hospitalId;
-
-    const [doctorRes, staffRes] = await Promise.all([
-      (!type || type === 'doctor') ? query(
-        `SELECT dl.Id, dl.DoctorId AS PersonId, 'doctor' AS Type,
-                u.FirstName + ' ' + u.LastName AS Name,
-                dl.LeaveDate, dl.LeaveType, dl.Reason, dl.Status, dl.CreatedAt
-         FROM dbo.DoctorLeaves dl
-         JOIN dbo.DoctorProfiles dp ON dp.Id = dl.DoctorId
-         JOIN dbo.Users u           ON u.Id  = dp.UserId
-         WHERE dl.HospitalId = @HospitalId
-           AND (@Status IS NULL OR dl.Status = @Status)
-         ORDER BY dl.LeaveDate`,
+    // Overlap check (excluding self)
+    if (StartTime && EndTime) {
+      const overlap = await query(
+        `SELECT Id FROM dbo.DoctorScheduleBlocks
+         WHERE DoctorId  = @DoctorId
+           AND DayOfWeek = @DayOfWeek
+           AND IsActive  = 1
+           AND Id        <> @BlockId
+           AND StartTime  < @EndTime
+           AND EndTime    > @StartTime`,
         {
-          HospitalId: { type: sql.BigInt,       value: hospId },
-          Status:     { type: sql.NVarChar(20), value: status || null },
-        }
-      ) : Promise.resolve({ recordset: [] }),
-
-      (!type || type === 'staff') ? query(
-        `SELECT sl.Id, sl.StaffId AS PersonId, 'staff' AS Type,
-                u.FirstName + ' ' + u.LastName AS Name,
-                sl.LeaveDate, sl.LeaveType, sl.Reason, sl.Status, sl.CreatedAt
-         FROM dbo.StaffLeaves sl
-         JOIN dbo.StaffProfiles sp ON sp.Id = sl.StaffId
-         JOIN dbo.Users u          ON u.Id  = sp.UserId
-         WHERE sl.HospitalId = @HospitalId
-           AND (@Status IS NULL OR sl.Status = @Status)
-         ORDER BY sl.LeaveDate`,
-        {
-          HospitalId: { type: sql.BigInt,       value: hospId },
-          Status:     { type: sql.NVarChar(20), value: status || null },
-        }
-      ) : Promise.resolve({ recordset: [] }),
-    ]);
-
-    const combined = [
-      ...doctorRes.recordset,
-      ...staffRes.recordset,
-    ].sort((a, b) => new Date(a.LeaveDate) - new Date(b.LeaveDate));
-
-    ok(res, combined);
-  } catch (err) { next(err); }
-});
-
-router.post('/doctor-leaves', async (req, res, next) => {
-  try {
-    const { DoctorId, LeaveDate, LeaveType, StartTime, EndTime, Reason } = req.body;
-    if (!DoctorId || !LeaveDate)
-      throw new AppError('DoctorId and LeaveDate are required.', 400);
-    const result = await query(
-      `INSERT INTO dbo.DoctorLeaves
-         (HospitalId,DoctorId,LeaveDate,LeaveType,StartTime,EndTime,Reason,CreatedBy)
-       OUTPUT INSERTED.*
-       VALUES (@HospitalId,@DoctorId,@LeaveDate,@LeaveType,@StartTime,@EndTime,@Reason,@CreatedBy)`,
-      {
-        HospitalId: { type: sql.BigInt,        value: req.user.hospitalId },
-        DoctorId:   { type: sql.BigInt,        value: DoctorId },
-        LeaveDate:  { type: sql.Date,          value: LeaveDate },
-        LeaveType:  { type: sql.NVarChar(30),  value: LeaveType || 'full_day' },
-        StartTime:  { type: sql.NVarChar(8),   value: StartTime || null },
-        EndTime:    { type: sql.NVarChar(8),   value: EndTime   || null },
-        Reason:     { type: sql.NVarChar(500), value: Reason    || null },
-        CreatedBy:  { type: sql.BigInt,        value: req.user.id },
-      }
-    );
-    ok(res, result.recordset[0]);
-  } catch (err) { next(err); }
-});
-
-router.patch('/doctor-leaves/:id', async (req, res, next) => {
-  try {
-    const { status, rejectionReason } = req.body;
-    if (!['approved', 'rejected'].includes(status))
-      throw new AppError('status must be "approved" or "rejected".', 400);
-
-    const result = await query(
-      `UPDATE dbo.DoctorLeaves
-       SET Status=@Status, RejectionReason=@RejectionReason, ApprovedBy=@ApprovedBy,
-           ApprovedAt=CASE WHEN @Status='approved' THEN GETUTCDATE() ELSE NULL END,
-           UpdatedAt=GETUTCDATE()
-       OUTPUT INSERTED.*
-       WHERE Id=@Id AND HospitalId=@HospitalId`,
-      {
-        Id:              { type: sql.BigInt,        value: req.params.id },
-        HospitalId:      { type: sql.BigInt,        value: req.user.hospitalId },
-        Status:          { type: sql.NVarChar(20),  value: status },
-        RejectionReason: { type: sql.NVarChar(500), value: rejectionReason || null },
-        ApprovedBy:      { type: sql.BigInt,        value: req.user.id },
-      }
-    );
-    if (!result.recordset.length) throw new AppError('Leave record not found.', 404);
-
-    // Auto-block available slots when leave is approved
-    if (status === 'approved') {
-      const leave = result.recordset[0];
-      await query(
-        `UPDATE dbo.AppointmentSlots
-         SET Status='on_leave', BlockedReason='Doctor on approved leave', UpdatedAt=GETUTCDATE()
-         WHERE DoctorId=@DoctorId AND SlotDate=@LeaveDate AND Status='available'`,
-        {
-          DoctorId:  { type: sql.BigInt, value: leave.DoctorId },
-          LeaveDate: { type: sql.Date,   value: leave.LeaveDate },
+          DoctorId:  { type: sql.BigInt,      value: doctorId },
+          DayOfWeek: { type: sql.TinyInt,     value: Number(DayOfWeek) },
+          BlockId:   { type: sql.BigInt,      value: blockId },
+          StartTime: { type: sql.NVarChar(8), value: StartTime },
+          EndTime:   { type: sql.NVarChar(8), value: EndTime },
         }
       );
+      if (overlap.recordset.length)
+        throw new AppError('This time block overlaps with another schedule entry.', 409);
     }
-    ok(res, result.recordset[0]);
-  } catch (err) { next(err); }
-});
 
-router.post('/staff-leaves', async (req, res, next) => {
-  try {
-    const { StaffId, LeaveDate, LeaveType, StartTime, EndTime, Reason } = req.body;
-    if (!StaffId || !LeaveDate)
-      throw new AppError('StaffId and LeaveDate are required.', 400);
     const result = await query(
-      `INSERT INTO dbo.StaffLeaves
-         (HospitalId,StaffId,LeaveDate,LeaveType,StartTime,EndTime,Reason,CreatedBy)
+      `UPDATE dbo.DoctorScheduleBlocks
+       SET BlockType        = @BlockType,
+           DayOfWeek        = @DayOfWeek,
+           StartTime        = @StartTime,
+           EndTime          = @EndTime,
+           Title            = @Title,
+           Location         = @Location,
+           Notes            = @Notes,
+           SlotDurationMins = @SlotDurationMins,
+           MaxPatients      = @MaxPatients,
+           PatientCount     = @PatientCount,
+           Recurrence       = @Recurrence,
+           EffectiveFrom    = @EffectiveFrom,
+           EffectiveTo      = @EffectiveTo,
+           IsActive         = @IsActive,
+           UpdatedAt        = SYSUTCDATETIME()
        OUTPUT INSERTED.*
-       VALUES (@HospitalId,@StaffId,@LeaveDate,@LeaveType,@StartTime,@EndTime,@Reason,@CreatedBy)`,
+       WHERE Id = @BlockId AND DoctorId = @DoctorId`,
       {
-        HospitalId: { type: sql.BigInt,        value: req.user.hospitalId },
-        StaffId:    { type: sql.BigInt,        value: StaffId },
-        LeaveDate:  { type: sql.Date,          value: LeaveDate },
-        LeaveType:  { type: sql.NVarChar(30),  value: LeaveType || 'full_day' },
-        StartTime:  { type: sql.NVarChar(8),   value: StartTime || null },
-        EndTime:    { type: sql.NVarChar(8),   value: EndTime   || null },
-        Reason:     { type: sql.NVarChar(500), value: Reason    || null },
-        CreatedBy:  { type: sql.BigInt,        value: req.user.id },
+        BlockId:         { type: sql.BigInt,          value: blockId },
+        DoctorId:        { type: sql.BigInt,          value: doctorId },
+        BlockType:       { type: sql.NVarChar(20),    value: BlockType        || 'opd' },
+        DayOfWeek:       { type: sql.TinyInt,         value: Number(DayOfWeek) },
+        StartTime:       { type: sql.NVarChar(8),     value: StartTime },
+        EndTime:         { type: sql.NVarChar(8),     value: EndTime },
+        Title:           { type: sql.NVarChar(200),   value: Title            || null },
+        Location:        { type: sql.NVarChar(200),   value: Location         || null },
+        Notes:           { type: sql.NVarChar(sql.MAX), value: Notes           || null },
+        SlotDurationMins:{ type: sql.SmallInt,        value: SlotDurationMins ? parseInt(SlotDurationMins) : null },
+        MaxPatients:     { type: sql.SmallInt,        value: MaxPatients      ? parseInt(MaxPatients)      : null },
+        PatientCount:    { type: sql.SmallInt,        value: PatientCount     ? parseInt(PatientCount)     : null },
+        Recurrence:      { type: sql.NVarChar(20),    value: Recurrence       || 'weekly' },
+        EffectiveFrom:   { type: sql.Date,            value: EffectiveFrom    || new Date() },
+        EffectiveTo:     { type: sql.Date,            value: EffectiveTo      || null },
+        IsActive:        { type: sql.Bit,             value: IsActive !== undefined ? IsActive : 1 },
       }
     );
-    ok(res, result.recordset[0]);
+    if (!result.recordset.length) throw new AppError('Block not found or not owned by you.', 404);
+    ok(res, result.recordset[0], 'Schedule block updated.');
   } catch (err) { next(err); }
 });
 
-router.patch('/staff-leaves/:id', async (req, res, next) => {
+// DELETE /doctors/my-schedule/:id  (soft delete)
+router.delete('/my-schedule/:id', authorize('doctor','admin','superadmin'), async (req, res, next) => {
   try {
-    const { status, rejectionReason } = req.body;
-    if (!['approved', 'rejected'].includes(status))
-      throw new AppError('status must be "approved" or "rejected".', 400);
-    const result = await query(
-      `UPDATE dbo.StaffLeaves
-       SET Status=@Status, RejectionReason=@RejectionReason, ApprovedBy=@ApprovedBy,
-           ApprovedAt=CASE WHEN @Status='approved' THEN GETUTCDATE() ELSE NULL END,
-           UpdatedAt=GETUTCDATE()
-       OUTPUT INSERTED.*
-       WHERE Id=@Id AND HospitalId=@HospitalId`,
+    const { Id: doctorId } = await getDoctorProfileId(req.user.id);
+    const blockId = parseInt(req.params.id);
+
+    await query(
+      `UPDATE dbo.DoctorScheduleBlocks
+       SET IsActive = 0, UpdatedAt = SYSUTCDATETIME()
+       WHERE Id = @BlockId AND DoctorId = @DoctorId`,
       {
-        Id:              { type: sql.BigInt,        value: req.params.id },
-        HospitalId:      { type: sql.BigInt,        value: req.user.hospitalId },
-        Status:          { type: sql.NVarChar(20),  value: status },
-        RejectionReason: { type: sql.NVarChar(500), value: rejectionReason || null },
-        ApprovedBy:      { type: sql.BigInt,        value: req.user.id },
+        BlockId:  { type: sql.BigInt, value: blockId },
+        DoctorId: { type: sql.BigInt, value: doctorId },
       }
     );
-    if (!result.recordset.length) throw new AppError('Leave record not found.', 404);
-    ok(res, result.recordset[0]);
+    ok(res, { deleted: true });
   } catch (err) { next(err); }
 });
 
-// ════════════════════════════════════════════════════════════════════════════
-// OPD QUEUE
-// NOTE: /queue/today MUST be defined before /queue/:id to avoid route clash
-// ════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
+// DOCTOR LEAVES (self-service)
+// ═════════════════════════════════════════════════════════════════════════════
 
-router.get('/queue/today', async (req, res, next) => {
+// GET /doctors/my-leaves
+router.get('/my-leaves', authorize('doctor','admin','superadmin'), async (req, res, next) => {
   try {
-    const result = await query(
-      `SELECT q.*,
-              u.FirstName + ' ' + u.LastName AS DoctorName,
-              ISNULL(q.PatientName, pp.FirstName + ' ' + pp.LastName) AS PatientDisplayName
-       FROM dbo.OpdQueue q
-       JOIN dbo.DoctorProfiles dp       ON dp.Id = q.DoctorId
-       JOIN dbo.Users u                 ON u.Id  = dp.UserId
-       LEFT JOIN dbo.PatientProfiles pp ON pp.Id = q.PatientId
-       WHERE q.HospitalId  = @HospitalId
-         AND q.QueueDate   = CAST(GETUTCDATE() AS DATE)
-         AND q.QueueStatus NOT IN ('served','cancelled')
-       ORDER BY
-         CASE q.Priority WHEN 'urgent' THEN 1 WHEN 'vip' THEN 2 ELSE 3 END,
-         q.TokenNumber`,
-      { HospitalId: { type: sql.BigInt, value: req.user.hospitalId } }
-    );
-    ok(res, result.recordset);
-  } catch (err) { next(err); }
-});
+    const { Id: doctorId } = await getDoctorProfileId(req.user.id);
+    const { status } = req.query;
 
-router.get('/queue', async (req, res, next) => {
-  try {
-    const { doctorId, date } = req.query;
     const result = await query(
-      `SELECT q.*,
-              u.FirstName + ' ' + u.LastName AS DoctorName,
-              ISNULL(q.PatientName, pp.FirstName + ' ' + pp.LastName) AS PatientDisplayName
-       FROM dbo.OpdQueue q
-       JOIN dbo.DoctorProfiles dp       ON dp.Id = q.DoctorId
-       JOIN dbo.Users u                 ON u.Id  = dp.UserId
-       LEFT JOIN dbo.PatientProfiles pp ON pp.Id = q.PatientId
-       WHERE q.HospitalId = @HospitalId
-         AND q.QueueDate  = @QueueDate
-         AND (@DoctorId   IS NULL OR q.DoctorId = @DoctorId)
-       ORDER BY q.TokenNumber`,
+      `SELECT * FROM dbo.DoctorLeaves
+       WHERE DoctorId = @DoctorId
+         AND (@Status IS NULL OR Status = @Status)
+       ORDER BY LeaveDate DESC`,
       {
-        HospitalId: { type: sql.BigInt, value: req.user.hospitalId },
-        QueueDate:  { type: sql.Date,   value: date     || new Date().toISOString().split('T')[0] },
-        DoctorId:   { type: sql.BigInt, value: doctorId || null },
+        DoctorId: { type: sql.BigInt,       value: doctorId },
+        Status:   { type: sql.NVarChar(20), value: status || null },
       }
     );
     ok(res, result.recordset);
   } catch (err) { next(err); }
 });
 
-router.post('/queue', async (req, res, next) => {
+// POST /doctors/my-leaves
+router.post('/my-leaves', authorize('doctor','admin','superadmin'), async (req, res, next) => {
   try {
-    const { DoctorId, AppointmentId, SlotId, PatientId, PatientName, Priority, Notes } = req.body;
-    if (!DoctorId) throw new AppError('DoctorId is required.', 400);
+    const { Id: doctorId, HospitalId: hospitalId } = await getDoctorProfileId(req.user.id);
 
-    const queueDate = new Date().toISOString().split('T')[0];
+    const { LeaveDate, EndDate, LeaveType, StartTime, EndTime, Reason, IsEmergency } = req.body;
+    if (!LeaveDate || !Reason?.trim())
+      throw new AppError('LeaveDate and Reason are required.', 400);
 
-    const tokenRes = await query(
-      `SELECT ISNULL(MAX(TokenNumber), 0) + 1 AS NextToken
-       FROM dbo.OpdQueue WHERE DoctorId=@DoctorId AND QueueDate=@QueueDate`,
-      {
-        DoctorId:  { type: sql.BigInt, value: DoctorId },
-        QueueDate: { type: sql.Date,   value: queueDate },
-      }
-    );
-    const tokenNumber = tokenRes.recordset[0].NextToken;
+    // If multi-day leave, create one row per date
+    const start = new Date(LeaveDate);
+    const end   = EndDate ? new Date(EndDate) : new Date(LeaveDate);
+    const inserted = [];
 
-    const result = await query(
-      `INSERT INTO dbo.OpdQueue
-         (HospitalId,DoctorId,AppointmentId,SlotId,QueueDate,
-          TokenNumber,PatientId,PatientName,Priority,Notes)
-       OUTPUT INSERTED.*
-       VALUES
-         (@HospitalId,@DoctorId,@AppointmentId,@SlotId,@QueueDate,
-          @TokenNumber,@PatientId,@PatientName,@Priority,@Notes)`,
-      {
-        HospitalId:    { type: sql.BigInt,        value: req.user.hospitalId },
-        DoctorId:      { type: sql.BigInt,        value: DoctorId },
-        AppointmentId: { type: sql.BigInt,        value: AppointmentId || null },
-        SlotId:        { type: sql.BigInt,        value: SlotId        || null },
-        QueueDate:     { type: sql.Date,          value: queueDate },
-        TokenNumber:   { type: sql.SmallInt,      value: tokenNumber },
-        PatientId:     { type: sql.BigInt,        value: PatientId     || null },
-        PatientName:   { type: sql.NVarChar(200), value: PatientName   || null },
-        Priority:      { type: sql.NVarChar(20),  value: Priority      || 'normal' },
-        Notes:         { type: sql.NVarChar(500), value: Notes         || null },
-      }
-    );
-    ok(res, result.recordset[0]);
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      const dateStr = d.toISOString().slice(0, 10);
+      const r = await query(
+        `INSERT INTO dbo.DoctorLeaves
+           (HospitalId, DoctorId, LeaveDate, LeaveType, StartTime, EndTime,
+            Reason, Status, CreatedBy)
+         OUTPUT INSERTED.*
+         VALUES
+           (@HospitalId, @DoctorId, @LeaveDate, @LeaveType, @StartTime, @EndTime,
+            @Reason, 'pending', @CreatedBy)`,
+        {
+          HospitalId: { type: sql.BigInt,        value: hospitalId },
+          DoctorId:   { type: sql.BigInt,        value: doctorId },
+          LeaveDate:  { type: sql.Date,          value: dateStr },
+          LeaveType:  { type: sql.NVarChar(30),  value: LeaveType  || 'full_day' },
+          StartTime:  { type: sql.NVarChar(8),   value: StartTime  || null },
+          EndTime:    { type: sql.NVarChar(8),   value: EndTime    || null },
+          Reason:     { type: sql.NVarChar(500), value: Reason.trim() },
+          CreatedBy:  { type: sql.BigInt,        value: parseInt(req.user.id) },
+        }
+      );
+      inserted.push(r.recordset[0]);
+    }
+
+    ok(res, inserted.length === 1 ? inserted[0] : inserted, 'Leave request submitted successfully.');
   } catch (err) { next(err); }
 });
 
-router.patch('/queue/:id/status', async (req, res, next) => {
+// ═════════════════════════════════════════════════════════════════════════════
+// TODAY'S COMBINED VIEW
+// GET /doctors/today-schedule
+// Returns: schedule blocks for today + today's appointments
+// ═════════════════════════════════════════════════════════════════════════════
+router.get('/today-schedule', authorize('doctor','admin','superadmin'), async (req, res, next) => {
   try {
-    const { queueStatus } = req.body;
-    const valid = ['waiting','called','serving','served','skipped','cancelled'];
-    if (!valid.includes(queueStatus))
-      throw new AppError(`queueStatus must be one of: ${valid.join(', ')}`, 400);
+    const { Id: doctorId, HospitalId: hospitalId } = await getDoctorProfileId(req.user.id);
+    const todayDow  = new Date().getDay();
+    const todayDate = new Date().toISOString().slice(0, 10);
 
-    const result = await query(
-      `UPDATE dbo.OpdQueue
-       SET QueueStatus = @QueueStatus,
-           CalledAt    = CASE WHEN @QueueStatus='called'  THEN GETUTCDATE() ELSE CalledAt  END,
-           ServedAt    = CASE WHEN @QueueStatus='served'  THEN GETUTCDATE() ELSE ServedAt  END,
-           WaitMinutes = CASE WHEN @QueueStatus='served'
-                              THEN DATEDIFF(MINUTE, CreatedAt, GETUTCDATE())
-                              ELSE WaitMinutes END,
-           UpdatedAt   = GETUTCDATE()
-       OUTPUT INSERTED.*
-       WHERE Id=@Id AND HospitalId=@HospitalId`,
-      {
-        Id:          { type: sql.BigInt,       value: req.params.id },
-        HospitalId:  { type: sql.BigInt,       value: req.user.hospitalId },
-        QueueStatus: { type: sql.NVarChar(20), value: queueStatus },
-      }
-    );
-    if (!result.recordset.length) throw new AppError('Queue entry not found.', 404);
-    ok(res, result.recordset[0]);
+    const [blocksRes, apptsRes] = await Promise.all([
+      query(
+        `SELECT * FROM dbo.DoctorScheduleBlocks
+         WHERE DoctorId  = @DoctorId
+           AND DayOfWeek = @DayOfWeek
+           AND IsActive  = 1
+           AND EffectiveFrom <= @Today
+           AND (EffectiveTo IS NULL OR EffectiveTo >= @Today)
+         ORDER BY StartTime`,
+        {
+          DoctorId:  { type: sql.BigInt,   value: doctorId },
+          DayOfWeek: { type: sql.TinyInt,  value: todayDow },
+          Today:     { type: sql.Date,     value: todayDate },
+        }
+      ),
+      query(
+        `SELECT
+           a.Id, a.AppointmentNo, a.AppointmentDate, a.AppointmentTime,
+           a.VisitType, a.Status, a.Priority, a.Reason, a.TokenNumber,
+           pp.FirstName + ' ' + pp.LastName AS PatientName,
+           pp.UHID, pp.Phone AS PatientPhone, pp.Gender, pp.DateOfBirth,
+           pp.BloodGroup
+         FROM dbo.Appointments a
+         JOIN dbo.PatientProfiles pp ON pp.Id = a.PatientId
+         WHERE a.DoctorId        = @DoctorId
+           AND a.AppointmentDate = @Today
+           AND a.Status NOT IN ('Cancelled','NoShow')
+         ORDER BY a.AppointmentTime`,
+        {
+          DoctorId: { type: sql.BigInt, value: doctorId },
+          Today:    { type: sql.Date,   value: todayDate },
+        }
+      ),
+    ]);
+
+    ok(res, {
+      date:         todayDate,
+      dayOfWeek:    todayDow,
+      blocks:       blocksRes.recordset,
+      appointments: apptsRes.recordset,
+    });
   } catch (err) { next(err); }
 });
 

@@ -584,9 +584,9 @@ const RxTab = ({ prescriptions, loading, onRefresh, onNew }) => (
                   <Pill size={14} style={{ color: TEAL }} />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-bold text-slate-800 text-sm">{rx.DrugName||rx.drugName||rx.name}</p>
+                  <p className="font-bold text-slate-800 text-sm">{rx.DrugName||rx.drugName||rx.name||rx.RxNumber||'Prescription'}</p>
                   <p className="text-xs text-slate-400 mt-0.5">{rx.Dosage||rx.dosage} · {rx.Frequency||rx.frequency} · {rx.Duration||rx.duration}</p>
-                  <p className="text-xs text-slate-400">Patient: {rx.PatientName||rx.patientName||'—'} · {fmtDate(rx.PrescribedDate||rx.date)}</p>
+                  <p className="text-xs text-slate-400">Patient: {rx.PatientName||rx.patientName||'—'} · {fmtDate(rx.RxDate||rx.PrescribedDate||rx.date)}</p>
                 </div>
                 <InfoBadge color={TEAL}>{rx.Status||rx.status||'active'}</InfoBadge>
                 <button className="p-2 rounded-xl hover:bg-slate-100 text-slate-300 hover:text-slate-600 transition-colors">
@@ -612,12 +612,11 @@ const ScheduleTab = ({ profile, schedule, todaySlots, weeklyStats, loading, onEd
         ? <div className="p-5 space-y-3">{[1,2,3,4,5,6].map(i => <Sk key={i} h="h-6" />)}</div>
         : <div className="divide-y divide-slate-50">
             {[
-              ['Shift Hours',      (schedule?.AvailableFrom && schedule?.AvailableTo) ? `${fmtTime(schedule.AvailableFrom)} – ${fmtTime(schedule.AvailableTo)}` : '—'],
-              ['Break',           (schedule?.BreakFrom && schedule?.BreakTo) ? `${fmtTime(schedule.BreakFrom)} – ${fmtTime(schedule.BreakTo)}` : 'No break set'],
-              ['Slot Duration',    schedule?.SlotDurationMins ? `${schedule.SlotDurationMins} min` : '—'],
-              ['Max Patients',     schedule?.MaxDailyPatients ? `${schedule.MaxDailyPatients} / day` : '—'],
-              ['Consultation Fee', schedule?.ConsultationFee  ? `₹${schedule.ConsultationFee}`       : '—'],
-              ['Languages',        schedule?.LanguagesSpoken  || profile?.LanguagesSpoken             || '—'],
+              ['Shift Hours',      (profile?.AvailableFrom && profile?.AvailableTo) ? `${fmtTime(profile.AvailableFrom)} – ${fmtTime(profile.AvailableTo)}` : '—'],
+              ['Slot Duration',    profile?.SlotDurationMins ? `${profile.SlotDurationMins} min` : '—'],
+              ['Max Patients',     profile?.MaxDailyPatients ? `${profile.MaxDailyPatients} / day` : '—'],
+              ['Consultation Fee', profile?.ConsultationFee  ? `₹${profile.ConsultationFee}`       : '—'],
+              ['Languages',        profile?.LanguagesSpoken  || '—'],
             ].map(([k, v]) => (
               <div key={k} className="flex items-center justify-between px-5 py-3.5">
                 <span className="text-sm text-slate-400">{k}</span>
@@ -665,10 +664,10 @@ const ScheduleTab = ({ profile, schedule, todaySlots, weeklyStats, loading, onEd
               </div>
             : <div className="p-5">
                 <div className="grid grid-cols-4 gap-2">
-                  {todaySlots.map(s => {
-                    const booked = s.IsBooked||s.isBooked;
+                  {todaySlots.map((s, idx) => {
+                    const booked = !s.available;
                     return (
-                      <div key={s.Id||s.id}
+                      <div key={s.Id||s.id||idx}
                         className={`flex flex-col items-center py-2.5 px-2 rounded-xl border text-xs font-semibold ${booked?'bg-slate-100 border-slate-200 text-slate-400':'text-teal-700'}`}
                         style={!booked ? { background:`${TEAL}0c`, borderColor:`${TEAL}25` } : {}}>
                         <span>{fmtTime(s.StartTime||s.time)}</span>
@@ -681,7 +680,7 @@ const ScheduleTab = ({ profile, schedule, todaySlots, weeklyStats, loading, onEd
                   <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full" style={{ background:TEAL }} />Open</span>
                   <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-slate-300" />Booked</span>
                   <span className="ml-auto font-semibold text-slate-600">
-                    {todaySlots.filter(s => !s.IsBooked && !s.isBooked).length}/{todaySlots.length} available
+                    {todaySlots.filter(s => s.available).length}/{todaySlots.length} available
                   </span>
                 </div>
               </div>
@@ -714,63 +713,105 @@ export default function DoctorDashboard() {
 
   const setL = (k, v) => setLoading(l => ({ ...l, [k]: v }));
 
+  // ── fetchProfile ────────────────────────────────────────────────────────────
   const fetchProfile = useCallback(async () => {
     try {
       const r = await api.get('/doctors/profile');
-      const d = r?.data || r;
+      const d = r?.data?.data ?? r?.data ?? r;
       setProfile(d);
       setProfilePic(d?.ProfilePicUrl || d?.profilePicUrl || null);
     } catch {}
     finally { setL('profile', false); }
   }, []);
 
+  // ── fetchQueue ──────────────────────────────────────────────────────────────
   const fetchQueue = useCallback(async () => {
     setL('queue', true);
     try {
-      const r = await api.get(`/appointments/my-queue?date=${new Date().toISOString().split('T')[0]}`);
-      setQueue(r?.data || r || []);
+      const r    = await api.get(`/appointments/my-queue?date=${new Date().toISOString().split('T')[0]}`);
+      const list = r?.data?.data ?? r?.data ?? r ?? [];
+      setQueue(Array.isArray(list) ? list : []);
     } catch { setQueue([]); }
     finally { setL('queue', false); }
   }, []);
 
+  // ── fetchRequests ───────────────────────────────────────────────────────────
   const fetchRequests = useCallback(async () => {
     setL('requests', true);
     try {
-      const r = await api.get('/appointments/pending-requests');
-      setRequests(r?.data || r || []);
+      const r    = await api.get('/appointments/pending-requests');
+      const list = r?.data?.data ?? r?.data ?? r ?? [];
+      setRequests(Array.isArray(list) ? list : []);
     } catch { setRequests([]); }
     finally { setL('requests', false); }
   }, []);
 
+  // ── fetchPrescriptions ──────────────────────────────────────────────────────
   const fetchPrescriptions = useCallback(async () => {
     setL('prescriptions', true);
     try {
-      const r = await api.get('/prescriptions/issued');
-      setPrescriptions(r?.data || r || []);
+      const r    = await api.get('/prescriptions/issued');
+      const list = r?.data?.data ?? r?.data ?? r ?? [];
+      setPrescriptions(Array.isArray(list) ? list : []);
     } catch { setPrescriptions([]); }
     finally { setL('prescriptions', false); }
   }, []);
 
+  // ── fetchSchedule ───────────────────────────────────────────────────────────
   const fetchSchedule = useCallback(async () => {
     setL('schedule', true);
     try {
+      // Use DoctorProfileId from profile if available, fallback to user id
+      const doctorId = user?.DoctorProfileId || user?.doctorProfileId || user?.doctorId || user?.id;
+      const today    = new Date().toISOString().split('T')[0];
+
       const [sched, slots, stats] = await Promise.allSettled([
         api.get('/doctors/schedule'),
-        api.get(`/appointments/slots?doctorId=${user?.doctorId||user?.id}&date=${new Date().toISOString().split('T')[0]}`),
+        api.get(`/appointments/slots?doctorId=${doctorId}&date=${today}`),
         api.get('/doctors/weekly-stats'),
       ]);
-      if (sched.status==='fulfilled') setSchedule(sched.value?.data||sched.value);
-      if (slots.status==='fulfilled') setTodaySlots(slots.value?.data||slots.value||[]);
-      if (stats.status==='fulfilled') {
-        const d = stats.value?.data||stats.value||[];
-        setWeeklyStats(Array.isArray(d)?d:[]);
+
+      // Schedule: returns array of rows — use profile directly for settings display
+      if (sched.status === 'fulfilled') {
+        const arr = sched.value?.data?.data ?? sched.value?.data ?? sched.value ?? [];
+        setSchedule(Array.isArray(arr) ? (arr[0] ?? null) : arr);
+      }
+
+      // Slots: returns { success, available, slots: [...] }
+      if (slots.status === 'fulfilled') {
+        const v    = slots.value?.data ?? slots.value ?? {};
+        const list = v?.slots ?? v?.data ?? v ?? [];
+        setTodaySlots(Array.isArray(list) ? list : []);
+      }
+
+      // Weekly stats: returns { success, data: { TotalThisWeek, Completed, TodayTotal, ... } }
+      if (stats.status === 'fulfilled') {
+        const raw = stats.value?.data?.data ?? stats.value?.data ?? stats.value ?? {};
+        if (Array.isArray(raw)) {
+          setWeeklyStats(raw);
+        } else {
+          // Build a week array using the flat stats object
+          const days    = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+          const todayDow = new Date().getDay(); // 0=Sun,1=Mon...
+          // Reorder so today is last
+          const pivot   = todayDow === 0 ? 6 : todayDow - 1;
+          const ordered = [...days.slice(pivot + 1), ...days.slice(0, pivot + 1)];
+          setWeeklyStats(ordered.map((day, i) => ({
+            day,
+            patients: i === ordered.length - 1 ? (raw.TodayTotal || 0) : 0,
+          })));
+        }
       }
     } catch {}
     finally { setL('schedule', false); }
   }, [user]);
 
   useEffect(() => {
-    fetchProfile(); fetchQueue(); fetchRequests(); fetchPrescriptions(); fetchSchedule();
+    fetchProfile();
+    fetchQueue();
+    fetchRequests();
+    fetchPrescriptions();
+    fetchSchedule();
   }, []);
 
   const callPatient = async (id) => {
