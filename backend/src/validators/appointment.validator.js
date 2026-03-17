@@ -21,7 +21,7 @@ const bookAppointment = [
 
   body('visitType')
     .optional()
-    .isIn(['OPD', 'IPD', 'Emergency', 'DayCare']).withMessage('Invalid visit type'),
+    .isIn(['OPD', 'IPD', 'Emergency', 'FollowUp']).withMessage('Invalid visit type'),
 
   body('reason')
     .optional()

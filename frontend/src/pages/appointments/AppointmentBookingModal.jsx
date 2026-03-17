@@ -8,18 +8,12 @@ import api from '../../services/api';
 import toast from 'react-hot-toast';
 
 const BLUE = '#4f46e5';
-const HOSPITAL_ID = 1; // adjust if dynamic
-
-const TIME_SLOTS = [
-  '09:00','09:30','10:00','10:30','11:00','11:30',
-  '12:00','12:30','14:00','14:30','15:00','15:30',
-  '16:00','16:30','17:00','17:30','18:00',
-];
+const getHospitalId = () => String(localStorage.getItem('hospitalId') || '1');
 
 const VISIT_TYPES = [
   { key: 'OPD',       label: 'OPD',       desc: 'Out Patient'       },
   { key: 'Emergency', label: 'Emergency', desc: 'Urgent care'       },
-  { key: 'DayCare',   label: 'Day Care',  desc: 'Same-day procedure'},
+  { key: 'FollowUp',  label: 'Follow-up', desc: 'Review visit'      },
   { key: 'IPD',       label: 'IPD',       desc: 'In Patient'        },
 ];
 
@@ -49,6 +43,12 @@ const getDocId    = d => d?.Id   ?? d?.id   ?? d?.DoctorId        ?? d?.doctorId
 const getDocFirst = d => d?.FirstName  ?? d?.firstName  ?? '';
 const getDocLast  = d => d?.LastName   ?? d?.lastName   ?? '';
 const getDocSpec  = d => d?.SpecializationName ?? d?.Specialization ?? d?.Designation ?? d?.designation ?? 'Specialist';
+const normalizeSlot = slot => {
+  if (typeof slot === 'string') return { time: slot, available: true };
+  const time = slot?.time || slot?.StartTime || slot?.AppointmentTime || '';
+  const available = slot?.available ?? !(slot?.isBooked ?? slot?.IsBooked ?? false);
+  return { ...slot, time, available, isBooked: !available };
+};
 
 const PickBtn = ({ selected, onClick, children, sub }) => (
   <button type="button" onClick={onClick}
@@ -64,12 +64,14 @@ const PickBtn = ({ selected, onClick, children, sub }) => (
 
 // ─────────────────────────────────────────────────────────────────────────────
 export default function AppointmentBookingModal({ onClose, onSuccess, prefilledPatientId = null }) {
+  const hospitalId = getHospitalId();
   const [step,       setStep]      = useState(1);
   const [submitting, setSubmitting]= useState(false);
 
   const [patients,   setPatients]  = useState([]);
   const [departments,setDepts]     = useState([]);
   const [doctors,    setDoctors]   = useState([]);
+  const [slots,      setSlots]     = useState([]);
 
   const [deptError,  setDeptError] = useState('');
   const [docError,   setDocError]  = useState('');
@@ -77,6 +79,7 @@ export default function AppointmentBookingModal({ onClose, onSuccess, prefilledP
   const [ldPat,  setLdPat]  = useState(false);
   const [ldDept, setLdDept] = useState(true);
   const [ldDoc,  setLdDoc]  = useState(false);
+  const [ldSlots,setLdSlots]= useState(false);
 
   const [patSearch,  setPatSearch] = useState('');
   const [selPatient, setSelPatient]= useState(null);
@@ -100,14 +103,14 @@ export default function AppointmentBookingModal({ onClose, onSuccess, prefilledP
     setLdDept(true);
     setDeptError('');
     try {
-      const res = await api.get(`/hospitals/${HOSPITAL_ID}/departments`);
+      const res = await api.get(`/departments?hospitalId=${hospitalId}`);
       const arr = extractArray(res);
       setDepts(arr);
       if (!arr.length) setDeptError('No departments found for this hospital.');
     } catch (e) {
       // fallback — try without hospital scoping
       try {
-        const res2 = await api.get('/departments');
+        const res2 = await api.get(`/hospitals/${hospitalId}/departments`);
         const arr2 = extractArray(res2);
         setDepts(arr2);
         if (!arr2.length) setDeptError('No departments configured yet.');
@@ -119,7 +122,7 @@ export default function AppointmentBookingModal({ onClose, onSuccess, prefilledP
     }
   };
 
-  useEffect(() => { loadDepts(); }, []);
+  useEffect(() => { loadDepts(); }, [hospitalId]);
 
   // ── Patient search ────────────────────────────────────────────────────────
   // Logs show /api/v1/patients?search=... returns 404 for this user role.
@@ -131,7 +134,7 @@ export default function AppointmentBookingModal({ onClose, onSuccess, prefilledP
     const t = setTimeout(async () => {
       // try hospital-scoped first, then generic
       const endpoints = [
-        `/hospitals/${HOSPITAL_ID}/patients?search=${encodeURIComponent(patSearch)}&limit=8`,
+        `/hospitals/${hospitalId}/patients?search=${encodeURIComponent(patSearch)}&limit=8`,
         `/patients?search=${encodeURIComponent(patSearch)}&limit=8`,
         `/patients/search?q=${encodeURIComponent(patSearch)}&limit=8`,
       ];
@@ -148,7 +151,7 @@ export default function AppointmentBookingModal({ onClose, onSuccess, prefilledP
       setLdPat(false);
     }, 300);
     return () => clearTimeout(t);
-  }, [patSearch, prefilledPatientId]);
+  }, [hospitalId, patSearch, prefilledPatientId]);
 
   // ── Doctors when dept changes ─────────────────────────────────────────────
   useEffect(() => {
@@ -161,15 +164,16 @@ export default function AppointmentBookingModal({ onClose, onSuccess, prefilledP
 
     const tryLoad = async () => {
       const endpoints = [
-        `/hospitals/${HOSPITAL_ID}/departments/${deptId}/doctors`,
-        `/doctors?departmentId=${deptId}&isActive=1&approvalStatus=approved`,
-        `/doctors?departmentId=${deptId}&isActive=1`,
-        `/doctors?departmentId=${deptId}`,
+        `/doctors?hospitalId=${hospitalId}&departmentId=${deptId}&isActive=1`,
+        `/hospitals/${hospitalId}/departments/${deptId}/doctors`,
+        `/doctors?hospitalId=${hospitalId}&departmentId=${deptId}`,
       ];
       for (const ep of endpoints) {
         try {
-          const res = await api.get(ep);
-          const arr = extractArray(res);
+          const arr = extractArray(await api.get(ep)).map((doc) => ({
+            ...doc,
+            DoctorId: getDocId(doc),
+          })).filter((doc) => Number.parseInt(String(getDocId(doc)), 10) > 0);
           setDoctors(arr);
           return;
         } catch { /* try next */ }
@@ -177,7 +181,37 @@ export default function AppointmentBookingModal({ onClose, onSuccess, prefilledP
       setDocError('Could not load doctors for this department.');
     };
     tryLoad().finally(() => setLdDoc(false));
-  }, [form.departmentId]);
+  }, [form.departmentId, hospitalId]);
+
+  useEffect(() => {
+    if (!form.doctorId || !form.appointmentDate) {
+      setSlots([]);
+      return;
+    }
+
+    setLdSlots(true);
+    setForm((prev) => ({ ...prev, appointmentTime: '' }));
+
+    api.get(`/doctors/${form.doctorId}/slots?date=${form.appointmentDate}`)
+      .then((res) => {
+        const data = res?.data ?? res;
+        const arr = Array.isArray(data)
+          ? data
+          : Array.isArray(data?.slots)
+            ? data.slots
+            : Array.isArray(data?.data)
+              ? data.data
+              : [];
+
+        setSlots(
+          arr
+            .map(normalizeSlot)
+            .filter((slot) => slot.time && slot.available)
+        );
+      })
+      .catch(() => setSlots([]))
+      .finally(() => setLdSlots(false));
+  }, [form.doctorId, form.appointmentDate]);
 
   const selDeptObj = departments.find(d => String(getDeptId(d)) === String(form.departmentId));
 
@@ -209,7 +243,7 @@ export default function AppointmentBookingModal({ onClose, onSuccess, prefilledP
       );
       onSuccess();
     } catch (e) {
-      toast.error(e.response?.data?.message || 'Booking failed. Please try again.');
+      toast.error(e?.message || 'Booking failed. Please try again.');
     } finally { setSubmitting(false); }
   };
 
@@ -373,7 +407,11 @@ export default function AppointmentBookingModal({ onClose, onSuccess, prefilledP
                         const ln = getDocLast(doc);
                         return (
                           <button key={id} type="button"
-                            onClick={() => { setForm(f => ({ ...f, doctorId: id })); setSelDoctor(doc); }}
+                            onClick={() => {
+                              setForm(f => ({ ...f, doctorId: id, appointmentTime: '' }));
+                              setSlots([]);
+                              setSelDoctor(doc);
+                            }}
                             className={`w-full flex items-center gap-3 p-4 rounded-2xl border text-left transition-all ${
                               String(form.doctorId) === String(id)
                                 ? 'border-indigo-400 bg-indigo-50 shadow-sm'
@@ -443,22 +481,35 @@ export default function AppointmentBookingModal({ onClose, onSuccess, prefilledP
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Appointment Date *</label>
                 <input type="date" value={form.appointmentDate}
                   min={new Date().toISOString().split('T')[0]}
-                  onChange={e => setForm(f => ({ ...f, appointmentDate: e.target.value }))}
+                  onChange={e => setForm(f => ({ ...f, appointmentDate: e.target.value, appointmentTime: '' }))}
                   className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200" />
               </div>
 
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Time Slot *</label>
-                <div className="grid grid-cols-4 gap-2">
-                  {TIME_SLOTS.map(t => (
-                    <button key={t} type="button" onClick={() => setForm(f => ({ ...f, appointmentTime: t }))}
-                      className={`py-2.5 rounded-xl text-xs font-bold border transition-all ${
-                        form.appointmentTime === t
-                          ? 'border-indigo-400 bg-indigo-600 text-white shadow-sm'
-                          : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-                      }`}>{t}</button>
-                  ))}
-                </div>
+                {ldSlots ? (
+                  <div className="grid grid-cols-4 gap-2">
+                    {[...Array(8)].map((_, i) => <Sk key={i} h="h-10" r="rounded-xl" />)}
+                  </div>
+                ) : slots.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-center text-sm text-slate-400">
+                    No available slots for the selected doctor and date
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-4 gap-2">
+                    {slots.map(slot => {
+                      const time = slot.time;
+                      return (
+                        <button key={time} type="button" onClick={() => setForm(f => ({ ...f, appointmentTime: time }))}
+                          className={`py-2.5 rounded-xl text-xs font-bold border transition-all ${
+                            form.appointmentTime === time
+                              ? 'border-indigo-400 bg-indigo-600 text-white shadow-sm'
+                              : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                          }`}>{time}</button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </>
           )}

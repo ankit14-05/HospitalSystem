@@ -36,26 +36,37 @@ export const StatCard = ({ icon: Icon, label, value, sub, color, loading, trend 
 
 // ─── Status Badge ─────────────────────────────────────────────────────────────
 export const StatusBadge = ({ status }) => {
-  const s = (status || '').toLowerCase();
+  const rawStatus = String(status || 'pending').trim();
+  const s = rawStatus.toLowerCase().replace(/\s+/g, ' ');
   const map = {
     completed: 'bg-emerald-100 text-emerald-700',
     approved:  'bg-emerald-100 text-emerald-700',
     active:    'bg-emerald-100 text-emerald-700',
     upcoming:  'bg-blue-100 text-blue-700',
+    scheduled: 'bg-blue-100 text-blue-700',
+    confirmed: 'bg-teal-100 text-teal-700',
+    rescheduled: 'bg-amber-100 text-amber-700',
+    booked: 'bg-blue-100 text-blue-700',
     pending:   'bg-amber-100 text-amber-700',
     waiting:   'bg-amber-100 text-amber-700',
     cancelled: 'bg-red-100 text-red-600',
     rejected:  'bg-red-100 text-red-600',
+    noshow:    'bg-slate-100 text-slate-500',
+    'no show': 'bg-slate-100 text-slate-500',
     done:      'bg-slate-100 text-slate-500',
     current:   'bg-emerald-100 text-emerald-700',
+    'in progress': 'bg-violet-100 text-violet-700',
     paid:      'bg-emerald-100 text-emerald-700',
     unpaid:    'bg-red-100 text-red-600',
     ready:     'bg-emerald-100 text-emerald-700',
   };
+  const label = rawStatus
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
   return (
     <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${map[s] || map.pending}`}>
       <span className="w-1.5 h-1.5 rounded-full bg-current opacity-70" />
-      {status?.charAt(0).toUpperCase() + status?.slice(1)}
+      {label}
     </span>
   );
 };

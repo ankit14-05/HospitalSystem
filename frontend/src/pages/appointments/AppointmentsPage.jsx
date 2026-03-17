@@ -68,7 +68,7 @@ const CancelModal = ({ appt, onClose, onDone }) => {
       toast.success('Appointment cancelled — notifications sent');
       onDone();
     } catch (e) {
-      toast.error(e.response?.data?.message || 'Failed to cancel');
+      toast.error(e?.message || 'Failed to cancel');
     } finally { setLoading(false); }
   };
 
@@ -129,7 +129,7 @@ const RescheduleModal = ({ appt, onClose, onDone }) => {
       toast.success('Appointment rescheduled — notifications sent');
       onDone();
     } catch (e) {
-      toast.error(e.response?.data?.message || 'Failed to reschedule');
+      toast.error(e?.message || 'Failed to reschedule');
     } finally { setLoading(false); }
   };
 
@@ -232,6 +232,29 @@ export default function AppointmentsPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  useEffect(() => {
+    const refreshAppointments = () => {
+      if (document.hidden) return;
+      load();
+    };
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        refreshAppointments();
+      }
+    };
+
+    const intervalId = window.setInterval(refreshAppointments, 30000);
+    window.addEventListener('focus', refreshAppointments);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', refreshAppointments);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [load]);
+
   const handleStatusUpdate = async (id, status, extra = {}) => {
     setActionLoading(id);
     try {
@@ -239,7 +262,7 @@ export default function AppointmentsPage() {
       toast.success(`Appointment ${status.toLowerCase()} — notifications sent ✓`);
       load();
     } catch (e) {
-      toast.error(e.response?.data?.message || 'Action failed');
+      toast.error(e?.message || 'Action failed');
     } finally { setActionLoading(null); }
   };
 

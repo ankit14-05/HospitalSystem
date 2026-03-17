@@ -4,6 +4,12 @@ const router = require('express').Router();
 const { getPool }               = require('../config/database');
 const { authenticate: protect, authorize } = require('../middleware/auth.middleware');
 
+const resolveHospitalId = (req) => {
+  const raw = req.query.hospitalId || req.headers['x-hospital-id'] || req.user?.hospitalId || req.user?.HospitalId || 1;
+  const parsed = parseInt(raw, 10);
+  return Number.isNaN(parsed) ? 1 : parsed;
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/v1/departments
 // Public within the hospital — used by appointment booking dropdown
@@ -12,7 +18,7 @@ router.get('/', async (req, res, next) => {
   try {
     const pool   = await getPool();
     const result = await pool.request()
-      .input('HospitalId', req.query.hospitalId || 1)
+      .input('HospitalId', resolveHospitalId(req))
       .query(`
         SELECT
           d.Id,

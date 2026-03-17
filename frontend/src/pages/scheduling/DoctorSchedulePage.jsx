@@ -274,11 +274,34 @@ export default function DoctorSchedulePage() {
       const res = await api.get('/scheduling/my-schedule');
       setData(res.data);
     } catch (e) {
-      toast.error('Could not load your schedule');
+      toast.error(e?.message || 'Could not load your schedule');
     } finally { setLoading(false); }
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    const refreshSchedule = () => {
+      if (document.hidden) return;
+      load();
+    };
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        refreshSchedule();
+      }
+    };
+
+    const intervalId = window.setInterval(refreshSchedule, 30000);
+    window.addEventListener('focus', refreshSchedule);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', refreshSchedule);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [load]);
 
   const schedules     = data?.schedules           || [];
   const todayAppts    = data?.todayAppointments   || [];

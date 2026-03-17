@@ -5,6 +5,7 @@ const { validationResult } = require('express-validator');
 const apptService  = require('../services/appointment.service');
 const notifService = require('../services/notificationService');
 const emailService = require('../services/appointmentEmailservice');
+const AppError = require('../utils/AppError');
 
 // ── Import apiResponse safely ─────────────────────────────────────────────────
 const apiResponse = require('../utils/apiResponse');
@@ -14,6 +15,41 @@ const sendSuccess = typeof apiResponse.success === 'function'
 const sendError = typeof apiResponse.error === 'function'
   ? apiResponse.error
   : (res, message, status = 500) => res.status(status).json({ success: false, message });
+
+const STAFF_APPOINTMENT_ROLES = new Set(['admin', 'superadmin', 'receptionist', 'nurse']);
+
+const assertAppointmentAccess = async (req, appointmentId) => {
+  if (Number.isNaN(appointmentId)) {
+    throw new AppError('Invalid appointment ID', 400);
+  }
+
+  const appt = await apptService.getAppointmentById(appointmentId, req.user.hospitalId);
+  if (!appt) {
+    throw new AppError('Appointment not found', 404);
+  }
+
+  const { role, id: userId } = req.user;
+
+  if (STAFF_APPOINTMENT_ROLES.has(role)) {
+    return appt;
+  }
+
+  if (role === 'doctor') {
+    if (appt.DoctorUserId !== userId) {
+      throw new AppError('Access denied to this appointment', 403);
+    }
+    return appt;
+  }
+
+  if (role === 'patient') {
+    if (appt.PatientUserId !== userId) {
+      throw new AppError('Access denied to this appointment', 403);
+    }
+    return appt;
+  }
+
+  throw new AppError('Access denied to this appointment', 403);
+};
 
 // ── Helper: fire all notifications + emails in background ────────────────────
 const fireNotificationsAndEmails = async (type, appt, extra = {}) => {
@@ -305,103 +341,15 @@ exports.getSlots = async (req, res) => {
   }
 
   try {
-    const { getPool } = require('../config/database');
-    const pool = await getPool();
-    const id   = parseInt(doctorId);
-
-    // Get doctor availability — no approval filter so all active doctors work
-    const docResult = await pool.request()
-      .input('DoctorId', id)
-      .query(`
-        SELECT dp.AvailableFrom, dp.AvailableTo, dp.AvailableDays, dp.MaxDailyPatients
-        FROM dbo.DoctorProfiles dp
-        WHERE dp.Id = @DoctorId
-      `);
-
-    if (!docResult.recordset.length) {
-      // Return empty slots rather than 404 so frontend handles gracefully
-      return res.json({ success: true, available: false, slots: [], message: 'Doctor not found' });
-    }
-
-    const doc       = docResult.recordset[0];
-    const dayNames  = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-    const dayOfWeek = dayNames[new Date(date).getDay()];
-    const availDays = doc.AvailableDays
-      ? doc.AvailableDays.split(',').map(d => d.trim())
-      : [];
-
-    if (availDays.length && !availDays.includes(dayOfWeek)) {
-      return res.json({
-        success:   true,
-        available: false,
-        message:   `Doctor is not available on ${dayOfWeek}`,
-        slots:     [],
-      });
-    }
-
-    // Get already booked times for that date
-    const bookedResult = await pool.request()
-      .input('DoctorId', id)
-      .input('Date',     date)
-      .query(`
-        SELECT AppointmentTime
-        FROM dbo.Appointments
-        WHERE DoctorId        = @DoctorId
-          AND AppointmentDate = @Date
-          AND Status NOT IN ('Cancelled', 'NoShow')
-      `);
-
-    const bookedTimes = new Set(
-      bookedResult.recordset.map(r => r.AppointmentTime?.toString().slice(0, 5))
-    );
-
-    // Generate slots — use AvailableFrom/To if set, else fall back to DoctorSchedules
-    const slots = [];
-    const toMins = t => { const s=(t||'').toString().slice(0,5); const [h,m]=s.split(':').map(Number); return (h||0)*60+(m||0); };
-    const pushSlots = (from, to, dur) => {
-      if (!from||!to) return;
-      let cur=toMins(from); const end=toMins(to);
-      while(cur<end){
-        const h=Math.floor(cur/60), m=cur%60;
-        const t=`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
-        slots.push({ time:t, available:!bookedTimes.has(t) });
-        cur+=dur;
-      }
-    };
-
-    if (doc.AvailableFrom && doc.AvailableTo) {
-      pushSlots(doc.AvailableFrom, doc.AvailableTo, 30);
-    } else {
-      // Fall back to admin-assigned DoctorSchedules
-      const dow = new Date(date).getDay();
-      const schRes = await pool.request()
-        .input('DoctorId',  id)
-        .input('DayOfWeek', dow)
-        .input('Date',      date)
-        .query(`
-          SELECT
-            CONVERT(VARCHAR(8), StartTime, 108) AS StartTime,
-            CONVERT(VARCHAR(8), EndTime,   108) AS EndTime,
-            SlotDurationMins
-          FROM dbo.DoctorSchedules
-          WHERE DoctorId   = @DoctorId
-            AND DayOfWeek  = @DayOfWeek
-            AND IsActive   = 1
-            AND EffectiveFrom <= @Date
-            AND (EffectiveTo IS NULL OR EffectiveTo >= @Date)
-        `);
-      for (const s of schRes.recordset) pushSlots(s.StartTime, s.EndTime, s.SlotDurationMins||30);
-    }
-
-    return res.json({
-      success:        true,
-      available:      true,
+    const hospitalId = req.user?.hospitalId || req.headers['x-hospital-id'] || req.query.hospitalId || null;
+    const result = await apptService.getDoctorSlots({
+      doctorId: parseInt(doctorId, 10),
       date,
-      totalSlots:     slots.length,
-      availableSlots: slots.filter(s =>  s.available).length,
-      bookedSlots:    slots.filter(s => !s.available).length,
-      slots,
+      hospitalId,
+      includeUnavailable: true,
     });
+
+    return res.json({ success: true, ...result });
   } catch (err) {
     return sendError(res, err.message, err.statusCode || 500);
   }
@@ -412,11 +360,8 @@ exports.getSlots = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 exports.getOne = async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
-    if (isNaN(id)) return sendError(res, 'Invalid appointment ID', 400);
-
-    const appt = await apptService.getAppointmentById(id, req.user.hospitalId);
-    if (!appt) return sendError(res, 'Appointment not found', 404);
+    const id = parseInt(req.params.id, 10);
+    const appt = await assertAppointmentAccess(req, id);
     return sendSuccess(res, appt);
   } catch (err) {
     return sendError(res, err.message, err.statusCode || 500);
@@ -432,16 +377,19 @@ exports.updateStatus = async (req, res) => {
 
   const { status, cancelReason } = req.body;
   const { id: updatedBy, hospitalId } = req.user;
+  const appointmentId = parseInt(req.params.id, 10);
 
   try {
+    await assertAppointmentAccess(req, appointmentId);
+
     const appt = await apptService.updateAppointmentStatus({
-      id: parseInt(req.params.id), hospitalId, status, cancelReason, updatedBy,
+      id: appointmentId, hospitalId, status, cancelReason, updatedBy,
     });
 
     if (status === 'Cancelled') fireNotificationsAndEmails('cancelled', appt);
     if (status === 'Completed') fireNotificationsAndEmails('completed', appt);
     if (status === 'Confirmed') {
-      const full = await apptService.getAppointmentById(parseInt(req.params.id), hospitalId);
+      const full = await apptService.getAppointmentById(appointmentId, hospitalId);
       if (full) fireNotificationsAndEmails('booked', full);
     }
 
@@ -457,10 +405,13 @@ exports.updateStatus = async (req, res) => {
 exports.cancel = async (req, res) => {
   const { cancelReason } = req.body;
   const { id: updatedBy, hospitalId } = req.user;
+  const appointmentId = parseInt(req.params.id, 10);
 
   try {
+    await assertAppointmentAccess(req, appointmentId);
+
     const appt = await apptService.updateAppointmentStatus({
-      id: parseInt(req.params.id), hospitalId, status: 'Cancelled', cancelReason, updatedBy,
+      id: appointmentId, hospitalId, status: 'Cancelled', cancelReason, updatedBy,
     });
     fireNotificationsAndEmails('cancelled', appt);
     return sendSuccess(res, { message: 'Appointment cancelled' });
@@ -478,10 +429,13 @@ exports.reschedule = async (req, res) => {
 
   const { appointmentDate: newDate, appointmentTime: newTime } = req.body;
   const { id: updatedBy, hospitalId } = req.user;
+  const appointmentId = parseInt(req.params.id, 10);
 
   try {
+    await assertAppointmentAccess(req, appointmentId);
+
     const appt = await apptService.rescheduleAppointment({
-      id: parseInt(req.params.id), hospitalId, newDate, newTime, updatedBy,
+      id: appointmentId, hospitalId, newDate, newTime, updatedBy,
     });
 
     fireNotificationsAndEmails('rescheduled', appt, {
@@ -502,7 +456,18 @@ exports.reschedule = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 exports.stats = async (req, res) => {
   try {
-    const data = await apptService.getStats(req.user.hospitalId);
+    let doctorId = null;
+
+    if (req.user.role === 'doctor') {
+      const { getPool } = require('../config/database');
+      const pool = await getPool();
+      const r = await pool.request()
+        .input('UserId', parseInt(req.user.id, 10))
+        .query(`SELECT Id FROM dbo.DoctorProfiles WHERE UserId = @UserId`);
+      doctorId = r.recordset[0]?.Id || null;
+    }
+
+    const data = await apptService.getStats(req.user.hospitalId, { doctorId });
     return sendSuccess(res, data);
   } catch (err) {
     return sendError(res, err.message, 500);
@@ -586,13 +551,33 @@ exports.completeAppointment = async (req, res) => {
             PrimaryDiagnosis = @PrimaryDiagnosis,
             UpdatedAt        = GETUTCDATE()
         OUTPUT INSERTED.Id, INSERTED.AppointmentNo, INSERTED.Status,
-               INSERTED.PatientId, INSERTED.DoctorId
+               INSERTED.PatientId, INSERTED.DoctorId, INSERTED.HospitalId,
+               INSERTED.AppointmentDate, INSERTED.AppointmentTime, INSERTED.TokenNumber
         WHERE Id = @Id AND DoctorId = @DoctorId
       `);
 
     if (!r.recordset.length) return sendError(res, 'Appointment not found or unauthorized', 404);
 
     const appt = r.recordset[0];
+
+    await pool.request()
+      .input('HospitalId', appt.HospitalId)
+      .input('DoctorId', appt.DoctorId)
+      .input('Date', appt.AppointmentDate)
+      .input('Time', String(appt.AppointmentTime || '').slice(0, 5))
+      .input('AppointmentId', appt.Id)
+      .input('TokenNumber', appt.TokenNumber)
+      .query(`
+        UPDATE dbo.AppointmentSlots
+        SET AppointmentId = @AppointmentId,
+            TokenNumber = @TokenNumber,
+            Status = 'Completed',
+            UpdatedAt = SYSUTCDATETIME()
+        WHERE DoctorId = @DoctorId
+          AND SlotDate = @Date
+          AND CONVERT(VARCHAR(5), StartTime, 108) = @Time
+          AND HospitalId = @HospitalId
+      `);
 
     // If follow-up date provided, create a follow-up appointment record note
     // (Actual booking done by receptionist — we just add to notes)

@@ -30,6 +30,52 @@ const safeDay   = (val) => safeDate(val)?.getDate()                             
 const safeMon   = (val) => safeDate(val)?.toLocaleString('en', { month: 'short' })     ?? '';
 
 // ─── Vital Card ───────────────────────────────────────────────────────────────
+const ACTIVE_APPOINTMENT_STATUSES = new Set(['upcoming', 'scheduled', 'confirmed', 'rescheduled']);
+
+const getAppointmentStatus = (appointment) =>
+  String(appointment?.Status || appointment?.status || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+
+const getAppointmentDateTime = (appointment) => {
+  const dateValue = appointment?.AppointmentDate || appointment?.Date || appointment?.date;
+  const timeValue = appointment?.AppointmentTime || appointment?.StartTime || appointment?.time;
+  const date = safeDate(dateValue);
+
+  if (!date) return null;
+  if (!timeValue) return date;
+
+  const match = String(timeValue).match(/(\d{1,2}):(\d{2})/);
+  if (!match) return date;
+
+  return new Date(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate(),
+    Number(match[1]),
+    Number(match[2]),
+    0,
+    0
+  );
+};
+
+const isUpcomingAppointment = (appointment) => {
+  const status = getAppointmentStatus(appointment);
+  if (!ACTIVE_APPOINTMENT_STATUSES.has(status)) return false;
+
+  const when = getAppointmentDateTime(appointment);
+  return when ? when.getTime() > Date.now() : true;
+};
+
+const canCancelAppointment = (appointment) => isUpcomingAppointment(appointment);
+
+const sortAppointmentsBySoonest = (left, right) => {
+  const leftTime = getAppointmentDateTime(left)?.getTime() ?? Number.MAX_SAFE_INTEGER;
+  const rightTime = getAppointmentDateTime(right)?.getTime() ?? Number.MAX_SAFE_INTEGER;
+  return leftTime - rightTime;
+};
+
 const VitalCard = ({ icon: Icon, label, value, unit, normal, color, loading }) => (
   <div className="bg-white rounded-2xl border border-slate-100 p-4 shadow-sm hover:shadow-md transition-shadow flex flex-col gap-3">
     <div className="flex items-center justify-between">
@@ -502,7 +548,7 @@ const BookModal = ({ onClose, onSuccess }) => {
 
 // ─── Overview Tab ─────────────────────────────────────────────────────────────
 const OverviewTab = ({ profile, appointments, prescriptions, vitals, healthChart, loading, onBook, onTab }) => {
-  const upcoming = appointments.filter(a => (a.Status || a.status || '').toLowerCase() === 'upcoming');
+  const upcoming = appointments.filter(isUpcomingAppointment).sort(sortAppointmentsBySoonest);
   const nextAppt = upcoming[0];
 
   return (
@@ -643,7 +689,7 @@ const OverviewTab = ({ profile, appointments, prescriptions, vitals, healthChart
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-bold text-slate-800 truncate">{a.DoctorName || a.doctorName || a.FullName || 'Doctor'}</p>
-                  <p className="text-xs text-slate-400 mt-0.5">{a.DepartmentName || a.departmentName} · {a.StartTime || a.time}</p>
+                  <p className="text-xs text-slate-400 mt-0.5">{a.DepartmentName || a.departmentName} · {a.AppointmentTime || a.StartTime || a.time}</p>
                 </div>
                 <StatusBadge status={a.Status || a.status} />
               </div>
@@ -687,7 +733,7 @@ const AppointmentsTab = ({ appointments, loading, onRefresh, onBook, onCancel })
                   <p className="font-bold text-slate-700 text-sm">₹{a.ConsultationFee ?? a.fee ?? 0}</p>
                 )}
                 <StatusBadge status={a.Status || a.status} />
-                {(a.Status || a.status)?.toLowerCase() === 'upcoming' && (
+                {canCancelAppointment(a) && (
                   <button onClick={() => onCancel(a.Id || a.id)}
                     className="p-2 rounded-xl hover:bg-red-50 text-slate-200 hover:text-red-500 transition-colors">
                     <X size={14} />
@@ -916,16 +962,8 @@ export default function PatientDashboard() {
 
   const p           = profile || {};
   const displayName = `${p.FirstName || user?.firstName || ''} ${p.LastName || user?.lastName || ''}`.trim() || 'Patient';
-  const upcoming    = appointments.filter(a => (a.Status || a.status || '').toLowerCase() === 'upcoming');
+  const upcoming    = appointments.filter(isUpcomingAppointment);
   const activeMeds  = prescriptions.filter(x => x.IsActive || x.isActive);
-
-  const cancelAppt = async (id) => {
-    try {
-      await api.patch(`/appointments/${id}/cancel`);
-      setAppointments(a => a.map(x => (x.Id || x.id) === id ? { ...x, Status: 'cancelled', status: 'cancelled' } : x));
-      toast.success('Appointment cancelled');
-    } catch { toast.error('Failed to cancel'); }
-  };
 
   const refreshAppointments = useCallback(() => {
     setL('appointments', true);
@@ -934,6 +972,14 @@ export default function PatientDashboard() {
       .catch(() => {})
       .finally(() => setL('appointments', false));
   }, [setL]);
+
+  const cancelAppt = async (id) => {
+    try {
+      await api.patch(`/appointments/${id}/cancel`, { cancelReason: 'Cancelled by patient' });
+      refreshAppointments();
+      toast.success('Appointment cancelled');
+    } catch (e) { toast.error(e?.message || 'Failed to cancel'); }
+  };
 
   const refreshPrescriptions = useCallback(() => {
     setL('prescriptions', true);
@@ -958,6 +1004,29 @@ export default function PatientDashboard() {
       .catch(() => {})
       .finally(() => setL('bills', false));
   }, [setL]);
+
+  useEffect(() => {
+    const refreshLiveAppointments = () => {
+      if (document.hidden) return;
+      refreshAppointments();
+    };
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        refreshLiveAppointments();
+      }
+    };
+
+    const intervalId = window.setInterval(refreshLiveAppointments, 30000);
+    window.addEventListener('focus', refreshLiveAppointments);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', refreshLiveAppointments);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [refreshAppointments]);
 
   const TABS = [
     { key: 'overview',      label: 'Dashboard',       icon: Activity                            },

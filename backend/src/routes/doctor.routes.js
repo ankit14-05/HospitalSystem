@@ -4,6 +4,13 @@
 const router  = require('express').Router();
 const { authenticate: protect, authorize } = require('../middleware/auth.middleware');
 const { getPool }                          = require('../config/database');
+const apptService                          = require('../services/appointment.service');
+
+const resolveHospitalId = (req) => {
+  const raw = req.query.hospitalId || req.headers['x-hospital-id'] || req.user?.hospitalId || req.user?.HospitalId || 1;
+  const parsed = parseInt(raw, 10);
+  return Number.isNaN(parsed) ? 1 : parsed;
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/v1/doctors/profile  — logged-in doctor's own profile
@@ -263,9 +270,9 @@ router.get('/', async (req, res, next) => {
       specializationId,
       search,
       status,
-      hospitalId = 1,
       limit = 200,
     } = req.query;
+    const hospitalId = resolveHospitalId(req);
 
     const request = pool.request()
       .input('hospitalId', parseInt(hospitalId));
@@ -273,6 +280,7 @@ router.get('/', async (req, res, next) => {
     let whereClause = `
       WHERE u.DeletedAt  IS NULL
         AND u.HospitalId = @hospitalId
+        AND dp.Id > 0
     `;
 
     // Allow filtering by approval status (admin uses ?status=approved)
@@ -427,105 +435,15 @@ router.get('/:id/slots', async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'date query param is required (YYYY-MM-DD)' });
     }
 
-    const pool = await getPool();
-    const id   = parseInt(req.params.id);
-
-    const docResult = await pool.request()
-      .input('id', id)
-      .query(`
-        SELECT dp.AvailableFrom, dp.AvailableTo, dp.AvailableDays, dp.MaxDailyPatients
-        FROM dbo.DoctorProfiles dp
-        WHERE dp.Id = @id AND dp.ApprovalStatus = 'approved'
-      `);
-
-    if (!docResult.recordset.length) {
-      return res.status(404).json({ success: false, message: 'Doctor not found' });
-    }
-
-    const doc = docResult.recordset[0];
-    const dayNames  = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-    const dayOfWeek = dayNames[new Date(date).getDay()];
-    const availDays = doc.AvailableDays ? doc.AvailableDays.split(',').map(d => d.trim()) : [];
-
-    if (availDays.length && !availDays.includes(dayOfWeek)) {
-      return res.json({
-        success: true, available: false,
-        message: `Doctor is not available on ${dayOfWeek}`, slots: [],
-      });
-    }
-
-    const bookedResult = await pool.request()
-      .input('doctorId', id)
-      .input('date',     date)
-      .query(`
-        SELECT AppointmentTime
-        FROM dbo.Appointments
-        WHERE DoctorId        = @doctorId
-          AND AppointmentDate = @date
-          AND Status NOT IN ('Cancelled', 'NoShow')
-      `);
-
-    const bookedTimes = new Set(
-      bookedResult.recordset.map(r => r.AppointmentTime?.toString().slice(0, 5))
-    );
-
-    const slots = [];
-
-    const toMins = t => {
-      const s = t?.toString().slice(0, 5) || '';
-      const [h, m] = s.split(':').map(Number);
-      return (h||0)*60 + (m||0);
-    };
-
-    const pushSlots = (fromStr, toStr, durMins) => {
-      if (!fromStr || !toStr) return;
-      let cur = toMins(fromStr);
-      const end = toMins(toStr);
-      if (end <= cur) return;
-      while (cur < end) {
-        const h = Math.floor(cur / 60);
-        const m = cur % 60;
-        const timeStr = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
-        slots.push({ time: timeStr, available: !bookedTimes.has(timeStr) });
-        cur += durMins;
-      }
-    };
-
-    if (doc.AvailableFrom && doc.AvailableTo) {
-      // Use profile availability (set during registration)
-      pushSlots(doc.AvailableFrom, doc.AvailableTo, 30);
-    } else {
-      // Fall back to DoctorSchedules table (set by admin)
-      const dow = new Date(date).getDay();
-      const schResult2 = await pool.request()
-        .input('doctorId',  id)
-        .input('dayOfWeek', dow)
-        .input('date',      date)
-        .query(`
-          SELECT
-            CONVERT(VARCHAR(8), StartTime, 108) AS StartTime,
-            CONVERT(VARCHAR(8), EndTime,   108) AS EndTime,
-            SlotDurationMins
-          FROM dbo.DoctorSchedules
-          WHERE DoctorId   = @doctorId
-            AND DayOfWeek  = @dayOfWeek
-            AND IsActive   = 1
-            AND EffectiveFrom <= @date
-            AND (EffectiveTo IS NULL OR EffectiveTo >= @date)
-        `);
-
-      for (const sch of schResult2.recordset) {
-        pushSlots(sch.StartTime, sch.EndTime, sch.SlotDurationMins || 30);
-      }
-    }
-
-    res.json({
-      success: true, available: slots.length > 0, date,
-      totalSlots:     slots.length,
-      availableSlots: slots.filter(s =>  s.available).length,
-      bookedSlots:    slots.filter(s => !s.available).length,
-      slots,
+    const includeUnavailable = req.query.includeUnavailable === '1' || req.query.includeUnavailable === 'true';
+    const result = await apptService.getDoctorSlots({
+      doctorId: parseInt(req.params.id, 10),
+      date,
+      hospitalId: resolveHospitalId(req),
+      includeUnavailable,
     });
+
+    res.json({ success: true, ...result });
   } catch (err) { next(err); }
 });
 

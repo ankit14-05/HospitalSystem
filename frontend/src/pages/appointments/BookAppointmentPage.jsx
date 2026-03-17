@@ -17,7 +17,6 @@ import { useNavigate } from 'react-router-dom';
 const VISIT_TYPES = [
   { key:'OPD',       label:'OPD',        desc:'Outpatient visit',   color:'#0d9488', bg:'#f0fdfa' },
   { key:'Emergency', label:'Emergency',  desc:'Urgent care',        color:'#dc2626', bg:'#fef2f2' },
-  { key:'DayCare',   label:'Day Care',   desc:'Same-day procedure', color:'#7c3aed', bg:'#f5f3ff' },
   { key:'FollowUp',  label:'Follow-up',  desc:'Follow-up visit',    color:'#2563eb', bg:'#eff6ff' },
 ];
 
@@ -37,6 +36,13 @@ const fmt12 = t => {
 const fmtDate = d => new Date(d).toLocaleDateString('en-IN', { weekday:'short', day:'2-digit', month:'short', year:'numeric' });
 const shortDate = d => new Date(d).toLocaleDateString('en-IN', { day:'2-digit', month:'short' });
 const isoDate = d => d.toISOString().slice(0,10);
+const getHospitalId = user => String(user?.hospitalId || user?.HospitalId || localStorage.getItem('hospitalId') || '1');
+const normalizeSlot = slot => {
+  if (typeof slot === 'string') return { time: slot, available: true };
+  const time = slot?.time || slot?.StartTime || slot?.AppointmentTime || '';
+  const available = slot?.available ?? !(slot?.isBooked ?? slot?.IsBooked ?? false);
+  return { ...slot, time, available, isBooked: !available };
+};
 
 const initials = n => (n||'').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
 
@@ -208,22 +214,20 @@ const SlotGrid = ({ slots, selected, onSelect, loading }) => {
     </div>
   );
 
-  const morning   = slots.filter(s => parseInt(s.time||s) < 12);
-  const afternoon = slots.filter(s => { const h=parseInt(s.time||s); return h>=12&&h<17; });
-  const evening   = slots.filter(s => parseInt(s.time||s) >= 17);
+  const visibleSlots = slots.filter(s => (s?.available ?? !(s?.isBooked ?? s?.IsBooked ?? false)));
+  const morning   = visibleSlots.filter(s => parseInt(s.time||s, 10) < 12);
+  const afternoon = visibleSlots.filter(s => { const h=parseInt(s.time||s, 10); return h>=12&&h<17; });
+  const evening   = visibleSlots.filter(s => parseInt(s.time||s, 10) >= 17);
 
   const SlotBtn = ({ slot }) => {
     const time  = slot.time || slot.StartTime || slot;
-    const booked= slot.isBooked || slot.IsBooked || false;
     const isSel = selected === time;
     return (
-      <button type="button" onClick={() => !booked && onSelect(time)} disabled={booked}
+      <button type="button" onClick={() => onSelect(time)}
         className={`py-2.5 px-2 rounded-xl text-xs font-bold border transition-all text-center
-          ${booked
-            ? 'border-slate-100 bg-slate-50 text-slate-300 cursor-not-allowed line-through'
-            : isSel
-              ? 'border-teal-400 bg-teal-500 text-white shadow-md shadow-teal-200'
-              : 'border-slate-200 text-slate-600 hover:border-teal-300 hover:bg-teal-50'}`}>
+          ${isSel
+            ? 'border-teal-400 bg-teal-500 text-white shadow-md shadow-teal-200'
+            : 'border-slate-200 text-slate-600 hover:border-teal-300 hover:bg-teal-50'}`}>
         {fmt12(time)}
       </button>
     );
@@ -335,6 +339,7 @@ const TokenReceipt = ({ booking, onDone }) => {
 export default function BookAppointmentPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const hospitalId = getHospitalId(user);
 
   const [step, setStep] = useState(1); // 1=dept+doctor, 2=date+time, 3=details+confirm, 4=success
   const [departments, setDepartments]   = useState([]);
@@ -363,7 +368,7 @@ export default function BookAppointmentPage() {
 
   // Load departments
   useEffect(() => {
-    api.get('/hospitals/1/departments')
+    api.get(`/departments?hospitalId=${hospitalId}`)
       .then(r => {
         const d = r?.data || r;
         const arr = Array.isArray(d) ? d : Array.isArray(d?.data) ? d.data : [];
@@ -371,14 +376,13 @@ export default function BookAppointmentPage() {
       })
       .catch(() => {})
       .finally(() => setL('depts', false));
-  }, []);
+  }, [hospitalId]);
 
   // Load doctors when dept changes or on mount
   const loadDoctors = useCallback(async (deptId) => {
     setL('doctors', true);
     try {
-      // Use the public /doctors endpoint — no auth issues, returns approved doctors
-      const params = new URLSearchParams({ hospitalId: 1, limit: 200 });
+      const params = new URLSearchParams({ hospitalId, limit: 200 });
       if (deptId) params.set('departmentId', deptId);
       const r = await api.get(`/doctors?${params}`);
       const raw = r?.data ?? r;
@@ -401,13 +405,13 @@ export default function BookAppointmentPage() {
         DepartmentName: d.DepartmentName || d.Department || '',
         ConsultationFee: d.ConsultationFee || d.consultationFee,
         ExperienceYears: d.ExperienceYears || d.experienceYears,
-      }));
+      })).filter(d => Number.parseInt(d.DoctorProfileId, 10) > 0);
       setDoctors(normalized);
     } catch (e) {
       console.error('loadDoctors error:', e);
       setDoctors([]);
     } finally { setL('doctors', false); }
-  }, []);
+  }, [hospitalId]);
 
   useEffect(() => { loadDoctors(filterDept); }, [filterDept, loadDoctors]);
 
@@ -417,73 +421,21 @@ export default function BookAppointmentPage() {
     if (step !== 2) return;
     setL('slots', true);
     setSlots([]);
-    // Use the public /doctors/:id/slots endpoint — always works for patients
     api.get(`/doctors/${form.doctorId}/slots?date=${form.date}`)
       .then(r => {
         const d = r?.data ?? r;
-        // Response shape: { success, available, slots: [...] } or just array
         const arr = Array.isArray(d)          ? d
                   : Array.isArray(d?.slots)   ? d.slots
                   : Array.isArray(d?.data)    ? d.data
                   : [];
-        if (arr.length) {
-          // Normalize to { time, isBooked } shape
-          const normalized = arr.map(s =>
-            typeof s === 'string'
-              ? { time: s, isBooked: false }
-              : { time: s.time || s.StartTime || s.AppointmentTime || '', isBooked: !(s.available ?? !s.isBooked ?? true) }
-          ).filter(s => s.time);
-          setSlots(normalized);
-        } else {
-          generateSlotsFromSchedule(form.doctorId, form.date);
-        }
+        const normalized = arr
+          .map(normalizeSlot)
+          .filter(s => s.time && s.available);
+        setSlots(normalized);
       })
-      .catch(() => generateSlotsFromSchedule(form.doctorId, form.date))
+      .catch(() => setSlots([]))
       .finally(() => setL('slots', false));
   }, [form.doctorId, form.date, step]);
-
-  const generateSlotsFromSchedule = async (doctorId, date) => {
-    try {
-      // Use the public doctor slots endpoint first
-      const dow = new Date(date).getDay();
-      let schedules = [];
-      try {
-        // Try public doctor/:id/slots endpoint
-        const r = await api.get(`/doctors/${doctorId}/slots?date=${date}`);
-        const d = r?.data ?? r;
-        if (Array.isArray(d) && d.length) { setSlots(d); setL('slots', false); return; }
-        if (Array.isArray(d?.slots) && d.slots.length) { setSlots(d.slots); setL('slots', false); return; }
-      } catch {}
-      // Fall back to schedule-based generation (admin/doctor roles can access this)
-      try {
-        const r2 = await api.get(`/scheduling/doctor-schedules?doctorId=${doctorId}&dayOfWeek=${dow}`);
-        const d2 = r2?.data || r2;
-        schedules = Array.isArray(d2) ? d2 : Array.isArray(d2?.data) ? d2.data : [];
-      } catch {}
-
-      const generated = [];
-      for (const sch of schedules) {
-        const start = sch.StartTime || '';
-        const end   = sch.EndTime   || '';
-        const dur   = sch.SlotDurationMins || 15;
-        if (!start || !end) continue;
-        const toMins = t => { const p=t.split(':').map(Number); return p[0]*60+(p[1]||0); };
-        let cur = toMins(start);
-        const endM = toMins(end);
-        while (cur < endM) {
-          const h = Math.floor(cur/60);
-          const m = cur % 60;
-          generated.push({
-            time: `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`,
-            isBooked: false,
-          });
-          cur += dur;
-        }
-      }
-      setSlots(generated);
-    } catch { setSlots([]); }
-    setL('slots', false);
-  };
 
   const handleSelectDoctor = doc => {
     // DoctorProfileId is already normalized to DoctorProfiles.Id (stored as string)
@@ -526,7 +478,7 @@ export default function BookAppointmentPage() {
       setBooking({ doctor: form.doctorObj, date: form.date, time: form.time, appointment: appt });
       setStep(4);
     } catch (e) {
-      toast.error(e?.response?.data?.message || 'Booking failed. Please try again.');
+      toast.error(e?.message || 'Booking failed. Please try again.');
     } finally { setL('submit', false); }
   };
 

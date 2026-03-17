@@ -1283,13 +1283,38 @@ export default function DoctorDashboard() {
     finally { setL('schedule', false); }
   }, [user]);
 
+  const refreshLiveAppointmentData = useCallback(() => {
+    if (document.hidden) return;
+    fetchQueue();
+    fetchRequests();
+    fetchSchedule();
+  }, [fetchQueue, fetchRequests, fetchSchedule]);
+
   useEffect(() => {
     fetchProfile();
     fetchQueue();
     fetchRequests();
     fetchPrescriptions();
     fetchSchedule();
-  }, []);
+  }, [fetchProfile, fetchQueue, fetchRequests, fetchPrescriptions, fetchSchedule]);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        refreshLiveAppointmentData();
+      }
+    };
+
+    const intervalId = window.setInterval(refreshLiveAppointmentData, 30000);
+    window.addEventListener('focus', refreshLiveAppointmentData);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', refreshLiveAppointmentData);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [refreshLiveAppointmentData]);
 
   const callPatient = async (id) => {
     try {
@@ -1300,14 +1325,16 @@ export default function DoctorDashboard() {
         status: (p.Id||p.id)===id ? 'current' : (p.Status||p.status)==='current' ? 'waiting' : (p.Status||p.status),
       })));
       toast.success('Patient called in');
-    } catch { toast.error('Could not update queue'); }
+      fetchQueue();
+    } catch (e) { toast.error(e?.message || 'Could not update queue'); }
   };
 
   const markDone = async (id) => {
     try {
       await api.patch(`/appointments/${id}/status`, { status: 'Completed' });
       setQueue(q => q.map(p => (p.Id||p.id)===id ? { ...p, Status:'Completed', status:'done' } : p));
-    } catch { toast.error('Could not update status'); }
+      refreshLiveAppointmentData();
+    } catch (e) { toast.error(e?.message || 'Could not update status'); }
   };;
 
   const handleApprove = async (id) => {
@@ -1316,16 +1343,20 @@ export default function DoctorDashboard() {
       await api.patch(`/appointments/${id}/status`, { status: 'Confirmed' });
       setRequests(r => r.map(a => (a.Id||a.id)===id ? { ...a, Status:'Confirmed', status:'confirmed' } : a));
       toast.success('Appointment confirmed');
-    } catch { toast.error('Failed to approve'); }
+      refreshLiveAppointmentData();
+    } catch (e) { toast.error(e?.message || 'Failed to approve'); }
     finally { setApprovingId(null); }
   };
 
   const handleReject = async (id) => {
+    setRejectingId(id);
     try {
       await api.patch(`/appointments/${id}/cancel`, { cancelReason: 'Cancelled by doctor' });
       setRequests(r => r.map(a => (a.Id||a.id)===id ? { ...a, Status:'Cancelled', status:'cancelled' } : a));
       toast.success('Appointment cancelled');
-    } catch { toast.error('Failed to cancel'); }
+      refreshLiveAppointmentData();
+    } catch (e) { toast.error(e?.message || 'Failed to cancel'); }
+    finally { setRejectingId(null); }
   };;
 
   const p          = profile || {};

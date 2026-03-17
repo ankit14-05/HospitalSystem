@@ -53,7 +53,10 @@ router.get('/',
 );
 
 // ── Get one — MUST be after all named routes to avoid swallowing them ─────────
-router.get('/:id', ctrl.getOne);
+router.get('/:id',
+  authorize('admin', 'superadmin', 'receptionist', 'doctor', 'nurse', 'patient'),
+  ctrl.getOne
+);
 
 // ── Update status (confirm / complete / no-show) ─────────────────────────────
 router.patch('/:id/status',
@@ -69,10 +72,14 @@ router.patch('/:id/complete',
 );
 
 // ── Cancel ────────────────────────────────────────────────────────────────────
-router.patch('/:id/cancel', ctrl.cancel);
+router.patch('/:id/cancel',
+  authorize('admin', 'superadmin', 'receptionist', 'doctor', 'nurse', 'patient'),
+  ctrl.cancel
+);
 
 // ── Reschedule ────────────────────────────────────────────────────────────────
 router.patch('/:id/reschedule',
+  authorize('admin', 'superadmin', 'receptionist', 'doctor', 'nurse', 'patient'),
   v.reschedule,
   ctrl.reschedule
 );
