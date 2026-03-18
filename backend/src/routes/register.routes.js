@@ -87,7 +87,73 @@ const generateUniquePatientId = async () => {
   throw new AppError('Failed to generate a unique Patient ID. Please try again.', 500);
 };
 
-// ── Doctor ID generator: DT-1234 ─────────────────────────────────────────────
+// Registration database compatibility helpers
+const isMissingUhidSequenceError = (error) =>
+  /Invalid object name 'dbo\.UHIDSequence'/i.test(String(error?.message || ''));
+
+const ensureUhidSequenceForTriggeredDatabases = async () => {
+  const triggerResult = await query(
+    `SELECT TOP 1 tr.name AS TriggerName
+       FROM sys.triggers tr
+       INNER JOIN sys.tables t
+         ON t.object_id = tr.parent_id
+       INNER JOIN sys.schemas s
+         ON s.schema_id = t.schema_id
+       INNER JOIN sys.sql_modules m
+         ON m.object_id = tr.object_id
+      WHERE s.name = 'dbo'
+        AND t.name = 'PatientProfiles'
+        AND LOWER(m.definition) LIKE '%uhidsequence%'`
+  );
+
+  if (!triggerResult.recordset.length) return false;
+
+  const sequenceResult = await query(
+    `SELECT OBJECT_ID('dbo.UHIDSequence', 'SO') AS ObjectId`
+  );
+
+  if (sequenceResult.recordset[0]?.ObjectId) return false;
+
+  const maxSuffixResult = await query(
+    `SELECT ISNULL(MAX(TRY_CONVERT(BIGINT, RIGHT(UHID, 5))), 0) AS MaxSuffix
+       FROM dbo.PatientProfiles
+      WHERE UHID LIKE 'HMS-%-%'`
+  );
+
+  const maxSuffix = Number(maxSuffixResult.recordset[0]?.MaxSuffix || 0);
+  const nextValue = Number.isFinite(maxSuffix) ? Math.max(1, maxSuffix + 1) : 1;
+
+  try {
+    await query(
+      `DECLARE @startWith BIGINT = ${nextValue};
+       IF OBJECT_ID('dbo.UHIDSequence', 'SO') IS NULL
+       BEGIN
+         EXEC(
+           'CREATE SEQUENCE dbo.UHIDSequence AS BIGINT ' +
+           'START WITH ' + CAST(@startWith AS NVARCHAR(20)) + ' ' +
+           'INCREMENT BY 1'
+         );
+       END`
+    );
+
+    console.warn(
+      `dbo.UHIDSequence was missing for PatientProfiles trigger and was created automatically starting at ${nextValue}.`
+    );
+
+    return true;
+  } catch (error) {
+    if (/already exists/i.test(String(error?.message || ''))) {
+      return false;
+    }
+
+    throw new AppError(
+      'Patient registration setup is incomplete on this database because dbo.UHIDSequence is missing, and automatic repair was not allowed.',
+      500
+    );
+  }
+};
+
+// Doctor ID generator: DT-1234
 const generateDoctorId = () => {
   const num = crypto.randomInt(0, 10000);
   return `DT-${String(num).padStart(4, '0')}`;
@@ -589,6 +655,8 @@ router.post('/patient', [
     );
     if (dupUser.recordset.length) throw new AppError('Username already taken. Please choose another.', 409);
 
+    await ensureUhidSequenceForTriggeredDatabases();
+
     const patientId = await generateUniquePatientId();
     const hash      = await bcrypt.hash(password, parseInt(process.env.BCRYPT_ROUNDS) || 10);
 
@@ -624,42 +692,52 @@ router.post('/patient', [
       else if (idType === 'Voter ID')    voterId    = num.slice(0,30);
     }
 
-    await query(
-      `INSERT INTO dbo.PatientProfiles
-         (UserId, HospitalId, UHID,
-          FirstName, LastName, Gender, DateOfBirth, AgeYears,
-          BloodGroup, Phone, PhoneCountryCode, Email,
-          Street1, City, PincodeText,
-          EmergencyName, EmergencyRelation, EmergencyPhone,
-          CreatedBy)
-       VALUES
-         (@uid, @hid, @uhid,
-          @fname, @lname, @gender, @dob, @age,
-          @bg, @phone, @pcc, @email,
-          @s1, @city, @ptext,
-          @ename, @erel, @ephone,
-          @uid)`,
-      {
-        uid:    { type: sql.BigInt,        value: userId },
-        hid:    { type: sql.BigInt,        value: hid },
-        uhid:   { type: sql.NVarChar(30),  value: patientId },
-        fname:  { type: sql.NVarChar(100), value: firstName.trim() },
-        lname:  { type: sql.NVarChar(100), value: lastName.trim() },
-        gender: { type: sql.NVarChar(20),  value: gender || null },
-        dob:    { type: sql.Date,          value: dobValue },
-        age:    { type: sql.SmallInt,      value: dobValue ? (new Date().getFullYear() - dobValue.getFullYear()) : null },
-        bg:     { type: sql.NVarChar(5),   value: bloodGroup || null },
-        phone:  { type: sql.NVarChar(20),  value: phone },
-        pcc:    { type: sql.NVarChar(10),  value: phoneCountryCode || '+91' },
-        email:  { type: sql.NVarChar(255), value: email || null },
-        s1:     { type: sql.NVarChar(255), value: street1 || null },
-        city:   { type: sql.NVarChar(100), value: city || null },
-        ptext:  { type: sql.NVarChar(20),  value: pincodeText || null },
-        ename:  { type: sql.NVarChar(200), value: emergencyName || null },
-        erel:   { type: sql.NVarChar(80),  value: emergencyRelation != null ? String(emergencyRelation) : null },
-        ephone: { type: sql.NVarChar(20),  value: emergencyPhone || null },
+    try {
+      await query(
+        `INSERT INTO dbo.PatientProfiles
+           (UserId, HospitalId, UHID,
+            FirstName, LastName, Gender, DateOfBirth, AgeYears,
+            BloodGroup, Phone, PhoneCountryCode, Email,
+            Street1, City, PincodeText,
+            EmergencyName, EmergencyRelation, EmergencyPhone,
+            CreatedBy)
+         VALUES
+           (@uid, @hid, @uhid,
+            @fname, @lname, @gender, @dob, @age,
+            @bg, @phone, @pcc, @email,
+            @s1, @city, @ptext,
+            @ename, @erel, @ephone,
+            @uid)`,
+        {
+          uid:    { type: sql.BigInt,        value: userId },
+          hid:    { type: sql.BigInt,        value: hid },
+          uhid:   { type: sql.NVarChar(30),  value: patientId },
+          fname:  { type: sql.NVarChar(100), value: firstName.trim() },
+          lname:  { type: sql.NVarChar(100), value: lastName.trim() },
+          gender: { type: sql.NVarChar(20),  value: gender || null },
+          dob:    { type: sql.Date,          value: dobValue },
+          age:    { type: sql.SmallInt,      value: dobValue ? (new Date().getFullYear() - dobValue.getFullYear()) : null },
+          bg:     { type: sql.NVarChar(5),   value: bloodGroup || null },
+          phone:  { type: sql.NVarChar(20),  value: phone },
+          pcc:    { type: sql.NVarChar(10),  value: phoneCountryCode || '+91' },
+          email:  { type: sql.NVarChar(255), value: email || null },
+          s1:     { type: sql.NVarChar(255), value: street1 || null },
+          city:   { type: sql.NVarChar(100), value: city || null },
+          ptext:  { type: sql.NVarChar(20),  value: pincodeText || null },
+          ename:  { type: sql.NVarChar(200), value: emergencyName || null },
+          erel:   { type: sql.NVarChar(80),  value: emergencyRelation != null ? String(emergencyRelation) : null },
+          ephone: { type: sql.NVarChar(20),  value: emergencyPhone || null },
+        }
+      );
+    } catch (error) {
+      if (isMissingUhidSequenceError(error)) {
+        throw new AppError(
+          'Patient registration cannot complete because this database is missing dbo.UHIDSequence for UHID generation.',
+          500
+        );
       }
-    );
+      throw error;
+    }
 
     const chronicFull =
       chronicConditions
