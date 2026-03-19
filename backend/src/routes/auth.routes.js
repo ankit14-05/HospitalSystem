@@ -11,6 +11,11 @@ const {
   verifyOtpValidator,
 } = require('../validators/auth.validator');
 
+const isRateLimitEnabled = (value, defaultValue = true) => {
+  if (value == null || value === '') return defaultValue;
+  return !['false', '0', 'off', 'no'].includes(String(value).trim().toLowerCase());
+};
+
 const getAuthAttemptKey = (req) => {
   const identifier = String(
     req.body?.identifier ||
@@ -38,11 +43,15 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-router.post('/login', authLimiter, loginValidator, authController.login);
+const authRateLimitChain = isRateLimitEnabled(process.env.ENABLE_AUTH_RATE_LIMIT, true)
+  ? [authLimiter]
+  : [];
+
+router.post('/login', ...authRateLimitChain, loginValidator, authController.login);
 router.post('/logout', authenticate, authController.logout);
-router.post('/forgot-password', authLimiter, forgotPasswordValidator, authController.forgotPassword);
-router.post('/reset-password', authLimiter, resetPasswordValidator, authController.resetPassword);
-router.post('/verify-otp', authLimiter, verifyOtpValidator, authController.verifyOtp);
+router.post('/forgot-password', ...authRateLimitChain, forgotPasswordValidator, authController.forgotPassword);
+router.post('/reset-password', ...authRateLimitChain, resetPasswordValidator, authController.resetPassword);
+router.post('/verify-otp', ...authRateLimitChain, verifyOtpValidator, authController.verifyOtp);
 router.get('/me', authenticate, authController.me);
 
 module.exports = router;

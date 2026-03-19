@@ -29,6 +29,10 @@ const profileRoutes      = require('./routes/profile.routes');
 const rolesRoutes        = require('./routes/roles.routes');
 
 const app = express();
+const isRateLimitEnabled = (value, defaultValue = true) => {
+  if (value == null || value === '') return defaultValue;
+  return !['false', '0', 'off', 'no'].includes(String(value).trim().toLowerCase());
+};
 
 // TEMPORARY DEBUG — remove in production
 app.use((req, res, next) => {
@@ -68,15 +72,17 @@ app.use(
 );
 
 // ── Global rate limiter ───────────────────────────────────────────────────────
-app.use(
-  rateLimit({
-    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
-    max:      parseInt(process.env.RATE_LIMIT_MAX)       || 100,
-    standardHeaders: true,
-    legacyHeaders:   false,
-    message: { success: false, message: 'Too many requests. Please try again later.' },
-  })
-);
+if (isRateLimitEnabled(process.env.ENABLE_GLOBAL_RATE_LIMIT, true)) {
+  app.use(
+    rateLimit({
+      windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
+      max:      parseInt(process.env.RATE_LIMIT_MAX)       || 100,
+      standardHeaders: true,
+      legacyHeaders:   false,
+      message: { success: false, message: 'Too many requests. Please try again later.' },
+    })
+  );
+}
 
 // ── Health check ──────────────────────────────────────────────────────────────
 app.get('/health', (req, res) => {
