@@ -3,7 +3,7 @@
 //         DoctorProfiles, Users, Appointments
 const router = require('express').Router();
 const { authenticate: protect, authorize } = require('../middleware/auth.middleware');
-const { getPool }                          = require('../config/database');
+const { getPool, sql, withTransaction }    = require('../config/database');
 
 router.use(protect);
 
@@ -253,57 +253,121 @@ router.post('/',
       }
       const { Id: doctorId, HospitalId: hospitalId } = docRes.recordset[0];
 
+      const normalizedPatientId = parseInt(patientId, 10);
+      const normalizedAppointmentId = appointmentId ? parseInt(appointmentId, 10) : null;
+      const normalizedAdmissionId = admissionId ? parseInt(admissionId, 10) : null;
+      const createdBy = parseInt(req.user.id, 10);
       const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-      const rxNo  = `RX-${today}-${Math.floor(10000 + Math.random() * 90000)}`;
 
-      const rxRes = await pool.request()
-        .input('HospitalId',    hospitalId)
-        .input('PatientId',     parseInt(patientId))
-        .input('DoctorId',      doctorId)
-        .input('AppointmentId', appointmentId ? parseInt(appointmentId) : null)
-        .input('AdmissionId',   admissionId   ? parseInt(admissionId)   : null)
-        .input('RxNumber',      rxNo)
-        .input('Diagnosis',     diagnosis  || null)
-        .input('Notes',         notes      || null)
-        .input('ValidUntil',    validUntil || null)
-        .input('CreatedBy',     parseInt(req.user.id))
-        .query(`
-          INSERT INTO dbo.Prescriptions
-            (HospitalId, PatientId, DoctorId, AppointmentId, AdmissionId,
-             RxNumber, Diagnosis, Notes, ValidUntil, CreatedBy)
-          OUTPUT INSERTED.Id
-          VALUES
-            (@HospitalId, @PatientId, @DoctorId, @AppointmentId, @AdmissionId,
-             @RxNumber, @Diagnosis, @Notes, @ValidUntil, @CreatedBy);
-        `);
+      const result = await withTransaction(async (transaction) => {
+        const request = () => new sql.Request(transaction);
 
-      const prescriptionId = rxRes.recordset[0].Id;
+        let existingPrescription = null;
+        if (normalizedAppointmentId) {
+          const existingRes = await request()
+            .input('AppointmentId', sql.BigInt, normalizedAppointmentId)
+            .input('PatientId', sql.BigInt, normalizedPatientId)
+            .input('DoctorId', sql.BigInt, doctorId)
+            .query(`
+              SELECT TOP 1 Id, RxNumber
+              FROM dbo.Prescriptions
+              WHERE AppointmentId = @AppointmentId
+                AND PatientId = @PatientId
+                AND DoctorId = @DoctorId
+              ORDER BY CreatedAt DESC, Id DESC
+            `);
 
-      for (const item of items) {
-        await pool.request()
-          .input('PrescriptionId', prescriptionId)
-          .input('MedicineId',     item.medicineId   ? parseInt(item.medicineId) : null)
-          .input('MedicineName',   item.medicineName || null)
-          .input('Dosage',         item.dosage       || null)
-          .input('Frequency',      item.frequency    || null)
-          .input('Duration',       item.duration     || null)
-          .input('Quantity',       item.quantity     || null)
-          .input('Route',          item.route        || null)
-          .input('Instructions',   item.instructions || null)
-          .query(`
-            INSERT INTO dbo.PrescriptionItems
-              (PrescriptionId, MedicineId, MedicineName, Dosage,
-               Frequency, Duration, Quantity, Route, Instructions)
-            VALUES
-              (@PrescriptionId, @MedicineId, @MedicineName, @Dosage,
-               @Frequency, @Duration, @Quantity, @Route, @Instructions);
-          `);
-      }
+          existingPrescription = existingRes.recordset[0] || null;
+        }
 
-      res.status(201).json({
+        let prescriptionId = existingPrescription?.Id || null;
+        let rxNumber = existingPrescription?.RxNumber || null;
+
+        if (existingPrescription) {
+          await request()
+            .input('Id', sql.BigInt, prescriptionId)
+            .input('AdmissionId', sql.BigInt, normalizedAdmissionId)
+            .input('Diagnosis', sql.NVarChar(sql.MAX), diagnosis || null)
+            .input('Notes', sql.NVarChar(sql.MAX), notes || null)
+            .input('ValidUntil', sql.Date, validUntil || null)
+            .input('UpdatedBy', sql.BigInt, createdBy)
+            .query(`
+              UPDATE dbo.Prescriptions
+              SET AdmissionId = COALESCE(@AdmissionId, AdmissionId),
+                  Diagnosis = @Diagnosis,
+                  Notes = @Notes,
+                  ValidUntil = @ValidUntil,
+                  UpdatedBy = @UpdatedBy,
+                  UpdatedAt = SYSUTCDATETIME()
+              WHERE Id = @Id
+            `);
+
+          await request()
+            .input('PrescriptionId', sql.BigInt, prescriptionId)
+            .query(`
+              DELETE FROM dbo.PrescriptionItems
+              WHERE PrescriptionId = @PrescriptionId
+            `);
+        } else {
+          rxNumber = `RX-${today}-${Math.floor(10000 + Math.random() * 90000)}`;
+
+          const rxRes = await request()
+            .input('HospitalId', sql.BigInt, hospitalId)
+            .input('PatientId', sql.BigInt, normalizedPatientId)
+            .input('DoctorId', sql.BigInt, doctorId)
+            .input('AppointmentId', sql.BigInt, normalizedAppointmentId)
+            .input('AdmissionId', sql.BigInt, normalizedAdmissionId)
+            .input('RxNumber', sql.NVarChar(50), rxNumber)
+            .input('Diagnosis', sql.NVarChar(sql.MAX), diagnosis || null)
+            .input('Notes', sql.NVarChar(sql.MAX), notes || null)
+            .input('ValidUntil', sql.Date, validUntil || null)
+            .input('CreatedBy', sql.BigInt, createdBy)
+            .query(`
+              INSERT INTO dbo.Prescriptions
+                (HospitalId, PatientId, DoctorId, AppointmentId, AdmissionId,
+                 RxNumber, Diagnosis, Notes, ValidUntil, CreatedBy)
+              OUTPUT INSERTED.Id, INSERTED.RxNumber
+              VALUES
+                (@HospitalId, @PatientId, @DoctorId, @AppointmentId, @AdmissionId,
+                 @RxNumber, @Diagnosis, @Notes, @ValidUntil, @CreatedBy);
+            `);
+
+          prescriptionId = rxRes.recordset[0].Id;
+          rxNumber = rxRes.recordset[0].RxNumber;
+        }
+
+        for (const item of items) {
+          await request()
+            .input('PrescriptionId', sql.BigInt, prescriptionId)
+            .input('MedicineId', item.medicineId ? parseInt(item.medicineId, 10) : null)
+            .input('MedicineName', sql.NVarChar(255), item.medicineName || null)
+            .input('Dosage', sql.NVarChar(100), item.dosage || null)
+            .input('Frequency', sql.NVarChar(100), item.frequency || null)
+            .input('Duration', sql.NVarChar(100), item.duration || null)
+            .input('Quantity', sql.Int, item.quantity ? parseInt(item.quantity, 10) : null)
+            .input('Route', sql.NVarChar(50), item.route || null)
+            .input('Instructions', sql.NVarChar(sql.MAX), item.instructions || null)
+            .query(`
+              INSERT INTO dbo.PrescriptionItems
+                (PrescriptionId, MedicineId, MedicineName, Dosage,
+                 Frequency, Duration, Quantity, Route, Instructions)
+              VALUES
+                (@PrescriptionId, @MedicineId, @MedicineName, @Dosage,
+                 @Frequency, @Duration, @Quantity, @Route, @Instructions);
+            `);
+        }
+
+        return {
+          prescriptionId,
+          rxNumber,
+          updated: Boolean(existingPrescription),
+        };
+      });
+
+      res.status(result.updated ? 200 : 201).json({
         success: true,
-        message: 'Prescription created',
-        data: { id: prescriptionId, rxNumber: rxNo }
+        message: result.updated ? 'Prescription updated' : 'Prescription created',
+        data: { id: result.prescriptionId, rxNumber: result.rxNumber, updated: result.updated }
       });
     } catch (err) { next(err); }
   }

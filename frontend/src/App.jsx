@@ -20,17 +20,30 @@ import StaffRegisterPage   from './pages/register/StaffRegisterPage';
 // Dashboards
 import AdminDashboard   from './pages/dashboard/AdminDashboard';
 import DoctorDashboard  from './pages/dashboard/DoctorDashboard';
-import StaffDashboard   from './pages/dashboard/StaffDashboard';
+import NurseDashboard   from './pages/dashboard/NurseDashboard';
+import ReceptionistDashboard from './pages/dashboard/ReceptionistDashboard';
+import PharmacistDashboard   from './pages/dashboard/PharmacistDashboard';
+import LabTechnicianDashboard from './pages/dashboard/LabTechnicianDashboard';
+import WardBoyDashboard       from './pages/dashboard/WardBoyDashboard';
+import HousekeepingDashboard  from './pages/dashboard/HousekeepingDashboard';
+import SecurityDashboard      from './pages/dashboard/SecurityDashboard';
+import AdminStaffDashboard    from './pages/dashboard/AdminStaffDashboard';
 import PatientDashboard from './pages/dashboard/PatientDashboard';
+import OPDManagerDashboard from './pages/dashboard/OPDManagerDashboard';
 
 // Admin panels
 import DoctorApprovalPanel from './pages/admin/DoctorApprovalPanel';
 import StaffApprovalPanel  from './pages/admin/StaffApprovalPanel';
+import PeopleDirectoryPage from './pages/admin/PeopleDirectoryPage';
+import AdminDepartments    from './pages/dashboard/AdminDepartments';
+import AdminReports        from './pages/dashboard/AdminReports';
+import AdminSettings       from './pages/dashboard/AdminSettings';
 
 // Scheduling
 import SchedulingDashboard  from './pages/scheduling/SchedulingDashboard';
 import AdminScheduleManager from './pages/scheduling/AdminScheduleManager';
 import DoctorSchedulePage   from './pages/scheduling/DoctorSchedulePage';
+import DoctorScheduleEditorPage from './pages/scheduling/DoctorScheduleEditorPage';
 
 // Setup pages
 import HospitalSetupPage from './pages/setup/HospitalSetupPage';
@@ -42,18 +55,31 @@ import NotFoundPage      from './pages/NotFoundPage';
 import AppointmentsPage     from './pages/appointments/AppointmentsPage';
 import BookAppointmentPage  from './pages/appointments/BookAppointmentPage';
 
+// Profiles
+import ProfilePage from './pages/profile/ProfilePage';
+import { STAFF_ROLES } from './config/roles';
+
+import SecuritySettings from './pages/dashboard/SecuritySettings';
+
 // ── Shared role map ───────────────────────────────────────────────────────────
 const ROLE_ROUTES = {
   superadmin:   'admin',
   admin:        'admin',
   auditor:      'admin',
   doctor:       'doctor',
-  nurse:        'staff',
-  receptionist: 'staff',
-  pharmacist:   'staff',
-  labtech:      'staff',
+  nurse:        'nurse',
+  receptionist: 'receptionist',
+  pharmacist:   'pharmacist',
+  labtech:      'labtech',
+  ward_boy:     'wardboy',
+  housekeeping: 'housekeeping',
+  security:     'security',
+  admin_staff:  'adminstaff',
+  opdmanager:   'opd',
+  opd_manager:  'opd',
   patient:      'patient',
 };
+
 
 const getDashboard = (role) => `/dashboard/${ROLE_ROUTES[role] || 'admin'}`;
 
@@ -156,10 +182,66 @@ export default function App() {
               }
             />
             <Route
-              path="dashboard/staff"
+              path="dashboard/nurse"
               element={
-                <RequireRole roles={['nurse', 'receptionist', 'pharmacist', 'labtech']}>
-                  <StaffDashboard />
+                <RequireRole roles={['nurse']}>
+                  <NurseDashboard />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="dashboard/receptionist"
+              element={
+                <RequireRole roles={['receptionist']}>
+                  <ReceptionistDashboard />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="dashboard/pharmacist"
+              element={
+                <RequireRole roles={['pharmacist']}>
+                  <PharmacistDashboard />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="dashboard/labtech"
+              element={
+                <RequireRole roles={['labtech']}>
+                  <LabTechnicianDashboard />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="dashboard/wardboy"
+              element={
+                <RequireRole roles={['ward_boy']}>
+                  <WardBoyDashboard />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="dashboard/housekeeping"
+              element={
+                <RequireRole roles={['housekeeping']}>
+                  <HousekeepingDashboard />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="dashboard/security"
+              element={
+                <RequireRole roles={['security']}>
+                  <SecurityDashboard />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="dashboard/adminstaff"
+              element={
+                <RequireRole roles={['admin_staff']}>
+                  <AdminStaffDashboard />
                 </RequireRole>
               }
             />
@@ -171,8 +253,24 @@ export default function App() {
                 </RequireRole>
               }
             />
+            <Route
+              path="dashboard/opd"
+              element={
+                <RequireRole roles={['opdmanager', 'opd_manager']}>
+                  <OPDManagerDashboard />
+                </RequireRole>
+              }
+            />
 
             {/* ── Admin panels ── */}
+            <Route
+              path="admin/people"
+              element={
+                <RequireRole roles={['superadmin', 'admin', 'auditor']}>
+                  <PeopleDirectoryPage />
+                </RequireRole>
+              }
+            />
             <Route
               path="admin/doctor-approvals"
               element={
@@ -189,6 +287,31 @@ export default function App() {
                 </RequireRole>
               }
             />
+            
+            <Route
+              path="admin/departments"
+              element={
+                <RequireRole roles={['superadmin', 'admin']}>
+                  <AdminDepartments />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="admin/reports"
+              element={
+                <RequireRole roles={['superadmin', 'admin', 'auditor']}>
+                  <AdminReports />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="admin/settings"
+              element={
+                <RequireRole roles={['superadmin', 'admin']}>
+                  <AdminSettings />
+                </RequireRole>
+              }
+            />
 
             {/* ── Scheduling ── */}
             <Route
@@ -202,8 +325,24 @@ export default function App() {
             <Route
               path="admin/schedule-manager"
               element={
-                <RequireRole roles={['superadmin', 'admin']}>
+                <RequireRole roles={['superadmin', 'admin', 'opdmanager', 'opd_manager']}>
                   <AdminScheduleManager />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="admin/schedule-manager/new"
+              element={
+                <RequireRole roles={['superadmin', 'admin', 'opdmanager', 'opd_manager']}>
+                  <DoctorScheduleEditorPage />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="admin/schedule-manager/:id/edit"
+              element={
+                <RequireRole roles={['superadmin', 'admin', 'opdmanager', 'opd_manager']}>
+                  <DoctorScheduleEditorPage />
                 </RequireRole>
               }
             />
@@ -220,7 +359,7 @@ export default function App() {
             <Route
               path="appointments"
               element={
-                <RequireRole roles={['superadmin', 'admin', 'doctor', 'nurse', 'receptionist', 'pharmacist', 'labtech', 'patient', 'auditor']}>
+                <RequireRole roles={['superadmin', 'admin', 'doctor', 'nurse', 'receptionist', 'pharmacist', 'labtech', 'patient', 'auditor', 'opdmanager', 'opd_manager']}>
                   <AppointmentsPage />
                 </RequireRole>
               }
@@ -241,6 +380,20 @@ export default function App() {
                 </RequireRole>
               }
             />
+
+            {/* ── Profiles ── */}
+            <Route path="superadmin/profile" element={<RequireRole roles={['superadmin']}><ProfilePage /></RequireRole>} />
+            <Route path="admin/profile"      element={<RequireRole roles={['admin', 'auditor']}><ProfilePage /></RequireRole>} />
+            <Route path="doctor/profile"     element={<RequireRole roles={['doctor']}><ProfilePage /></RequireRole>} />
+            <Route path="staff/profile"      element={<RequireRole roles={STAFF_ROLES}><ProfilePage /></RequireRole>} />
+            <Route path="patient/profile"    element={<RequireRole roles={['patient']}><ProfilePage /></RequireRole>} />
+
+            {/* ── Security ── */}
+            <Route path="superadmin/security" element={<RequireRole roles={['superadmin']}><SecuritySettings /></RequireRole>} />
+            <Route path="admin/security"      element={<RequireRole roles={['admin', 'auditor']}><SecuritySettings /></RequireRole>} />
+            <Route path="doctor/security"     element={<RequireRole roles={['doctor']}><SecuritySettings /></RequireRole>} />
+            <Route path="staff/security"      element={<RequireRole roles={STAFF_ROLES}><SecuritySettings /></RequireRole>} />
+            <Route path="patient/security"    element={<RequireRole roles={['patient']}><SecuritySettings /></RequireRole>} />
 
             {/* ── Setup — admin / superadmin only ── */}
             <Route

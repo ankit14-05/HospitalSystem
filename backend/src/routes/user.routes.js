@@ -8,6 +8,7 @@ const { body } = require('express-validator');
 const { validationResult } = require('express-validator');
 const { success, created, paginated } = require('../utils/apiResponse');
 const AppError = require('../utils/AppError');
+const { DB_ALLOWED_ROLES, normalizeRole } = require('../constants/roles');
 
 const handleV = (req) => {
   const e = validationResult(req);
@@ -22,7 +23,7 @@ const createUserValidators = [
   body('phone').optional().trim().isLength({ max: 20 }),
   body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
     .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/).withMessage('Password needs uppercase, lowercase, and number'),
-  body('role').isIn(['admin','doctor','nurse','receptionist','pharmacist','labtech','patient','auditor'])
+  body('role').custom((value) => DB_ALLOWED_ROLES.includes(normalizeRole(value)))
     .withMessage('Invalid role'),
   body('firstName').trim().isLength({ min: 1, max: 100 }).withMessage('First name required'),
   body('lastName').trim().isLength({ min: 1, max: 100 }).withMessage('Last name required'),
@@ -38,7 +39,7 @@ router.get('/',
       const page = parseInt(req.query.page) || 1;
       const limit = parseInt(req.query.limit) || 20;
       const offset = (page - 1) * limit;
-      const role = req.query.role || '';
+      const role = normalizeRole(req.query.role || '');
       const search = req.query.search || '';
       const hospitalId = req.user.role === 'superadmin'
         ? (parseInt(req.query.hospitalId) || null)
@@ -132,7 +133,7 @@ router.post('/',
           phone:  { type: sql.NVarChar(20),      value: phone || null },
           pcc:    { type: sql.NVarChar(10),       value: phoneCountryCode || '+91' },
           hash:   { type: sql.NVarChar(sql.MAX), value: passwordHash },
-          role:   { type: sql.NVarChar(30),      value: role },
+          role:   { type: sql.NVarChar(30),      value: normalizeRole(role) },
           did:    { type: sql.BigInt,            value: departmentId || null },
           fname:  { type: sql.NVarChar(100),     value: firstName.trim() },
           lname:  { type: sql.NVarChar(100),     value: lastName.trim() },

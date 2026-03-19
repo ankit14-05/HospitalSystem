@@ -22,6 +22,8 @@ import {
 } from 'lucide-react';
 import { useAuth } from "../../context/AuthContext";
 import useHospitalBranding from '../../hooks/useHospitalBranding';
+import NotificationBell from '../ui/NotificationBell';
+import { ROLE_LABELS, getProfilePath, getSecurityPath } from '../../config/roles';
 
 // ── colour helpers (identical to LoginPage) ───────────────────────────────────
 function shiftColor(hex, amt) {
@@ -37,19 +39,11 @@ function shiftColor(hex, amt) {
 const initials = (first = '', last = '') =>
   `${(first?.[0] || '').toUpperCase()}${(last?.[0] || '').toUpperCase()}` || '?';
 
-const ROLE_LABEL = {
-  superadmin:'Super Admin', admin:'Administrator', doctor:'Doctor',
-  nurse:'Nurse', receptionist:'Receptionist', pharmacist:'Pharmacist',
-  labtech:'Lab Technician', patient:'Patient', auditor:'Auditor',
-};
-
-function staffNav() {
+function staffNav(dashboardPath) {
   return [
-    { path:'/dashboard/staff',    label:'Dashboard',   icon: LayoutDashboard },
-    { path:'/staff/tasks',        label:'My Tasks',    icon: ClipboardList   },
-    { path:'/staff/patients',     label:'Patients',    icon: Users           },
-    { path:'/staff/beds',         label:'Bed Status',  icon: Bed             },
-    { path:'/staff/schedule',     label:'My Schedule', icon: Clock           },
+    { path:dashboardPath,         label:'Dashboard',   icon: LayoutDashboard },
+    { path:'/appointments',       label:'Appointments',icon: Calendar        },
+    { path:'/staff/profile',      label:'My Profile',  icon: UserCircle      },
   ];
 }
 
@@ -58,7 +52,7 @@ const NAV = {
     { path:'/dashboard/admin',        label:'Dashboard',        icon: LayoutDashboard },
     { path:'/admin/doctor-approvals', label:'Doctor Approvals', icon: Stethoscope     },
     { path:'/admin/staff-approvals',  label:'Staff Approvals',  icon: Briefcase       },
-    { path:'/admin/patients',         label:'Patients',         icon: Users           },
+    { path:'/admin/people',           label:'Directory',        icon: Users           },
     { path:'/admin/appointments',     label:'Appointments',     icon: Calendar        },
     { path:'/admin/schedule-manager', label:'Doctor Schedules', icon: Clock           },
     { path:'/admin/departments',      label:'Departments',      icon: Bed             },
@@ -69,7 +63,7 @@ const NAV = {
     { path:'/dashboard/admin',        label:'Dashboard',        icon: LayoutDashboard },
     { path:'/admin/doctor-approvals', label:'Doctor Approvals', icon: Stethoscope     },
     { path:'/admin/staff-approvals',  label:'Staff Approvals',  icon: Briefcase       },
-    { path:'/admin/patients',         label:'Patients',         icon: Users           },
+    { path:'/admin/people',           label:'Directory',        icon: Users           },
     { path:'/admin/appointments',     label:'Appointments',     icon: Calendar        },
     { path:'/admin/schedule-manager', label:'Doctor Schedules', icon: Clock           },
     { path:'/admin/departments',      label:'Departments',      icon: Bed             },
@@ -78,28 +72,45 @@ const NAV = {
   ],
   doctor: [
     { path:'/dashboard/doctor',       label:'Dashboard',       icon: LayoutDashboard },
-    { path:'/doctor/queue',           label:"Today's Queue",   icon: Users           },
-    { path:'/doctor/appointments',    label:'Appointments',    icon: Calendar        },
-    { path:'/doctor/prescriptions',   label:'Prescriptions',   icon: Pill            },
+    { path:'/appointments',           label:'Appointments',    icon: Calendar        },
     { path:'/doctor/schedule',        label:'Schedule',        icon: Clock           },
-    { path:'/doctor/analytics',       label:'Analytics',       icon: BarChart2       },
     { path:'/doctor/profile',         label:'My Profile',      icon: UserCircle      },
+  ],
+  opdmanager: [
+    { path:'/dashboard/opd',          label:'Dashboard',       icon: LayoutDashboard },
+    { path:'/appointments',           label:'Appointments',    icon: Calendar        },
+    { path:'/admin/schedule-manager', label:'Doctor Schedules',icon: Clock           },
+    { path:'/staff/profile',          label:'My Profile',      icon: UserCircle      },
+  ],
+  opd_manager: [
+    { path:'/dashboard/opd',          label:'Dashboard',       icon: LayoutDashboard },
+    { path:'/appointments',           label:'Appointments',    icon: Calendar        },
+    { path:'/admin/schedule-manager', label:'Doctor Schedules',icon: Clock           },
+    { path:'/staff/profile',          label:'My Profile',      icon: UserCircle      },
   ],
   patient: [
     { path:'/dashboard/patient',      label:'Dashboard',          icon: LayoutDashboard },
     { path:'/appointments/book',      label:'Book Appointment',   icon: Calendar        },
-    { path:'/patient/appointments',   label:'My Appointments',    icon: ClipboardList   },
-    { path:'/patient/prescriptions',  label:'Prescriptions',      icon: Pill            },
-    { path:'/patient/records',        label:'Medical Records',    icon: FileText        },
-    { path:'/patient/reports',        label:'Lab Reports',        icon: ClipboardList   },
-    { path:'/patient/billing',        label:'Billing',            icon: Receipt         },
-    { path:'/patient/vitals',         label:'Health Vitals',      icon: Heart           },
+    { path:'/appointments',           label:'My Appointments',    icon: ClipboardList   },
     { path:'/patient/profile',        label:'My Profile',         icon: UserCircle      },
   ],
-  nurse:        staffNav(),
-  receptionist: staffNav(),
-  pharmacist:   staffNav(),
-  labtech:      staffNav(),
+  nurse:        staffNav('/dashboard/nurse'),
+  receptionist: staffNav('/dashboard/receptionist'),
+  pharmacist:   staffNav('/dashboard/pharmacist'),
+  labtech:      staffNav('/dashboard/labtech'),
+  lab_technician: staffNav('/dashboard/labtech'),
+  ward_boy:     staffNav('/dashboard/wardboy'),
+  housekeeping: staffNav('/dashboard/housekeeping'),
+  security:     staffNav('/dashboard/security'),
+  admin_staff:  staffNav('/dashboard/adminstaff'),
+  auditor: [
+    { path:'/dashboard/admin',        label:'Dashboard',        icon: LayoutDashboard },
+    { path:'/admin/people',           label:'Directory',        icon: Users           },
+    { path:'/admin/appointments',     label:'Appointments',     icon: Calendar        },
+    { path:'/admin/schedule-manager', label:'Doctor Schedules', icon: Clock           },
+    { path:'/admin/reports',          label:'Reports',          icon: BarChart2       },
+    { path:'/admin/profile',          label:'My Profile',       icon: UserCircle      },
+  ],
 };
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -107,7 +118,7 @@ export default function DashboardLayout() {
   const { user, logout }  = useAuth();
   const navigate           = useNavigate();
   const location           = useLocation();
-  const { branding }       = useHospitalBranding(1);
+  const { branding }       = useHospitalBranding();
 
   const primary = branding?.primaryColor || '#6d28d9';
   const deep    = shiftColor(primary, -65);
@@ -221,7 +232,7 @@ export default function DashboardLayout() {
                 <span className="w-1.5 h-1.5 rounded-full flex-shrink-0 animate-pulse"
                   style={{ background: role==='patient'?'#60a5fa':role==='doctor'?'#34d399':'#fbbf24' }}/>
                 <span className="text-[10px] font-bold text-white/60 tracking-widest uppercase">
-                  {ROLE_LABEL[role] || 'Staff'}
+                  {ROLE_LABELS[role] || 'Staff'}
                 </span>
               </div>
             </div>
@@ -278,7 +289,7 @@ export default function DashboardLayout() {
               {sidebarOpen && (
                 <div className="min-w-0 flex-1 overflow-hidden">
                   <p className="text-white text-[12px] font-bold truncate leading-tight">{name}</p>
-                  <p className="text-white/35 text-[10px] truncate capitalize">{ROLE_LABEL[role]}</p>
+                  <p className="text-white/35 text-[10px] truncate capitalize">{ROLE_LABELS[role] || 'Staff'}</p>
                 </div>
               )}
             </div>
@@ -323,47 +334,8 @@ export default function DashboardLayout() {
               </button>
 
               {/* Notifications */}
-              <div className="relative" ref={notifRef}>
-                <button onClick={() => { setNotifOpen(o => !o); setProfileOpen(false); }}
-                  className="relative w-8 h-8 rounded-xl flex items-center justify-center border border-slate-200 text-slate-400 hover:text-slate-600 hover:border-slate-300 transition-all hover:shadow-sm">
-                  <Bell size={14}/>
-                  <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full" style={{ background: primary }}/>
-                </button>
-
-                {notifOpen && (
-                  <div className="dl-pop absolute right-0 top-full mt-2 w-80 bg-white rounded-2xl shadow-2xl border border-slate-100 z-50 overflow-hidden">
-                    <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100">
-                      <p className="font-bold text-slate-800 text-[13px]">Notifications</p>
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full text-white"
-                        style={{ background: primary }}>3 new</span>
-                    </div>
-                    <div className="divide-y divide-slate-50 max-h-72 overflow-y-auto">
-                      {[
-                        { icon:'🩺', text:'Dr. Sharma approved your appointment',   time:'2 min ago',  unread:true  },
-                        { icon:'💊', text:'New prescription issued for review',      time:'1 hr ago',   unread:true  },
-                        { icon:'📋', text:'Lab report for Priya Patel is ready',    time:'3 hrs ago',  unread:true  },
-                        { icon:'✅', text:'Patient discharge completed — Room 212', time:'5 hrs ago',  unread:false },
-                      ].map((n, i) => (
-                        <div key={i}
-                          className={`flex items-start gap-3 px-5 py-3.5 hover:bg-slate-50 cursor-pointer transition-colors ${n.unread ? 'bg-blue-50/40' : ''}`}>
-                          <span className="text-lg flex-shrink-0 mt-0.5">{n.icon}</span>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-[12px] text-slate-700 leading-snug">{n.text}</p>
-                            <p className="text-[10px] text-slate-400 mt-0.5">{n.time}</p>
-                          </div>
-                          {n.unread && (
-                            <div className="w-2 h-2 rounded-full mt-1.5 flex-shrink-0" style={{ background: primary }}/>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                    <div className="px-5 py-3 border-t border-slate-100">
-                      <button className="text-[12px] font-bold hover:underline" style={{ color: primary }}>
-                        View all notifications
-                      </button>
-                    </div>
-                  </div>
-                )}
+              <div onClick={() => setProfileOpen(false)}>
+                <NotificationBell />
               </div>
 
               <div className="w-px h-5 bg-slate-200"/>
@@ -383,7 +355,7 @@ export default function DashboardLayout() {
                   }
                   <div className="hidden sm:block text-left">
                     <p className="text-[12px] font-bold text-slate-800 leading-tight truncate max-w-[100px]">{name}</p>
-                    <p className="text-[10px] text-slate-400 capitalize">{ROLE_LABEL[role]}</p>
+                    <p className="text-[10px] text-slate-400 capitalize">{ROLE_LABELS[role] || 'Staff'}</p>
                   </div>
                   <ChevronDown size={12}
                     className={`text-slate-400 transition-transform duration-200 flex-shrink-0 ${profileOpen ? 'rotate-180' : ''}`}/>
@@ -404,7 +376,7 @@ export default function DashboardLayout() {
                         }
                         <div className="min-w-0">
                           <p className="font-bold text-slate-800 text-sm truncate">{name}</p>
-                          <p className="text-xs text-slate-400 capitalize">{ROLE_LABEL[role]}</p>
+                          <p className="text-xs text-slate-400 capitalize">{ROLE_LABELS[role] || 'Staff'}</p>
                           {user?.email && (
                             <p className="text-[10px] text-slate-400 truncate mt-0.5">{user.email}</p>
                           )}
@@ -413,10 +385,9 @@ export default function DashboardLayout() {
                     </div>
                     <div className="p-2">
                       {[
-                        { icon: UserCircle, label:'My Profile',   path:`/${role}/profile`  },
-                        { icon: Edit2,      label:'Edit Profile', path:`/${role}/profile`  },
-                        { icon: Shield,     label:'Security',     path:`/${role}/security` },
-                        { icon: Settings,   label:'Settings',     path:`/${role}/settings` },
+                        { icon: UserCircle, label:'My Profile',   path:getProfilePath(role)  },
+                        { icon: Edit2,      label:'Edit Profile', path:getProfilePath(role)  },
+                        { icon: Shield,     label:'Security',     path:getSecurityPath(role) },
                       ].map(item => {
                         const Icon = item.icon;
                         return (
@@ -471,7 +442,7 @@ export default function DashboardLayout() {
             style={{ borderBottom:'1px solid rgba(226,232,240,0.5)', background:'rgba(248,250,252,0.85)' }}>
             <span className="font-semibold text-slate-500">{branding?.name || 'HMS'}</span>
             <span className="text-slate-300">/</span>
-            <span className="capitalize text-slate-400">{ROLE_LABEL[role]}</span>
+            <span className="capitalize text-slate-400">{ROLE_LABELS[role] || 'Staff'}</span>
             <span className="text-slate-300">/</span>
             <span className="font-semibold" style={{ color: primary }}>
               {navItems.find(n => isActive(n.path))?.label || 'Dashboard'}

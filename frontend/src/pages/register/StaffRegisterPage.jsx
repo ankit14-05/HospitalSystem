@@ -60,6 +60,9 @@ const STEP3_TABS = [
 ];
 
 const todayStr = new Date().toISOString().split('T')[0];
+const eighteenYearsAgo = new Date();
+eighteenYearsAgo.setFullYear(eighteenYearsAgo.getFullYear() - 18);
+const eighteenYearsAgoStr = eighteenYearsAgo.toISOString().split('T')[0];
 
 // ── Input restriction helpers ─────────────────────────────────────────────────
 const lettersOnly   = v => v.replace(/[^A-Za-z\s]/g, '');
@@ -481,6 +484,22 @@ export default function StaffRegisterPage() {
   // Custom roles
   const [roles, setRoles]             = useState(DEFAULT_ROLES);
   const [showAddRole, setShowAddRole] = useState(false);
+
+  useEffect(() => {
+    api.get('/roles')
+      .then(r => {
+        if (r.roles && r.roles.length > 0) {
+          const fetchedRoles = r.roles.map((roleName, idx) => ({
+            value: roleName.toLowerCase().replace(/\s+/g, '_'),
+            label: roleName,
+            desc: `${roleName} Role`,
+            color: ROLE_COLORS[idx % ROLE_COLORS.length]
+          }));
+          setRoles(fetchedRoles);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const addCustomRole = newRole => {
     const color = ROLE_COLORS[roles.length % ROLE_COLORS.length];
@@ -948,8 +967,8 @@ export default function StaffRegisterPage() {
                         {GENDERS.map(g => <option key={g}>{g}</option>)}
                       </SelectField>
                     </FL>
-                    <FL label="Date of Birth">
-                      <FI type="date" value={form.dateOfBirth} onChange={e => set('dateOfBirth', e.target.value)} max={todayStr}/>
+                    <FL label="Date of Birth" hint="Must be at least 18 years old">
+                      <FI type="date" value={form.dateOfBirth} onChange={e => set('dateOfBirth', e.target.value)} max={eighteenYearsAgoStr}/>
                     </FL>
                     <FL label="Age">
                       <div className={`${inputBase} ${inputNorm} bg-slate-50 text-center text-slate-600 cursor-not-allowed font-semibold`}>

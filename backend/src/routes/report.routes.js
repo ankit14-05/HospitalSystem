@@ -3,7 +3,7 @@
 //         DoctorProfiles, Users, Appointments
 const router = require('express').Router();
 const { authenticate: protect, authorize } = require('../middleware/auth.middleware');
-const { getPool }                          = require('../config/database');
+const { getPool, sql, withTransaction }    = require('../config/database');
 
 router.use(protect);
 
@@ -45,6 +45,7 @@ router.get('/my', async (req, res, next) => {
             (
               SELECT
                 loi.Id,
+                lt.Id AS TestId,
                 lt.Name  AS TestName,
                 lt.Unit,
                 loi.ResultValue, loi.ResultUnit,
@@ -91,6 +92,7 @@ router.get('/my', async (req, res, next) => {
             (
               SELECT
                 loi.Id,
+                lt.Id AS TestId,
                 lt.Name  AS TestName,
                 lt.Unit,
                 loi.ResultValue, loi.ResultUnit,
@@ -164,7 +166,7 @@ router.get('/:id', async (req, res, next) => {
       .input('LabOrderId', req.params.id)
       .query(`
         SELECT
-          loi.Id, lt.Name AS TestName, lt.Category,
+          loi.Id, lt.Id AS TestId, lt.Name AS TestName, lt.Category,
           lt.Unit, lt.NormalRangeMale, lt.NormalRangeFemale,
           lt.SampleType, lt.RequiresFasting,
           loi.ResultValue, loi.ResultUnit,
@@ -210,46 +212,107 @@ router.post('/',
       }
       const { Id: doctorId, HospitalId: hospitalId } = docRes.recordset[0];
 
-      // Generate OrderNumber: LAB-YYYYMMDD-{random5}
-      const today    = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-      const orderNo  = `LAB-${today}-${Math.floor(10000 + Math.random() * 90000)}`;
+      const normalizedPatientId = parseInt(patientId, 10);
+      const normalizedAppointmentId = appointmentId ? parseInt(appointmentId, 10) : null;
+      const normalizedAdmissionId = admissionId ? parseInt(admissionId, 10) : null;
+      const createdBy = parseInt(req.user.id, 10);
+      const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
 
-      const orderRes = await pool.request()
-        .input('HospitalId',    hospitalId)
-        .input('PatientId',     patientId)
-        .input('OrderedBy',     doctorId)
-        .input('AppointmentId', appointmentId || null)
-        .input('AdmissionId',   admissionId   || null)
-        .input('OrderNumber',   orderNo)
-        .input('Priority',      priority)
-        .input('Notes',         notes         || null)
-        .input('CreatedBy',     req.user.id)
-        .query(`
-          INSERT INTO dbo.LabOrders
-            (HospitalId, PatientId, OrderedBy, AppointmentId, AdmissionId,
-             OrderNumber, Priority, Notes, CreatedBy)
-          OUTPUT INSERTED.Id
-          VALUES
-            (@HospitalId, @PatientId, @OrderedBy, @AppointmentId, @AdmissionId,
-             @OrderNumber, @Priority, @Notes, @CreatedBy);
-        `);
+      const result = await withTransaction(async (transaction) => {
+        const request = () => new sql.Request(transaction);
 
-      const labOrderId = orderRes.recordset[0].Id;
+        let existingOrder = null;
+        if (normalizedAppointmentId) {
+          const existingRes = await request()
+            .input('AppointmentId', sql.BigInt, normalizedAppointmentId)
+            .input('PatientId', sql.BigInt, normalizedPatientId)
+            .input('DoctorId', sql.BigInt, doctorId)
+            .query(`
+              SELECT TOP 1 Id, OrderNumber
+              FROM dbo.LabOrders
+              WHERE AppointmentId = @AppointmentId
+                AND PatientId = @PatientId
+                AND OrderedBy = @DoctorId
+              ORDER BY CreatedAt DESC, Id DESC
+            `);
 
-      for (const test of tests) {
-        await pool.request()
-          .input('LabOrderId', labOrderId)
-          .input('TestId',     test.testId)
-          .query(`
-            INSERT INTO dbo.LabOrderItems (LabOrderId, TestId)
-            VALUES (@LabOrderId, @TestId);
-          `);
-      }
+          existingOrder = existingRes.recordset[0] || null;
+        }
 
-      res.status(201).json({
+        let labOrderId = existingOrder?.Id || null;
+        let orderNumber = existingOrder?.OrderNumber || null;
+
+        if (existingOrder) {
+          await request()
+            .input('Id', sql.BigInt, labOrderId)
+            .input('AdmissionId', sql.BigInt, normalizedAdmissionId)
+            .input('Priority', sql.NVarChar(30), priority)
+            .input('Notes', sql.NVarChar(sql.MAX), notes || null)
+            .input('UpdatedBy', sql.BigInt, createdBy)
+            .query(`
+              UPDATE dbo.LabOrders
+              SET AdmissionId = COALESCE(@AdmissionId, AdmissionId),
+                  Priority = @Priority,
+                  Notes = @Notes,
+                  UpdatedBy = @UpdatedBy,
+                  UpdatedAt = SYSUTCDATETIME()
+              WHERE Id = @Id
+            `);
+
+          await request()
+            .input('LabOrderId', sql.BigInt, labOrderId)
+            .query(`
+              DELETE FROM dbo.LabOrderItems
+              WHERE LabOrderId = @LabOrderId
+            `);
+        } else {
+          orderNumber = `LAB-${today}-${Math.floor(10000 + Math.random() * 90000)}`;
+
+          const orderRes = await request()
+            .input('HospitalId', sql.BigInt, hospitalId)
+            .input('PatientId', sql.BigInt, normalizedPatientId)
+            .input('OrderedBy', sql.BigInt, doctorId)
+            .input('AppointmentId', sql.BigInt, normalizedAppointmentId)
+            .input('AdmissionId', sql.BigInt, normalizedAdmissionId)
+            .input('OrderNumber', sql.NVarChar(50), orderNumber)
+            .input('Priority', sql.NVarChar(30), priority)
+            .input('Notes', sql.NVarChar(sql.MAX), notes || null)
+            .input('CreatedBy', sql.BigInt, createdBy)
+            .query(`
+              INSERT INTO dbo.LabOrders
+                (HospitalId, PatientId, OrderedBy, AppointmentId, AdmissionId,
+                 OrderNumber, Priority, Notes, CreatedBy)
+              OUTPUT INSERTED.Id, INSERTED.OrderNumber
+              VALUES
+                (@HospitalId, @PatientId, @OrderedBy, @AppointmentId, @AdmissionId,
+                 @OrderNumber, @Priority, @Notes, @CreatedBy);
+            `);
+
+          labOrderId = orderRes.recordset[0].Id;
+          orderNumber = orderRes.recordset[0].OrderNumber;
+        }
+
+        for (const test of tests) {
+          await request()
+            .input('LabOrderId', sql.BigInt, labOrderId)
+            .input('TestId', sql.BigInt, parseInt(test.testId, 10))
+            .query(`
+              INSERT INTO dbo.LabOrderItems (LabOrderId, TestId)
+              VALUES (@LabOrderId, @TestId);
+            `);
+        }
+
+        return {
+          labOrderId,
+          orderNumber,
+          updated: Boolean(existingOrder),
+        };
+      });
+
+      res.status(result.updated ? 200 : 201).json({
         success: true,
-        message: 'Lab order created',
-        data: { id: labOrderId, orderNumber: orderNo }
+        message: result.updated ? 'Lab order updated' : 'Lab order created',
+        data: { id: result.labOrderId, orderNumber: result.orderNumber, updated: result.updated }
       });
     } catch (err) { next(err); }
   }

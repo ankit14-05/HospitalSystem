@@ -11,6 +11,8 @@ const { validationResult } = require('express-validator');
 const { success, created } = require('../utils/apiResponse');
 const AppError = require('../utils/AppError');
 const { sendOtpEmail, sendEmail } = require('../services/emailService');
+const notificationService = require('../services/notificationService');
+const { normalizeRole } = require('../constants/roles');
 
 // ── Multer: memory storage ────────────────────────────────────────────────────
 const upload = multer({
@@ -170,6 +172,58 @@ const generateUniqueDoctorId = async () => {
     console.warn(`Doctor ID collision on attempt ${attempt + 1}: ${did} — retrying...`);
   }
   throw new AppError('Failed to generate a unique Doctor ID. Please try again.', 500);
+};
+
+const getAdminRecipients = async (hospitalId) => {
+  const result = await query(
+    `SELECT Id
+     FROM dbo.Users
+     WHERE DeletedAt IS NULL
+       AND IsActive = 1
+       AND HospitalId = @HospitalId
+       AND Role IN ('superadmin', 'admin', 'auditor')`,
+    { HospitalId: { type: sql.BigInt, value: hospitalId } }
+  );
+
+  return result.recordset.map((row) => row.Id);
+};
+
+const notifyHospitalAdmins = async ({ hospitalId, title, body, link = null, dataJson = null }) => {
+  try {
+    const recipients = await getAdminRecipients(hospitalId);
+    if (!recipients.length) return;
+
+    await notificationService.createBulkNotifications(
+      recipients.map((userId) => ({
+        hospitalId,
+        userId,
+        notifType: 'system',
+        title,
+        body,
+        link,
+        dataJson,
+      }))
+    );
+  } catch (error) {
+    console.error('Admin notification failed (non-fatal):', error.message);
+  }
+};
+
+const notifyUser = async ({ hospitalId, userId, title, body, link = null, dataJson = null }) => {
+  if (!userId) return;
+  try {
+    await notificationService.createNotification({
+      hospitalId,
+      userId,
+      notifType: 'system',
+      title,
+      body,
+      link,
+      dataJson,
+    });
+  } catch (error) {
+    console.error('User notification failed (non-fatal):', error.message);
+  }
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -797,6 +851,14 @@ router.post('/patient', [
         .catch(err => console.error('Registration confirmation email failed (non-fatal):', err.message));
     }
 
+    notifyHospitalAdmins({
+      hospitalId: hid,
+      title: 'New patient registered',
+      body: `${firstName.trim()} ${lastName.trim()} has completed patient registration.`,
+      link: '/admin/people',
+      dataJson: { category: 'patient', username, patientId },
+    });
+
     console.log(`✅ Patient registered: ${username} | PatientId: ${patientId} | UserId: ${userId}`);
     created(res, { username, patientId }, 'Patient registered successfully. A confirmation email has been sent.');
   } catch (err) { next(err); }
@@ -974,6 +1036,14 @@ router.post('/doctor',
       sendDoctorSubmissionEmail({ to: email, name: firstName.trim(), username })
         .catch(err => console.error('Doctor submission email failed (non-fatal):', err.message));
 
+      notifyHospitalAdmins({
+        hospitalId: hid,
+        title: 'New doctor approval request',
+        body: `Dr. ${firstName.trim()} ${lastName.trim()} submitted registration and is awaiting review.`,
+        link: '/admin/doctor-approvals',
+        dataJson: { category: 'doctor', username, userId },
+      });
+
       console.log(`✅ Doctor registered: ${username} | UserId: ${userId} | Status: pending`);
       created(res, { username }, 'Doctor registration submitted. Awaiting admin approval.');
     } catch (err) { next(err); }
@@ -1039,8 +1109,9 @@ router.post('/staff',
       const dupPhone = await query(`SELECT Id FROM dbo.Users WHERE Phone = @p AND DeletedAt IS NULL`,{ p:{type:sql.NVarChar(20),value:phone}});
       if (dupPhone.recordset.length) throw new AppError('An account with this phone number already exists.', 409);
 
+      const normalizedRole = normalizeRole(role);
       const username = (reqUsername||'').trim().toLowerCase() ||
-        `${role.replace(/[^a-z]/g,'').slice(0,4)}_${phone.slice(-8)}_${Date.now().toString().slice(-4)}`;
+        `${normalizedRole.replace(/[^a-z]/g,'').slice(0,4)}_${phone.slice(-8)}_${Date.now().toString().slice(-4)}`;
 
       const dupUser = await query(`SELECT Id FROM dbo.Users WHERE Username = @u AND DeletedAt IS NULL`,{ u:{type:sql.NVarChar(80),value:username}});
       if (dupUser.recordset.length) throw new AppError('Username already taken.', 409);
@@ -1068,7 +1139,7 @@ router.post('/staff',
       const userRes = await query(
         `INSERT INTO dbo.Users (HospitalId,Username,Email,Phone,PhoneCountryCode,AltPhone,PasswordHash,Role,FirstName,LastName,Gender,DateOfBirth,IsActive,DepartmentId,EmployeeId,CreatedBy)
          OUTPUT INSERTED.Id VALUES (@hid,@uname,@email,@phone,@pcc,@alt,@hash,@role,@fname,@lname,@gender,@dob,0,@did,@empid,NULL)`,
-        {hid:{type:sql.BigInt,value:hid},uname:{type:sql.NVarChar(80),value:username},email:{type:sql.NVarChar(255),value:email},phone:{type:sql.NVarChar(20),value:phone},pcc:{type:sql.NVarChar(10),value:phoneCountryCode||'+91'},alt:{type:sql.NVarChar(20),value:altPhone||null},hash:{type:sql.NVarChar(sql.MAX),value:hash},role:{type:sql.NVarChar(30),value:role.trim()},fname:{type:sql.NVarChar(100),value:firstName.trim()},lname:{type:sql.NVarChar(100),value:lastName.trim()},gender:{type:sql.NVarChar(20),value:gender||null},dob:{type:sql.Date,value:dobValue},did:{type:sql.BigInt,value:departmentId||null},empid:{type:sql.NVarChar(60),value:employeeId||null}}
+        {hid:{type:sql.BigInt,value:hid},uname:{type:sql.NVarChar(80),value:username},email:{type:sql.NVarChar(255),value:email},phone:{type:sql.NVarChar(20),value:phone},pcc:{type:sql.NVarChar(10),value:phoneCountryCode||'+91'},alt:{type:sql.NVarChar(20),value:altPhone||null},hash:{type:sql.NVarChar(sql.MAX),value:hash},role:{type:sql.NVarChar(30),value:normalizedRole},fname:{type:sql.NVarChar(100),value:firstName.trim()},lname:{type:sql.NVarChar(100),value:lastName.trim()},gender:{type:sql.NVarChar(20),value:gender||null},dob:{type:sql.Date,value:dobValue},did:{type:sql.BigInt,value:departmentId||null},empid:{type:sql.NVarChar(60),value:employeeId||null}}
       );
       const userId = userRes.recordset[0].Id;
 
@@ -1082,6 +1153,15 @@ router.post('/staff',
       );
 
       if (req.files?.length) console.log(`📎 ${req.files.length} file(s) for staff ${userId}`);
+
+      notifyHospitalAdmins({
+        hospitalId: hid,
+        title: 'New staff approval request',
+        body: `${firstName.trim()} ${lastName.trim()} submitted staff registration and is awaiting review.`,
+        link: '/admin/staff-approvals',
+        dataJson: { category: 'staff', username, userId, role: normalizedRole },
+      });
+
       created(res, { username }, 'Staff registration submitted. Awaiting admin approval.');
     } catch (err) { next(err); }
   }
@@ -1121,7 +1201,7 @@ router.patch('/approve-doctor/:id', authenticate, authorize('superadmin','admin'
       const doctorProfileId = parseInt(req.params.id);
 
       const drRes = await query(
-        `SELECT dp.Id, dp.UserId,
+        `SELECT dp.Id, dp.UserId, dp.HospitalId,
                 CASE WHEN COL_LENGTH('dbo.DoctorProfiles','DoctorId') IS NOT NULL
                      THEN dp.DoctorId ELSE NULL END AS DoctorId,
                 u.Email, u.FirstName, u.LastName, u.Username
@@ -1166,6 +1246,15 @@ router.patch('/approve-doctor/:id', authenticate, authorize('superadmin','admin'
         }
 
         console.log(`✅ Doctor approved: ${dr.Username} | DoctorId: ${doctorId}`);
+        notifyUser({
+          hospitalId: dr.HospitalId,
+          userId: dr.UserId,
+          title: 'Doctor registration approved',
+          body: `Your doctor profile has been approved. Doctor ID: ${doctorId}.`,
+          link: '/profile/me',
+          dataJson: { action: 'approved', doctorId },
+        });
+
         return success(res, { doctorId }, 'Doctor approved successfully.');
       }
 
@@ -1195,6 +1284,17 @@ router.patch('/approve-doctor/:id', authenticate, authorize('superadmin','admin'
       }
 
       console.log(`📋 Doctor ${action}: ${dr.Username}`);
+      notifyUser({
+        hospitalId: dr.HospitalId,
+        userId: dr.UserId,
+        title: `Doctor registration ${action}`,
+        body: action === 'rejected'
+          ? `Your doctor registration was rejected. ${rejectionReason || ''}`.trim()
+          : 'Your doctor registration was deferred for further review.',
+        link: '/login',
+        dataJson: { action, rejectionReason: rejectionReason || null },
+      });
+
       success(res, {}, `Doctor ${action} successfully.`);
     } catch (err) { next(err); }
   }
@@ -1203,9 +1303,52 @@ router.patch('/approve-doctor/:id', authenticate, authorize('superadmin','admin'
 router.patch('/approve-staff/:id', authenticate, authorize('superadmin','admin'),
   [body('action').isIn(['approved','rejected']).withMessage('Invalid action'),body('rejectionReason').if(body('action').equals('rejected')).notEmpty().withMessage('Rejection reason required')],
   async(req,res,next)=>{
-    try{handleV(req);const{action,rejectionReason}=req.body;const staffProfileId=parseInt(req.params.id);
-      await query(`UPDATE dbo.StaffProfiles SET ApprovalStatus=@status,ApprovedBy=@by,ApprovedAt=SYSUTCDATETIME(),RejectionReason=@reason WHERE Id=@id`,{status:{type:sql.NVarChar(20),value:action},by:{type:sql.BigInt,value:req.user.userId},reason:{type:sql.NVarChar(1000),value:rejectionReason||null},id:{type:sql.BigInt,value:staffProfileId}});
-      if(action==='approved')await query(`UPDATE dbo.Users SET IsActive=1 WHERE Id=(SELECT UserId FROM dbo.StaffProfiles WHERE Id=@id)`,{id:{type:sql.BigInt,value:staffProfileId}});
+    try{
+      handleV(req);
+      const { action, rejectionReason } = req.body;
+      const staffProfileId = parseInt(req.params.id);
+
+      const staffRes = await query(
+        `SELECT sp.Id, sp.UserId, sp.HospitalId, u.FirstName, u.LastName
+         FROM dbo.StaffProfiles sp
+         JOIN dbo.Users u ON u.Id = sp.UserId
+         WHERE sp.Id = @id`,
+        { id: { type: sql.BigInt, value: staffProfileId } }
+      );
+
+      const staff = staffRes.recordset[0];
+      if (!staff) throw new AppError('Staff profile not found.', 404);
+
+      await query(
+        `UPDATE dbo.StaffProfiles
+         SET ApprovalStatus=@status,ApprovedBy=@by,ApprovedAt=SYSUTCDATETIME(),RejectionReason=@reason
+         WHERE Id=@id`,
+        {
+          status:{type:sql.NVarChar(20),value:action},
+          by:{type:sql.BigInt,value:req.user.userId},
+          reason:{type:sql.NVarChar(1000),value:rejectionReason||null},
+          id:{type:sql.BigInt,value:staffProfileId}
+        }
+      );
+
+      if(action==='approved') {
+        await query(
+          `UPDATE dbo.Users SET IsActive=1 WHERE Id=(SELECT UserId FROM dbo.StaffProfiles WHERE Id=@id)`,
+          { id:{type:sql.BigInt,value:staffProfileId} }
+        );
+      }
+
+      notifyUser({
+        hospitalId: staff.HospitalId,
+        userId: staff.UserId,
+        title: `Staff registration ${action}`,
+        body: action === 'approved'
+          ? 'Your staff registration has been approved.'
+          : `Your staff registration was rejected. ${rejectionReason || ''}`.trim(),
+        link: action === 'approved' ? '/profile/me' : '/login',
+        dataJson: { action, rejectionReason: rejectionReason || null },
+      });
+
       success(res,{},`Staff member ${action} successfully.`);
     }catch(err){next(err);}
   }

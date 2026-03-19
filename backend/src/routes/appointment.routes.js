@@ -14,11 +14,16 @@ router.patch ('/notifications/:id/read', ctrl.markOneRead);
 
 // ── Appointment stats ─────────────────────────────────────────────────────────
 router.get('/stats',
-  authorize('admin', 'superadmin', 'doctor', 'receptionist'),
+  authorize('admin', 'superadmin', 'doctor', 'receptionist', 'opdmanager', 'opd_manager'),
   ctrl.stats
 );
 
 // ── My appointments (patient / doctor view) ───────────────────────────────────
+router.get('/filters',
+  authorize('admin', 'superadmin', 'doctor', 'receptionist', 'nurse', 'opdmanager', 'opd_manager'),
+  ctrl.filters
+);
+
 router.get('/my', ctrl.myAppointments);
 
 // ── Doctor: today's OPD queue ─────────────────────────────────────────────────
@@ -39,28 +44,34 @@ router.get('/pending-requests',
 // GET /appointments/slots?doctorId=X&date=YYYY-MM-DD
 router.get('/slots', ctrl.getSlots);
 
+// ── Send daily schedule to doctor (OPD Manager / Admin) ─────────────────────
+router.post('/send-doctor-schedule',
+  authorize('admin', 'superadmin', 'opdmanager', 'opd_manager'),
+  ctrl.sendDailyScheduleEmail
+);
+
 // ── Book ──────────────────────────────────────────────────────────────────────
 router.post('/',
-  authorize('admin', 'superadmin', 'receptionist', 'patient'),
+  authorize('admin', 'superadmin', 'receptionist', 'patient', 'opdmanager', 'opd_manager'),
   v.bookAppointment,
   ctrl.book
 );
 
-// ── List (admin / receptionist / doctor) ─────────────────────────────────────
+// ── List (admin / receptionist / doctor / opdmanager) ────────────────────────
 router.get('/',
-  authorize('admin', 'superadmin', 'receptionist', 'doctor', 'nurse'),
+  authorize('admin', 'superadmin', 'receptionist', 'doctor', 'nurse', 'opdmanager', 'opd_manager'),
   ctrl.list
 );
 
 // ── Get one — MUST be after all named routes to avoid swallowing them ─────────
 router.get('/:id',
-  authorize('admin', 'superadmin', 'receptionist', 'doctor', 'nurse', 'patient'),
+  authorize('admin', 'superadmin', 'receptionist', 'doctor', 'nurse', 'patient', 'opdmanager', 'opd_manager'),
   ctrl.getOne
 );
 
 // ── Update status (confirm / complete / no-show) ─────────────────────────────
 router.patch('/:id/status',
-  authorize('admin', 'superadmin', 'receptionist', 'doctor', 'nurse'),
+  authorize('admin', 'superadmin', 'receptionist', 'doctor', 'nurse', 'opdmanager', 'opd_manager'),
   v.updateStatus,
   ctrl.updateStatus
 );
@@ -71,15 +82,21 @@ router.patch('/:id/complete',
   ctrl.completeAppointment
 );
 
+// ── Doctor queue: call patient in ─────────────────────────────────────────────
+router.patch('/:id/call',
+  authorize('doctor', 'admin', 'superadmin'),
+  ctrl.callIn
+);
+
 // ── Cancel ────────────────────────────────────────────────────────────────────
 router.patch('/:id/cancel',
-  authorize('admin', 'superadmin', 'receptionist', 'doctor', 'nurse', 'patient'),
+  authorize('admin', 'superadmin', 'receptionist', 'doctor', 'nurse', 'patient', 'opdmanager', 'opd_manager'),
   ctrl.cancel
 );
 
 // ── Reschedule ────────────────────────────────────────────────────────────────
 router.patch('/:id/reschedule',
-  authorize('admin', 'superadmin', 'receptionist', 'doctor', 'nurse', 'patient'),
+  authorize('admin', 'superadmin', 'receptionist', 'doctor', 'nurse', 'patient', 'opdmanager', 'opd_manager'),
   v.reschedule,
   ctrl.reschedule
 );

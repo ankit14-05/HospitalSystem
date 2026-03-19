@@ -361,14 +361,15 @@ router.get('/today-schedule', authorize('doctor','admin','superadmin'), async (r
 // ADMIN-ASSIGNED DOCTOR SCHEDULES (uses DoctorSchedules table)
 // ═══════════════════════════════════════════════════════════════════════
 // Admin routes — manage any doctor's schedule
-router.get('/doctor-schedules',        authenticate, authorize('admin','superadmin','auditor'), dsCtrl.getAllDoctorSchedules);
-router.get('/doctor-schedules/:id',    authenticate, authorize('admin','superadmin','auditor'), dsCtrl.getDoctorScheduleById);
-router.post('/doctor-schedules',       authenticate, authorize('admin','superadmin'),           dsCtrl.createDoctorSchedule);
-router.put('/doctor-schedules/:id',    authenticate, authorize('admin','superadmin'),           dsCtrl.updateDoctorSchedule);
-router.delete('/doctor-schedules/:id', authenticate, authorize('admin','superadmin'),           dsCtrl.deleteDoctorSchedule);
+router.get('/doctor-schedules',        authenticate, authorize('admin','superadmin','auditor','opdmanager','opd_manager'), dsCtrl.getAllDoctorSchedules);
+router.get('/doctor-schedules/:id',    authenticate, authorize('admin','superadmin','auditor','opdmanager','opd_manager'), dsCtrl.getDoctorScheduleById);
+router.post('/doctor-schedules',       authenticate, authorize('admin','superadmin','opdmanager','opd_manager'),           dsCtrl.createDoctorSchedule);
+router.put('/doctor-schedules/:id',    authenticate, authorize('admin','superadmin','opdmanager','opd_manager'),           dsCtrl.updateDoctorSchedule);
+router.delete('/doctor-schedules/:id', authenticate, authorize('admin','superadmin','opdmanager','opd_manager'),           dsCtrl.deleteDoctorSchedule);
+router.get('/rooms',                   authenticate, authorize('admin','superadmin','auditor','opdmanager','opd_manager'), dsCtrl.getRooms);
 
 // Doctors list for dropdown (admin only)
-router.get('/doctors-list',            authenticate, authorize('admin','superadmin','auditor'), dsCtrl.getDoctorsList);
+router.get('/doctors-list',            authenticate, authorize('admin','superadmin','auditor','opdmanager','opd_manager'), dsCtrl.getDoctorsList);
 
 
 module.exports = router;

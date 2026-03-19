@@ -12,9 +12,13 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../../context/AuthContext';
 import AppointmentBookingModal from './AppointmentBookingModal';
 import AppointmentDetailModal from './AppointmentDetailModal';
+import { APPOINTMENT_DESK_ROLES } from '../../config/roles';
+import { getPageData, getPayload } from '../../utils/apiPayload';
+import CompleteAppointmentModal from '../../components/appointments/CompleteAppointmentModal';
 
 // ── Status config ─────────────────────────────────────────────────────────────
 const STATUS_CONFIG = {
+  Pending:     { color: 'bg-amber-100 text-amber-700 border-amber-200',   dot: 'bg-amber-500',   label: 'Pending'     },
   Scheduled:   { color: 'bg-blue-100 text-blue-700 border-blue-200',     dot: 'bg-blue-500',    label: 'Scheduled'   },
   Confirmed:   { color: 'bg-emerald-100 text-emerald-700 border-emerald-200', dot: 'bg-emerald-500', label: 'Confirmed' },
   Completed:   { color: 'bg-purple-100 text-purple-700 border-purple-200', dot: 'bg-purple-500',  label: 'Completed'  },
@@ -32,6 +36,61 @@ const StatusBadge = ({ status }) => {
     </span>
   );
 };
+
+const formatAppointmentDate = (value) => value
+  ? new Date(value).toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' })
+  : '—';
+
+const formatAppointmentTime = (value) => {
+  if (!value) return '—';
+  const text = String(value).slice(0, 5);
+  const [hours, minutes] = text.split(':').map(Number);
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) return value;
+  const suffix = hours >= 12 ? 'PM' : 'AM';
+  return `${(hours % 12) || 12}:${String(minutes).padStart(2, '0')} ${suffix}`;
+};
+
+const matchesSearch = (appointment, query) => {
+  if (!query) return true;
+  const q = query.toLowerCase();
+  return (
+    `${appointment.PatientFirstName || ''} ${appointment.PatientLastName || ''}`.toLowerCase().includes(q) ||
+    `${appointment.DoctorFirstName || ''} ${appointment.DoctorLastName || ''}`.toLowerCase().includes(q) ||
+    String(appointment.AppointmentNo || '').toLowerCase().includes(q) ||
+    String(appointment.DepartmentName || '').toLowerCase().includes(q) ||
+    String(appointment.UHID || '').toLowerCase().includes(q) ||
+    String(appointment.PatientPhone || '').toLowerCase().includes(q)
+  );
+};
+
+const buildStatsFromAppointments = (rows = []) => {
+  const today = new Date().toISOString().slice(0, 10);
+
+  return rows.reduce((stats, appointment) => {
+    const status = appointment.Status || 'Scheduled';
+    if (Object.prototype.hasOwnProperty.call(stats, status)) {
+      stats[status] += 1;
+    }
+    if (String(appointment.AppointmentDate || '').slice(0, 10) === today && status !== 'Cancelled') {
+      stats.TodayTotal += 1;
+    }
+    return stats;
+  }, {
+    TodayTotal: 0,
+    Scheduled: 0,
+    Confirmed: 0,
+    Completed: 0,
+    Cancelled: 0,
+    NoShow: 0,
+    Rescheduled: 0,
+  });
+};
+
+const getPrescriptionCount = (appointment) =>
+  Number(appointment?.PrescriptionCount || appointment?.prescriptionCount || 0) || 0;
+
+const getLabOrderCount = (appointment) =>
+  Number(appointment?.LabOrderCount || appointment?.labOrderCount || 0) || 0;
 
 // ── Skeleton row ──────────────────────────────────────────────────────────────
 const SkRow = () => (
@@ -195,23 +254,76 @@ export default function AppointmentsPage() {
   const LIMIT = 15;
 
   // Filters
+  const [searchInput,   setSearchInput]   = useState('');
   const [search,        setSearch]        = useState('');
   const [filterStatus,  setFilterStatus]  = useState('');
   const [filterDate,    setFilterDate]    = useState('');
+  const [filterDoctor,  setFilterDoctor]  = useState('');
+  const [filterDepartment, setFilterDepartment] = useState('');
+  const [filterOptions, setFilterOptions] = useState({ doctors: [], departments: [] });
+  const [filtersLoading, setFiltersLoading] = useState(false);
 
   // Modals
   const [showBook,       setShowBook]     = useState(false);
+  const [bookingPrefill, setBookingPrefill] = useState(null);
   const [cancelAppt,     setCancelAppt]   = useState(null);
   const [reschedAppt,    setReschedAppt]  = useState(null);
   const [detailAppt,     setDetailAppt]   = useState(null);
+  const [completeAppt,   setCompleteAppt] = useState(null);
   const [actionLoading,  setActionLoading]= useState(null);
+
+  const isPatientView = user?.role === 'patient';
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => setSearch(searchInput.trim()), 250);
+    return () => window.clearTimeout(timeoutId);
+  }, [searchInput]);
+
+  const loadFilterOptions = useCallback(async () => {
+    if (isPatientView) {
+      setFilterOptions({ doctors: [], departments: [] });
+      return;
+    }
+
+    setFiltersLoading(true);
+    try {
+      const payload = getPayload(await api.get('/appointments/filters')) || {};
+      setFilterOptions({
+        doctors: Array.isArray(payload.doctors) ? payload.doctors : [],
+        departments: Array.isArray(payload.departments) ? payload.departments : [],
+      });
+    } catch (error) {
+      toast.error(error?.message || 'Could not load appointment filters');
+      setFilterOptions({ doctors: [], departments: [] });
+    } finally {
+      setFiltersLoading(false);
+    }
+  }, [isPatientView]);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      if (isPatientView) {
+        const payload = getPayload(await api.get('/appointments/my')) || {};
+        const allItems = Array.isArray(payload.data) ? payload.data : [];
+        const filteredItems = allItems.filter((appointment) => (
+          (!filterStatus || appointment.Status === filterStatus) &&
+          (!filterDate || String(appointment.AppointmentDate || '').slice(0, 10) === filterDate) &&
+          matchesSearch(appointment, search)
+        ));
+
+        setTotal(filteredItems.length);
+        setAppointments(filteredItems.slice((page - 1) * LIMIT, page * LIMIT));
+        setStats(buildStatsFromAppointments(allItems));
+        return;
+      }
+
       const params = new URLSearchParams({ page, limit: LIMIT });
       if (filterStatus) params.append('status', filterStatus);
-      if (filterDate)   params.append('date',   filterDate);
+      if (filterDate) params.append('date', filterDate);
+      if (filterDoctor) params.append('doctorId', filterDoctor);
+      if (filterDepartment) params.append('departmentId', filterDepartment);
+      if (search) params.append('search', search);
 
       const [apptRes, statsRes] = await Promise.allSettled([
         api.get(`/appointments?${params}`),
@@ -219,18 +331,23 @@ export default function AppointmentsPage() {
       ]);
 
       if (apptRes.status === 'fulfilled') {
-        const d = apptRes.value?.data;
-        setAppointments(d?.data || []);
-        setTotal(d?.total || 0);
+        const pageData = getPageData(apptRes.value);
+        setAppointments(pageData.items);
+        setTotal(pageData.total);
+      } else {
+        toast.error(apptRes.reason?.message || 'Failed to load appointments');
       }
+
       if (statsRes.status === 'fulfilled') {
-        setStats(statsRes.value?.data || {});
+        setStats(getPayload(statsRes.value) || {});
       }
-    } catch {}
-    setLoading(false);
-  }, [page, filterStatus, filterDate]);
+    } finally {
+      setLoading(false);
+    }
+  }, [page, filterStatus, filterDate, filterDoctor, filterDepartment, isPatientView, search]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadFilterOptions(); }, [loadFilterOptions]);
 
   useEffect(() => {
     const refreshAppointments = () => {
@@ -259,26 +376,48 @@ export default function AppointmentsPage() {
     setActionLoading(id);
     try {
       await api.patch(`/appointments/${id}/status`, { status, ...extra });
-      toast.success(`Appointment ${status.toLowerCase()} — notifications sent ✓`);
+      toast.success(
+        status === 'NoShow'
+          ? 'Appointment marked as missed. The patient has been notified and the slot is open again.'
+          : `Appointment ${status.toLowerCase()} — notifications sent ✓`
+      );
       load();
     } catch (e) {
       toast.error(e?.message || 'Action failed');
     } finally { setActionLoading(null); }
   };
 
-  // Client-side search filter
-  const filtered = appointments.filter(a => {
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return (
-      `${a.PatientFirstName} ${a.PatientLastName}`.toLowerCase().includes(q) ||
-      `${a.DoctorFirstName} ${a.DoctorLastName}`.toLowerCase().includes(q) ||
-      (a.AppointmentNo || '').toLowerCase().includes(q) ||
-      (a.DepartmentName || '').toLowerCase().includes(q)
-    );
-  });
+  const handleMarkMissed = async (appointment) => {
+    const id = appointment?.Id;
+    if (!id) return;
 
-  const totalPages = Math.ceil(total / LIMIT);
+    setActionLoading(id);
+    try {
+      await api.patch(`/appointments/${id}/status`, { status: 'NoShow' });
+      toast.success('Appointment marked as missed. The patient has been notified and the slot is open again.');
+      setBookingPrefill({
+        doctorId: appointment.DoctorProfileId || appointment.DoctorId,
+        departmentId: appointment.DepartmentId,
+        appointmentDate: String(appointment.AppointmentDate || '').slice(0, 10),
+        appointmentTime: String(appointment.AppointmentTime || '').slice(0, 5),
+        visitType: appointment.VisitType || 'OPD',
+        priority: appointment.Priority || 'Normal',
+      });
+      setShowBook(true);
+      load();
+    } catch (error) {
+      toast.error(error?.message || 'Could not mark the appointment as missed');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const appointmentRows = Array.isArray(appointments) ? appointments : [];
+  const filtered = appointmentRows;
+
+  const totalPages = Math.ceil((total || 0) / LIMIT);
+  const isDeskRole = APPOINTMENT_DESK_ROLES.includes(user?.role);
+  const canComplete = user?.role === 'doctor';
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -295,8 +434,8 @@ export default function AppointmentsPage() {
           <button onClick={load} className="p-2.5 rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-50">
             <RefreshCw size={15} />
           </button>
-          {['admin', 'superadmin', 'receptionist'].includes(user?.role) && (
-            <button onClick={() => setShowBook(true)}
+          {isDeskRole && (
+            <button onClick={() => { setBookingPrefill(null); setShowBook(true); }}
               className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 transition-colors shadow-sm shadow-indigo-200">
               <Plus size={15} /> New Appointment
             </button>
@@ -318,8 +457,8 @@ export default function AppointmentsPage() {
       <div className="flex flex-wrap gap-3 items-center">
         <div className="relative flex-1 min-w-48">
           <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="Search patient, doctor, ref no…"
+          <input value={searchInput} onChange={e => { setSearchInput(e.target.value); setPage(1); }}
+            placeholder="Search patient, doctor, UHID, phone…"
             className="w-full pl-9 pr-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 bg-white" />
         </div>
         <select value={filterStatus} onChange={e => { setFilterStatus(e.target.value); setPage(1); }}
@@ -327,10 +466,48 @@ export default function AppointmentsPage() {
           <option value="">All Statuses</option>
           {Object.keys(STATUS_CONFIG).map(s => <option key={s} value={s}>{STATUS_CONFIG[s].label}</option>)}
         </select>
+        {!isPatientView && (
+          <>
+            <select
+              value={filterDepartment}
+              onChange={e => { setFilterDepartment(e.target.value); setPage(1); }}
+              disabled={filtersLoading}
+              className="px-3 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 bg-white min-w-40 disabled:bg-slate-50"
+            >
+              <option value="">All Departments</option>
+              {filterOptions.departments.map((department) => (
+                <option key={department.DepartmentId} value={department.DepartmentId}>
+                  {department.DepartmentName}
+                </option>
+              ))}
+            </select>
+            <select
+              value={filterDoctor}
+              onChange={e => { setFilterDoctor(e.target.value); setPage(1); }}
+              disabled={filtersLoading}
+              className="px-3 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 bg-white min-w-48 disabled:bg-slate-50"
+            >
+              <option value="">All Doctors</option>
+              {filterOptions.doctors.map((doctor) => (
+                <option key={doctor.DoctorId} value={doctor.DoctorId}>
+                  Dr. {doctor.DoctorName}{doctor.DepartmentName ? ` • ${doctor.DepartmentName}` : ''}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
         <input type="date" value={filterDate} onChange={e => { setFilterDate(e.target.value); setPage(1); }}
           className="px-3 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 bg-white" />
-        {(filterStatus || filterDate || search) && (
-          <button onClick={() => { setFilterStatus(''); setFilterDate(''); setSearch(''); setPage(1); }}
+        {(filterStatus || filterDate || searchInput || filterDoctor || filterDepartment) && (
+          <button onClick={() => {
+            setFilterStatus('');
+            setFilterDate('');
+            setFilterDoctor('');
+            setFilterDepartment('');
+            setSearchInput('');
+            setSearch('');
+            setPage(1);
+          }}
             className="px-3 py-2.5 rounded-xl border border-slate-200 text-sm text-slate-500 hover:bg-slate-50 flex items-center gap-1.5">
             <X size={13} /> Clear
           </button>
@@ -388,14 +565,24 @@ export default function AppointmentsPage() {
                         <td className="px-4 py-3.5">
                           <p className="font-medium text-slate-700">Dr. {a.DoctorFirstName} {a.DoctorLastName}</p>
                           {a.ConsultationFee && <p className="text-xs text-slate-400">₹{a.ConsultationFee}</p>}
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {getPrescriptionCount(a) > 0 ? (
+                              <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-700">Rx ready</span>
+                            ) : null}
+                            {getLabOrderCount(a) > 0 ? (
+                              <span className="rounded-full bg-cyan-50 px-2.5 py-1 text-[11px] font-bold text-cyan-700">Tests ordered</span>
+                            ) : null}
+                          </div>
                         </td>
 
                         {/* Date & Time */}
                         <td className="px-4 py-3.5 whitespace-nowrap">
                           <p className="font-semibold text-slate-700">
-                            {new Date(a.AppointmentDate).toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' })}
+                            {formatAppointmentDate(a.AppointmentDate)}
                           </p>
-                          <p className="text-xs text-slate-400 flex items-center gap-1"><Clock size={10} /> {a.AppointmentTime}</p>
+                          <p className="mt-1 inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                            <Clock size={10} /> {formatAppointmentTime(a.AppointmentTime)}
+                          </p>
                         </td>
 
                         {/* Dept */}
@@ -423,7 +610,7 @@ export default function AppointmentsPage() {
                             </button>
 
                             {/* Confirm */}
-                            {a.Status === 'Scheduled' && (
+                            {isDeskRole && a.Status === 'Scheduled' && (
                               <button onClick={() => handleStatusUpdate(a.Id, 'Confirmed')}
                                 disabled={isActioning}
                                 className="p-1.5 rounded-lg hover:bg-emerald-50 text-slate-400 hover:text-emerald-600 transition-colors disabled:opacity-40" title="Confirm">
@@ -432,16 +619,27 @@ export default function AppointmentsPage() {
                             )}
 
                             {/* Complete */}
-                            {['Scheduled', 'Confirmed'].includes(a.Status) && (
-                              <button onClick={() => handleStatusUpdate(a.Id, 'Completed')}
+                            {canComplete && ['Scheduled', 'Confirmed', 'Rescheduled'].includes(a.Status) && (
+                              <button onClick={() => setCompleteAppt(a)}
                                 disabled={isActioning}
                                 className="p-1.5 rounded-lg hover:bg-purple-50 text-slate-400 hover:text-purple-600 transition-colors disabled:opacity-40" title="Mark Complete">
                                 <Check size={13} />
                               </button>
                             )}
 
+                            {isDeskRole && ['Scheduled', 'Confirmed', 'Rescheduled'].includes(a.Status) && (
+                              <button
+                                onClick={() => handleMarkMissed(a)}
+                                disabled={isActioning}
+                                className="p-1.5 rounded-lg hover:bg-orange-50 text-slate-400 hover:text-orange-600 transition-colors disabled:opacity-40"
+                                title="Mark as missed"
+                              >
+                                <AlertCircle size={13} />
+                              </button>
+                            )}
+
                             {/* Reschedule */}
-                            {!['Cancelled', 'Completed'].includes(a.Status) && (
+                            {isDeskRole && !['Cancelled', 'Completed'].includes(a.Status) && (
                               <button onClick={() => setReschedAppt(a)}
                                 className="p-1.5 rounded-lg hover:bg-amber-50 text-slate-400 hover:text-amber-600 transition-colors" title="Reschedule">
                                 <RotateCcw size={13} />
@@ -449,7 +647,7 @@ export default function AppointmentsPage() {
                             )}
 
                             {/* Cancel */}
-                            {!['Cancelled', 'Completed'].includes(a.Status) && (
+                            {isDeskRole && !['Cancelled', 'Completed'].includes(a.Status) && (
                               <button onClick={() => setCancelAppt(a)}
                                 className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500 transition-colors" title="Cancel">
                                 <XCircle size={13} />
@@ -495,10 +693,46 @@ export default function AppointmentsPage() {
       </div>
 
       {/* ── Modals ──────────────────────────────────────────────────────────── */}
-      {showBook    && <AppointmentBookingModal onClose={() => setShowBook(false)} onSuccess={() => { setShowBook(false); load(); }} />}
+      {showBook && (
+        <AppointmentBookingModal
+          onClose={() => {
+            setShowBook(false);
+            setBookingPrefill(null);
+          }}
+          onSuccess={() => {
+            setShowBook(false);
+            setBookingPrefill(null);
+            load();
+          }}
+          prefillDoctorId={bookingPrefill?.doctorId || null}
+          prefillDepartmentId={bookingPrefill?.departmentId || ''}
+          prefillDate={bookingPrefill?.appointmentDate || ''}
+          prefillTime={bookingPrefill?.appointmentTime || ''}
+          prefillVisitType={bookingPrefill?.visitType || 'OPD'}
+          prefillPriority={bookingPrefill?.priority || 'Normal'}
+        />
+      )}
       {cancelAppt  && <CancelModal     appt={cancelAppt}  onClose={() => setCancelAppt(null)}  onDone={() => { setCancelAppt(null);  load(); }} />}
       {reschedAppt && <RescheduleModal appt={reschedAppt} onClose={() => setReschedAppt(null)} onDone={() => { setReschedAppt(null); load(); }} />}
-      {detailAppt  && <AppointmentDetailModal appt={detailAppt} onClose={() => setDetailAppt(null)} onAction={load} />}
+      {detailAppt  && (
+        <AppointmentDetailModal
+          appt={detailAppt}
+          onClose={() => setDetailAppt(null)}
+          onAction={load}
+          onCompleteAppointment={canComplete ? setCompleteAppt : null}
+        />
+      )}
+      {completeAppt && (
+        <CompleteAppointmentModal
+          appointment={completeAppt}
+          onClose={() => setCompleteAppt(null)}
+          onCompleted={() => {
+            setCompleteAppt(null);
+            load();
+          }}
+        />
+      )}
     </div>
   );
 }
+

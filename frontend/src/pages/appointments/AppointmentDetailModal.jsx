@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import {
   X, Calendar, Clock, User, Stethoscope, Building2, Hash,
   CheckCircle, XCircle, RotateCcw, Phone, Mail, FileText,
-  AlertCircle, Check, ArrowRight, Bell
+  AlertCircle, Check, ArrowRight, Bell, FlaskConical
 } from 'lucide-react';
 import api from '../../services/api';
 import toast from 'react-hot-toast';
@@ -28,7 +28,23 @@ const InfoRow = ({ icon: Icon, label, value }) => (
   </div>
 );
 
-export default function AppointmentDetailModal({ appt, onClose, onAction }) {
+const DESK_ROLES = ['admin', 'superadmin', 'receptionist', 'nurse', 'opdmanager', 'opd_manager'];
+const CANCELLATION_ROLES = [...DESK_ROLES, 'doctor', 'patient'];
+
+const formatAppointmentDate = (value) => value
+  ? new Date(value).toLocaleDateString('en-IN', { weekday:'long', day:'2-digit', month:'long', year:'numeric' })
+  : '—';
+
+const formatAppointmentTime = (value) => {
+  if (!value) return '—';
+  const text = String(value).slice(0, 5);
+  const [hours, minutes] = text.split(':').map(Number);
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) return value;
+  const suffix = hours >= 12 ? 'PM' : 'AM';
+  return `${(hours % 12) || 12}:${String(minutes).padStart(2, '0')} ${suffix}`;
+};
+
+export default function AppointmentDetailModal({ appt, onClose, onAction, onCompleteAppointment = null }) {
   const { user } = useAuth();
   const [actionLoading, setActionLoading] = useState(null);
   const [cancelReason,  setCancelReason]  = useState('');
@@ -51,13 +67,16 @@ export default function AppointmentDetailModal({ appt, onClose, onAction }) {
       onAction();
       onClose();
     } catch (e) {
-      toast.error(e.response?.data?.message || 'Action failed');
+      toast.error(e?.message || e?.response?.data?.message || 'Action failed');
     } finally {
       setActionLoading(null);
     }
   };
 
   const isTerminal = ['Cancelled', 'Completed'].includes(appt.Status);
+  const isDoctor = user?.role === 'doctor';
+  const isDeskRole = DESK_ROLES.includes(user?.role);
+  const canCancel = CANCELLATION_ROLES.includes(user?.role);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
@@ -89,10 +108,8 @@ export default function AppointmentDetailModal({ appt, onClose, onAction }) {
             </div>
             <div>
               <p className="text-xs text-indigo-400 font-semibold uppercase tracking-wide">Token Number</p>
-              <p className="text-sm font-bold text-indigo-800 mt-0.5">
-                {new Date(appt.AppointmentDate).toLocaleDateString('en-IN', { weekday:'long', day:'2-digit', month:'long', year:'numeric' })}
-              </p>
-              <p className="text-sm text-indigo-600 font-semibold">{appt.AppointmentTime}</p>
+              <p className="text-sm font-bold text-indigo-800 mt-0.5">{formatAppointmentDate(appt.AppointmentDate)}</p>
+              <p className="text-sm text-indigo-600 font-semibold">{formatAppointmentTime(appt.AppointmentTime)}</p>
             </div>
           </div>
 
@@ -144,10 +161,12 @@ export default function AppointmentDetailModal({ appt, onClose, onAction }) {
           {/* Details */}
           <div className="bg-white border border-slate-100 rounded-2xl px-5 py-4">
             <InfoRow icon={Building2} label="Department"  value={appt.DepartmentName} />
-            <InfoRow icon={Calendar}  label="Date"        value={new Date(appt.AppointmentDate).toLocaleDateString('en-IN', { weekday:'long', day:'2-digit', month:'long', year:'numeric' })} />
-            <InfoRow icon={Clock}     label="Time"        value={appt.AppointmentTime} />
+            <InfoRow icon={Calendar}  label="Date"        value={formatAppointmentDate(appt.AppointmentDate)} />
+            <InfoRow icon={Clock}     label="Time"        value={formatAppointmentTime(appt.AppointmentTime)} />
             <InfoRow icon={Hash}      label="Visit Type"  value={appt.VisitType} />
             <InfoRow icon={AlertCircle} label="Priority"  value={appt.Priority} />
+            <InfoRow icon={FileText} label="Prescription" value={(Number(appt.PrescriptionCount || 0) || 0) > 0 ? `Issued (${appt.PrescriptionCount})` : 'Not issued'} />
+            <InfoRow icon={FlaskConical} label="Tests" value={(Number(appt.LabOrderCount || 0) || 0) > 0 ? `Ordered (${appt.LabOrderCount})` : 'No tests ordered'} />
             {appt.Reason && <InfoRow icon={FileText} label="Reason" value={appt.Reason} />}
             {appt.CancelReason && <InfoRow icon={XCircle} label="Cancel Reason" value={appt.CancelReason} />}
           </div>
@@ -177,35 +196,44 @@ export default function AppointmentDetailModal({ appt, onClose, onAction }) {
             <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-3">Quick Actions</p>
             <div className="flex flex-wrap gap-2">
 
-              {appt.Status === 'Scheduled' && (
+              {isDeskRole && appt.Status === 'Scheduled' && (
                 <button onClick={() => doAction('Confirmed')} disabled={!!actionLoading}
                   className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700 disabled:opacity-50 transition-colors">
                   {actionLoading === 'Confirmed' ? '…' : <><CheckCircle size={13} /> Confirm</>}
                 </button>
               )}
 
-              {['Scheduled', 'Confirmed'].includes(appt.Status) && (
-                <button onClick={() => doAction('Completed')} disabled={!!actionLoading}
+              {isDoctor && ['Scheduled', 'Confirmed', 'Rescheduled'].includes(appt.Status) && (
+                <button
+                  onClick={() => {
+                    if (typeof onCompleteAppointment === 'function') {
+                      onClose();
+                      onCompleteAppointment(appt);
+                      return;
+                    }
+                    doAction('Completed');
+                  }}
+                  disabled={!!actionLoading}
                   className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-purple-600 text-white text-xs font-bold hover:bg-purple-700 disabled:opacity-50 transition-colors">
                   {actionLoading === 'Completed' ? '…' : <><Check size={13} /> Mark Complete</>}
                 </button>
               )}
 
-              {['Scheduled', 'Confirmed'].includes(appt.Status) && (
+              {isDeskRole && ['Scheduled', 'Confirmed', 'Rescheduled'].includes(appt.Status) && (
                 <button onClick={() => doAction('NoShow')} disabled={!!actionLoading}
                   className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-orange-500 text-white text-xs font-bold hover:bg-orange-600 disabled:opacity-50 transition-colors">
                   {actionLoading === 'NoShow' ? '…' : <><AlertCircle size={13} /> No Show</>}
                 </button>
               )}
 
-              {!showCancel && (
+              {canCancel && !showCancel && (
                 <button onClick={() => setShowCancel(true)}
                   className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-red-50 text-red-600 border border-red-200 text-xs font-bold hover:bg-red-100 transition-colors">
                   <XCircle size={13} /> Cancel
                 </button>
               )}
 
-              {showCancel && (
+              {canCancel && showCancel && (
                 <button onClick={() => doAction('cancel')} disabled={!!actionLoading}
                   className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-red-600 text-white text-xs font-bold hover:bg-red-700 disabled:opacity-50 transition-colors">
                   {actionLoading === 'cancel' ? '…' : <>Confirm Cancel</>}

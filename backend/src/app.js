@@ -24,6 +24,9 @@ const prescriptionRoutes = require('./routes/prescription.routes');
 const reportRoutes       = require('./routes/report.routes');
 const billRoutes         = require('./routes/bill.routes');
 const schedulingRoutes   = require('./routes/scheduling.routes');   // ← NEW
+const dashboardRoutes    = require('./routes/dashboard.routes');
+const profileRoutes      = require('./routes/profile.routes');
+const rolesRoutes        = require('./routes/roles.routes');
 
 const app = express();
 
@@ -97,6 +100,9 @@ app.use(`${prefix}/prescriptions`, prescriptionRoutes);
 app.use(`${prefix}/reports`,       reportRoutes);
 app.use(`${prefix}/bills`,         billRoutes);
 app.use(`${prefix}/scheduling`,    schedulingRoutes);               // ← NEW
+app.use(`${prefix}/dashboard`,     dashboardRoutes);
+app.use(`${prefix}/profile`,       profileRoutes);
+app.use(`${prefix}/roles`,         rolesRoutes);
 
 // ── 404 handler ───────────────────────────────────────────────────────────────
 app.use((req, res) => {

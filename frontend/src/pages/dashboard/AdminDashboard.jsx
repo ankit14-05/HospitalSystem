@@ -1,411 +1,112 @@
-// src/pages/dashboard/AdminDashboard.jsx
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Users, UserCheck, Bed, Activity, TrendingUp, Clock,
-  CheckCircle, XCircle, AlertCircle, Building2, ArrowRight,
-  Stethoscope, Briefcase, Calendar, CalendarOff, Timer,
-  Hash, ChevronRight, LayoutGrid
+  Users,
+  UserCheck,
+  Briefcase,
+  Bed,
+  IndianRupee,
+  CalendarRange,
+  Clock3,
+  ClipboardList,
+  ArrowRight,
+  CheckCircle2,
+  RefreshCw,
+  Building2,
+  LayoutDashboard,
+  Activity,
 } from 'lucide-react';
-import { useAuth } from '../../context/AuthContext';
-import api from '../../services/api';
 import toast from 'react-hot-toast';
+import api from '../../services/api';
+import { useAuth } from '../../context/AuthContext';
+import RecentActivityList from '../../components/dashboard/RecentActivityList';
+import DashboardTabs from '../../components/dashboard/DashboardTabs';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const DAY_FULL  = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-const TODAY_DOW = new Date().getDay();
+// ============================================================================
+// REUSABLE DASHBOARD WIDGETS
+// ============================================================================
 
-const fmt12 = (t) => {
-  if (!t) return '—';
-  const [h, m] = t.split(':').map(Number);
-  const ampm = h >= 12 ? 'PM' : 'AM';
-  return `${((h % 12) || 12)}:${String(m).padStart(2,'0')} ${ampm}`;
-};
-
-const slotCount = (start, end, dur) => {
-  if (!start || !end || !dur) return 0;
-  const toMin = t => { const [h,m] = t.split(':').map(Number); return h*60+m; };
-  return Math.floor((toMin(end) - toMin(start)) / dur);
-};
-
-// Safely extract array from any API response shape
-const extractList = (responseData, ...listKeys) => {
-  if (!responseData) return [];
-  if (Array.isArray(responseData.data)) return responseData.data;
-  for (const key of listKeys) {
-    if (Array.isArray(responseData[key])) return responseData[key];
-  }
-  if (Array.isArray(responseData)) return responseData;
-  return [];
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Sub-components
-// ─────────────────────────────────────────────────────────────────────────────
-const StatCard = ({ icon: Icon, label, value, sub, color }) => (
-  <div className="card">
+// 1. OverviewCard: Displays top-level statistical metrics (e.g. Total Patients)
+const OverviewCard = ({ icon: Icon, label, value, accent, subLabel }) => (
+  <div className="card h-full flex flex-col justify-center">
     <div className="card-body flex items-center gap-4">
-      <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${color}`}>
-        <Icon size={22} className="text-white" />
+      <div className="w-12 h-12 rounded-2xl flex items-center justify-center text-white" style={{ background: accent }}>
+        <Icon size={20} />
       </div>
       <div>
-        <p className="text-2xl font-bold text-slate-800">
-          {value ?? <span className="text-slate-300 text-lg">—</span>}
-        </p>
+        <p className="text-2xl font-bold text-slate-800">{value}</p>
         <p className="text-sm text-slate-500">{label}</p>
-        {sub && <p className="text-xs text-slate-400 mt-0.5">{sub}</p>}
+        {subLabel && <p className="text-xs text-slate-400 mt-1">{subLabel}</p>}
       </div>
     </div>
   </div>
 );
 
-const PendingCard = ({
-  title, icon: Icon, iconColor, items, loading, onApprove, onRejectNavigate,
-  approving, navigatePath, badgeColor, avatarColor, avatarText,
-  line1, line2, meta,
+// 2. ApprovalCard: Displays pending approval requests (Doctors, Staff)
+const ApprovalCard = ({
+  title,
+  items,
+  loading,
+  emptyText,
+  badgeClassName,
+  actionLabel,
+  onApprove,
+  onViewAll,
 }) => (
-  <div className="card">
-    <div className="card-header">
-      <h3 className="font-semibold text-slate-700 flex items-center gap-2">
-        <Icon size={16} className={iconColor} />
-        {title}
-        {items.length > 0 && (
-          <span className={`ml-1 px-2 py-0.5 rounded-full text-xs font-bold ${badgeColor}`}>
+  <div className="card h-full flex flex-col">
+    <div className="card-header border-b border-slate-100 flex-shrink-0">
+      <div className="flex items-center gap-2">
+        <h2 className="font-semibold text-slate-800">{title}</h2>
+        {!!items.length && (
+          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${badgeClassName}`}>
             {items.length}
           </span>
         )}
-      </h3>
-      <div className="flex items-center gap-2">
-        <button onClick={onApprove.reload} className="btn-ghost btn-sm">Refresh</button>
-        <button
-          onClick={() => onRejectNavigate(navigatePath)}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-50 text-indigo-600 text-xs font-semibold hover:bg-indigo-100 transition-colors">
-          View All <ArrowRight size={12} />
-        </button>
       </div>
+      <button
+        onClick={onViewAll}
+        className="text-xs font-semibold text-indigo-600 hover:underline flex items-center gap-1"
+      >
+        View all
+        <ArrowRight size={12} />
+      </button>
     </div>
-    <div className="card-body p-0">
+    <div className="card-body p-0 flex-1 overflow-y-auto max-h-[400px]">
       {loading ? (
-        <div className="flex justify-center py-10"><div className="spinner w-6 h-6" /></div>
-      ) : items.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-10 text-slate-400">
-          <CheckCircle size={32} className="mb-2 text-green-300" />
-          <p className="text-sm font-medium">No pending approvals</p>
-          <p className="text-xs">All {title.toLowerCase()} have been reviewed</p>
-        </div>
-      ) : (
-        <>
-          <div className="divide-y divide-slate-50">
-            {items.slice(0, 5).map(item => (
-              <div key={item.Id}
-                className="flex items-center gap-4 px-6 py-4 hover:bg-slate-50 transition-colors">
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 font-bold text-sm ${avatarColor}`}>
-                  {item.FirstName?.[0]}{item.LastName?.[0]}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-slate-700 text-sm">
-                    {avatarText} {item.FirstName} {item.LastName}
-                  </p>
-                  <p className="text-xs text-slate-500">{line1(item)}</p>
-                  <p className="text-xs text-slate-400">{line2(item)}</p>
-                </div>
-                <div className="text-xs text-slate-400 hidden md:block">
-                  {meta(item)}
-                  <p>{new Date(item.CreatedAt).toLocaleDateString()}</p>
-                </div>
-                <div className="flex gap-2 flex-shrink-0">
-                  <button
-                    onClick={() => onApprove.approve(item.Id)}
-                    disabled={approving === item.Id}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-50 text-green-700 text-xs font-semibold hover:bg-green-100 transition-colors disabled:opacity-50">
-                    <CheckCircle size={13} /> Approve
-                  </button>
-                  <button
-                    onClick={() => onRejectNavigate(navigatePath)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-50 text-red-600 text-xs font-semibold hover:bg-red-100 transition-colors">
-                    <XCircle size={13} /> Reject
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-          {items.length > 5 && (
-            <div className="px-6 py-3 border-t border-slate-50">
-              <button
-                onClick={() => onRejectNavigate(navigatePath)}
-                className="flex items-center gap-1.5 text-indigo-600 text-xs font-semibold hover:underline">
-                +{items.length - 5} more pending — View full panel <ArrowRight size={11} />
-              </button>
+        <div className="divide-y divide-slate-50">
+          {Array.from({ length: 4 }).map((_, index) => (
+            <div key={index} className="px-6 py-4">
+              <div className="h-12 rounded-2xl bg-slate-100 animate-pulse" />
             </div>
-          )}
-        </>
-      )}
-    </div>
-  </div>
-);
-
-// ── OPD Slot Utilisation card ─────────────────────────────────────────────────
-const SlotUtilisationCard = ({ data, loading, navigate }) => (
-  <div className="card">
-    <div className="card-header">
-      <h3 className="font-semibold text-slate-700 flex items-center gap-2">
-        <LayoutGrid size={15} className="text-indigo-500" />
-        Today's OPD Slot Utilisation
-      </h3>
-      <button
-        onClick={() => navigate('/admin/scheduling')}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-50 text-indigo-600 text-xs font-semibold hover:bg-indigo-100 transition-colors">
-        Manage Slots <ArrowRight size={12} />
-      </button>
-    </div>
-    <div className="card-body p-0">
-      {loading ? (
-        <div className="flex justify-center py-10"><div className="spinner w-6 h-6" /></div>
-      ) : data.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-10 text-slate-400">
-          <Calendar size={32} className="mb-2 text-slate-200" />
-          <p className="text-sm font-medium">No slots generated for today</p>
-          <p className="text-xs">Configure doctor schedules to generate slots</p>
+          ))}
+        </div>
+      ) : !items.length ? (
+        <div className="px-6 py-12 text-center text-slate-400 text-sm">
+          {emptyText}
         </div>
       ) : (
         <div className="divide-y divide-slate-50">
-          {data.slice(0, 6).map(d => {
-            const pct = d.TotalSlots ? Math.round((d.BookedSlots / d.TotalSlots) * 100) : 0;
-            const color = pct >= 90 ? 'bg-red-400' : pct >= 60 ? 'bg-amber-400' : 'bg-green-400';
-            return (
-              <div key={d.DoctorId} className="flex items-center gap-4 px-6 py-3.5 hover:bg-slate-50">
-                <div className="w-9 h-9 rounded-full bg-primary-100 text-primary-700 flex items-center justify-center font-bold text-xs flex-shrink-0">
-                  {d.DoctorName?.split(' ').map(n=>n[0]).join('').slice(0,2)}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-slate-700 truncate">Dr. {d.DoctorName}</p>
-                  <p className="text-xs text-slate-400">{d.DepartmentName || 'General'}</p>
-                  <div className="mt-1.5 w-full bg-slate-100 rounded-full h-1.5">
-                    <div className={`h-1.5 rounded-full transition-all ${color}`} style={{ width: `${pct}%` }} />
-                  </div>
-                </div>
-                <div className="text-right flex-shrink-0">
-                  <p className="text-sm font-bold text-slate-700">{d.BookedSlots}/{d.TotalSlots}</p>
-                  <p className="text-xs text-slate-400">{pct}% booked</p>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  </div>
-);
-
-// ── Doctor Weekly Schedule preview card ──────────────────────────────────────
-const DoctorScheduleCard = ({ schedules, loading, navigate }) => {
-  const [selectedDay, setSelectedDay] = useState(TODAY_DOW);
-  const filtered = (schedules || []).filter(s => s.DayOfWeek === selectedDay && s.IsActive);
-
-  return (
-    <div className="card">
-      <div className="card-header">
-        <h3 className="font-semibold text-slate-700 flex items-center gap-2">
-          <Stethoscope size={15} className="text-yellow-500" />
-          Doctor Schedules
-        </h3>
-        <button
-          onClick={() => navigate('/admin/scheduling')}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-50 text-indigo-600 text-xs font-semibold hover:bg-indigo-100 transition-colors">
-          Manage <ArrowRight size={12} />
-        </button>
-      </div>
-
-      <div className="px-6 pt-4 pb-2 flex gap-1.5 flex-wrap">
-        {DAY_NAMES.map((d, i) => (
-          <button key={i} onClick={() => setSelectedDay(i)}
-            className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors
-              ${selectedDay === i
-                ? 'bg-primary-600 text-white'
-                : i === TODAY_DOW
-                  ? 'bg-primary-50 text-primary-700 border border-primary-200'
-                  : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
-            {d}
-            {i === TODAY_DOW && <span className="ml-1 text-[9px] opacity-70">today</span>}
-          </button>
-        ))}
-      </div>
-
-      <div className="card-body p-0">
-        {loading ? (
-          <div className="flex justify-center py-8"><div className="spinner w-5 h-5" /></div>
-        ) : filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-8 text-slate-400">
-            <CalendarOff size={28} className="mb-2 text-slate-200" />
-            <p className="text-sm">No doctors scheduled on {DAY_FULL[selectedDay]}</p>
-          </div>
-        ) : (
-          <div className="divide-y divide-slate-50">
-            {filtered.map(s => (
-              <div key={s.Id} className="flex items-center gap-4 px-6 py-3 hover:bg-slate-50">
-                <div className="w-8 h-8 rounded-full bg-primary-100 text-primary-700 flex items-center justify-center font-bold text-xs flex-shrink-0">
-                  {s.DoctorName?.split(' ').map(n=>n[0]).join('').slice(0,2)}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-slate-700">Dr. {s.DoctorName}</p>
-                  <p className="text-xs text-slate-400">{s.Specialization} · {s.DepartmentName}</p>
-                </div>
-                <div className="text-right text-xs text-slate-500">
-                  <p className="font-semibold text-slate-700">
-                    {fmt12(s.StartTime)} – {fmt12(s.EndTime)}
-                  </p>
-                  <p className="text-slate-400">
-                    {s.SlotDurationMins} min · {slotCount(s.StartTime, s.EndTime, s.SlotDurationMins)} slots
-                    {s.RoomNumber && ` · Rm ${s.RoomNumber}`}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-};
-
-// ── Staff Shift card ──────────────────────────────────────────────────────────
-const StaffShiftCard = ({ shifts, loading, navigate }) => {
-  const [selectedDay, setSelectedDay] = useState(TODAY_DOW);
-  const filtered = (shifts || []).filter(s => s.DayOfWeek === selectedDay && s.IsActive);
-
-  const shiftColor = (type) => ({
-    morning:   'bg-amber-100 text-amber-700',
-    afternoon: 'bg-blue-100 text-blue-700',
-    evening:   'bg-purple-100 text-purple-700',
-    night:     'bg-slate-200 text-slate-700',
-    custom:    'bg-teal-100 text-teal-700',
-  }[type] || 'bg-slate-100 text-slate-600');
-
-  return (
-    <div className="card">
-      <div className="card-header">
-        <h3 className="font-semibold text-slate-700 flex items-center gap-2">
-          <Briefcase size={15} className="text-blue-500" />
-          Staff Shifts
-        </h3>
-        <button
-          onClick={() => navigate('/admin/scheduling')}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-50 text-indigo-600 text-xs font-semibold hover:bg-indigo-100 transition-colors">
-          Manage <ArrowRight size={12} />
-        </button>
-      </div>
-
-      <div className="px-6 pt-4 pb-2 flex gap-1.5 flex-wrap">
-        {DAY_NAMES.map((d, i) => (
-          <button key={i} onClick={() => setSelectedDay(i)}
-            className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors
-              ${selectedDay === i
-                ? 'bg-blue-600 text-white'
-                : i === TODAY_DOW
-                  ? 'bg-blue-50 text-blue-700 border border-blue-200'
-                  : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
-            {d}
-            {i === TODAY_DOW && <span className="ml-1 text-[9px] opacity-70">today</span>}
-          </button>
-        ))}
-      </div>
-
-      <div className="card-body p-0">
-        {loading ? (
-          <div className="flex justify-center py-8"><div className="spinner w-5 h-5" /></div>
-        ) : filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-8 text-slate-400">
-            <CalendarOff size={28} className="mb-2 text-slate-200" />
-            <p className="text-sm">No staff scheduled on {DAY_FULL[selectedDay]}</p>
-          </div>
-        ) : (
-          <div className="divide-y divide-slate-50">
-            {filtered.map(s => (
-              <div key={s.Id} className="flex items-center gap-4 px-6 py-3 hover:bg-slate-50">
-                <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-xs flex-shrink-0">
-                  {s.StaffName?.split(' ').map(n=>n[0]).join('').slice(0,2)}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-slate-700">{s.StaffName}</p>
-                  <p className="text-xs text-slate-400">{s.Role?.replace(/_/g,' ')} · {s.DepartmentName || 'No dept'}</p>
-                </div>
-                <div className="text-right text-xs">
-                  <p className="font-semibold text-slate-700">
-                    {fmt12(s.StartTime)} – {fmt12(s.EndTime)}
-                  </p>
-                  <span className={`inline-block mt-0.5 px-2 py-0.5 rounded-full text-[10px] font-bold ${shiftColor(s.ShiftType)}`}>
-                    {s.ShiftType}
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-};
-
-// ── Leave Requests card ───────────────────────────────────────────────────────
-const LeaveRequestsCard = ({ leaves, loading, onApprove, navigate }) => (
-  <div className="card">
-    <div className="card-header">
-      <h3 className="font-semibold text-slate-700 flex items-center gap-2">
-        <CalendarOff size={15} className="text-red-500" />
-        Pending Leave Requests
-        {leaves.length > 0 && (
-          <span className="ml-1 px-2 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-700">
-            {leaves.length}
-          </span>
-        )}
-      </h3>
-      <button
-        onClick={() => navigate('/admin/scheduling')}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-50 text-indigo-600 text-xs font-semibold hover:bg-indigo-100 transition-colors">
-        View All <ArrowRight size={12} />
-      </button>
-    </div>
-    <div className="card-body p-0">
-      {loading ? (
-        <div className="flex justify-center py-8"><div className="spinner w-5 h-5" /></div>
-      ) : leaves.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-8 text-slate-400">
-          <CheckCircle size={28} className="mb-2 text-green-300" />
-          <p className="text-sm">No pending leave requests</p>
-        </div>
-      ) : (
-        <div className="divide-y divide-slate-50">
-          {leaves.slice(0, 5).map(l => (
-            <div key={`${l.Type}-${l.Id}`} className="flex items-center gap-3 px-6 py-3.5 hover:bg-slate-50">
-              <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs flex-shrink-0
-                ${l.Type === 'doctor' ? 'bg-primary-100 text-primary-700' : 'bg-blue-100 text-blue-700'}`}>
-                {l.Name?.split(' ').map(n=>n[0]).join('').slice(0,2)}
+          {items.map((item) => (
+            <div key={item.Id} className="px-6 py-4 flex items-center gap-4 hover:bg-slate-50 transition-colors">
+              <div className="w-11 h-11 rounded-2xl bg-slate-100 text-slate-700 flex items-center justify-center font-bold flex-shrink-0">
+                {(item.FirstName?.[0] || '?').toUpperCase()}
+                {(item.LastName?.[0] || '').toUpperCase()}
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-slate-700">
-                  {l.Type === 'doctor' ? 'Dr. ' : ''}{l.Name}
+                <p className="font-semibold text-slate-700 truncate">
+                  {item.FirstName} {item.LastName}
                 </p>
-                <p className="text-xs text-slate-500">
-                  {new Date(l.LeaveDate).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}
-                  &nbsp;·&nbsp;{l.LeaveType?.replace(/_/g,' ')}
+                <p className="text-xs text-slate-400 mt-1 truncate">
+                  {item.DepartmentName || item.SpecializationName || item.Role || item.Email || 'Pending approval'}
                 </p>
-                {l.Reason && <p className="text-xs text-slate-400 truncate">{l.Reason}</p>}
               </div>
-              <div className="flex gap-1.5 flex-shrink-0">
-                <button
-                  onClick={() => onApprove(l.Type, l.Id, 'approved')}
-                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-green-50 text-green-700 text-xs font-semibold hover:bg-green-100 transition-colors">
-                  <CheckCircle size={12} /> Approve
-                </button>
-                <button
-                  onClick={() => navigate('/admin/scheduling')}
-                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-red-50 text-red-600 text-xs font-semibold hover:bg-red-100 transition-colors">
-                  <XCircle size={12} /> Reject
-                </button>
-              </div>
+              <button
+                onClick={() => onApprove(item.Id)}
+                className="px-3 py-2 rounded-xl bg-emerald-50 text-emerald-700 text-xs font-semibold hover:bg-emerald-100 transition-colors flex items-center gap-1.5 flex-shrink-0"
+              >
+                <CheckCircle2 size={13} />
+                {actionLabel}
+              </button>
             </div>
           ))}
         </div>
@@ -414,411 +115,395 @@ const LeaveRequestsCard = ({ leaves, loading, onApprove, navigate }) => (
   </div>
 );
 
-// ── OPD Queue card ─────────────────────────────────────────────────────────────
-const OpdQueueCard = ({ queue, loading, navigate }) => {
-  const statusColor = (s) => ({
-    waiting:   'bg-amber-100 text-amber-700',
-    called:    'bg-blue-100 text-blue-700',
-    serving:   'bg-green-100 text-green-700',
-    served:    'bg-slate-100 text-slate-500',
-    skipped:   'bg-red-100 text-red-600',
-    cancelled: 'bg-slate-100 text-slate-400',
-  }[s] || 'bg-slate-100 text-slate-500');
-
-  const priorityDot = (p) => ({
-    urgent: 'bg-red-500',
-    vip:    'bg-purple-500',
-    normal: 'bg-slate-300',
-  }[p] || 'bg-slate-300');
-
-  return (
-    <div className="card">
-      <div className="card-header">
-        <h3 className="font-semibold text-slate-700 flex items-center gap-2">
-          <Hash size={15} className="text-teal-500" />
-          Live OPD Queue — Today
-        </h3>
+// 3. ListCard: A generic list container for various dashboard rows (e.g. Queues, Leaves)
+const ListCard = ({ title, actionLabel, actionTo, navigate, rows, loading, emptyText, renderRow }) => (
+  <div className="card h-full flex flex-col">
+    <div className="card-header border-b border-slate-100 flex-shrink-0">
+      <h2 className="font-semibold text-slate-800">{title}</h2>
+      {actionLabel && (
         <button
-          onClick={() => navigate('/admin/scheduling')}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-50 text-indigo-600 text-xs font-semibold hover:bg-indigo-100 transition-colors">
-          Full View <ArrowRight size={12} />
+          onClick={() => navigate(actionTo)}
+          className="text-xs font-semibold text-indigo-600 hover:underline flex items-center gap-1"
+        >
+          {actionLabel}
+          <ArrowRight size={12} />
         </button>
-      </div>
-      <div className="card-body p-0">
-        {loading ? (
-          <div className="flex justify-center py-8"><div className="spinner w-5 h-5" /></div>
-        ) : queue.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-8 text-slate-400">
-            <Timer size={28} className="mb-2 text-slate-200" />
-            <p className="text-sm">Queue is empty today</p>
-          </div>
-        ) : (
-          <div className="divide-y divide-slate-50">
-            {queue.slice(0, 6).map(q => (
-              <div key={q.Id} className="flex items-center gap-3 px-6 py-3 hover:bg-slate-50">
-                <div className="w-9 h-9 rounded-lg bg-slate-100 flex items-center justify-center font-bold text-sm text-slate-700 flex-shrink-0">
-                  #{q.TokenNumber}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-1.5">
-                    <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${priorityDot(q.Priority)}`} />
-                    <p className="text-sm font-semibold text-slate-700 truncate">{q.PatientName || 'Patient'}</p>
-                  </div>
-                  <p className="text-xs text-slate-400">Dr. {q.DoctorName}</p>
-                </div>
-                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${statusColor(q.QueueStatus)}`}>
-                  {q.QueueStatus}
-                </span>
-              </div>
-            ))}
-            {queue.length > 6 && (
-              <div className="px-6 py-2.5 border-t border-slate-50">
-                <button onClick={() => navigate('/admin/scheduling')}
-                  className="flex items-center gap-1 text-indigo-600 text-xs font-semibold hover:underline">
-                  +{queue.length - 6} more in queue <ChevronRight size={11} />
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+      )}
     </div>
-  );
-};
+    <div className="card-body p-0 flex-1 overflow-y-auto max-h-[400px]">
+      {loading ? (
+        <div className="divide-y divide-slate-50">
+          {Array.from({ length: 5 }).map((_, index) => (
+            <div key={index} className="px-6 py-4">
+              <div className="h-12 rounded-2xl bg-slate-100 animate-pulse" />
+            </div>
+          ))}
+        </div>
+      ) : !rows.length ? (
+        <div className="px-6 py-12 text-center text-slate-400 text-sm">{emptyText}</div>
+      ) : (
+        <div className="divide-y divide-slate-50">
+          {rows.map(renderRow)}
+        </div>
+      )}
+    </div>
+  </div>
+);
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Main Dashboard
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================================
+// MAIN ADMIN DASHBOARD COMPONENT
+// ============================================================================
+
 export default function AdminDashboard() {
-  const { user }  = useAuth();
-  const navigate  = useNavigate();
+  const { user } = useAuth();
+  const navigate = useNavigate();
 
-  const [pendingDoctors, setPendingDoctors] = useState([]);
-  const [pendingStaff,   setPendingStaff]   = useState([]);
-  const [loadingDoctors, setLoadingDoctors] = useState(true);
-  const [loadingStaff,   setLoadingStaff]   = useState(true);
-  const [approvingDoc,   setApprovingDoc]   = useState(null);
-  const [approvingStaff, setApprovingStaff] = useState(null);
-  const [stats,          setStats]          = useState({});
+  // ── State variables ──
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState('overview'); // Controls the visible section in the right column
+  const [overview, setOverview] = useState({
+    stats: {},
+    pendingDoctors: [],
+    pendingStaff: [],
+    doctorSchedules: [],
+    staffShifts: [],
+    slotSummary: [],
+    pendingLeaves: [],
+    opdQueue: [],
+    recentActivity: [],
+    departmentOverview: [],
+  });
 
-  const [doctorSchedules, setDoctorSchedules] = useState([]);
-  const [staffShifts,     setStaffShifts]     = useState([]);
-  const [slotSummary,     setSlotSummary]     = useState([]);
-  const [pendingLeaves,   setPendingLeaves]   = useState([]);
-  const [opdQueue,        setOpdQueue]        = useState([]);
-  const [loadingSchedule, setLoadingSchedule] = useState(true);
+  // ── Network Fetcher ──
+  const loadOverview = async () => {
+    setLoading(true);
+    try {
+      const response = await api.get('/dashboard/admin/overview');
+      const payload = response?.data || response;
+      setOverview({
+        stats: payload?.stats || {},
+        pendingDoctors: payload?.pendingDoctors || [],
+        pendingStaff: payload?.pendingStaff || [],
+        doctorSchedules: payload?.doctorSchedules || [],
+        staffShifts: payload?.staffShifts || [],
+        slotSummary: payload?.slotSummary || [],
+        pendingLeaves: payload?.pendingLeaves || [],
+        opdQueue: payload?.opdQueue || [],
+        recentActivity: payload?.recentActivity || [],
+        departmentOverview: payload?.departmentOverview || [],
+      });
+    } catch (error) {
+      toast.error(error.message || 'Failed to load admin dashboard');
+    } finally {
+      setLoading(false);
+    }
+  };
 
-  const hour     = new Date().getHours();
-  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
-
+  // Fetch data on initial mount
   useEffect(() => {
-    loadPendingDoctors();
-    loadPendingStaff();
-    loadStats();
-    loadSchedulingData();
+    loadOverview();
   }, []);
 
-  const loadPendingDoctors = async () => {
-    setLoadingDoctors(true);
-    try {
-      const r = await api.get('/register/pending-doctors');
-      setPendingDoctors(extractList(r.data));
-    } catch { setPendingDoctors([]); }
-    setLoadingDoctors(false);
-  };
-
-  const loadPendingStaff = async () => {
-    setLoadingStaff(true);
-    try {
-      const r = await api.get('/register/pending-staff');
-      setPendingStaff(extractList(r.data));
-    } catch { setPendingStaff([]); }
-    setLoadingStaff(false);
-  };
-
-  const loadStats = async () => {
-    try {
-      const r = await api.get('/users?limit=1');
-      setStats(r.data.meta || {});
-    } catch {}
-  };
-
-  const loadSchedulingData = async () => {
-    setLoadingSchedule(true);
-    try {
-      const [schedRes, staffRes, slotRes, leaveRes, queueRes] = await Promise.allSettled([
-        api.get('/scheduling/doctor-schedules'),
-        api.get('/scheduling/staff-shifts'),
-        api.get('/scheduling/slots/today/summary'),
-        api.get('/scheduling/leaves?status=pending'),
-        api.get('/scheduling/queue/today'),
-      ]);
-
-      if (schedRes.status === 'fulfilled') setDoctorSchedules(extractList(schedRes.value.data));
-      if (staffRes.status === 'fulfilled')  setStaffShifts(extractList(staffRes.value.data));
-      if (slotRes.status === 'fulfilled')   setSlotSummary(extractList(slotRes.value.data));
-      if (leaveRes.status === 'fulfilled')  setPendingLeaves(extractList(leaveRes.value.data));
-      if (queueRes.status === 'fulfilled')  setOpdQueue(extractList(queueRes.value.data));
-    } catch {}
-    setLoadingSchedule(false);
-  };
-
-  const handleApproveDoctor = async (id) => {
-    setApprovingDoc(id);
+  // ── Specific Action Handlers ──
+  const approveDoctor = async (id) => {
     try {
       await api.patch(`/register/approve-doctor/${id}`, { action: 'approved' });
       toast.success('Doctor approved successfully');
-      setPendingDoctors(p => p.filter(d => d.Id !== id));
-    } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to approve doctor');
+      loadOverview();
+    } catch (error) {
+      toast.error(error.message || 'Failed to approve doctor');
     }
-    setApprovingDoc(null);
   };
 
-  const handleApproveStaff = async (id) => {
-    setApprovingStaff(id);
+  const approveStaff = async (id) => {
     try {
       await api.patch(`/register/approve-staff/${id}`, { action: 'approved' });
       toast.success('Staff member approved successfully');
-      setPendingStaff(p => p.filter(s => s.Id !== id));
-    } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to approve staff');
-    }
-    setApprovingStaff(null);
-  };
-
-  const handleLeaveAction = async (type, id, action) => {
-    try {
-      const endpoint = type === 'doctor'
-        ? `/scheduling/doctor-leaves/${id}`
-        : `/scheduling/staff-leaves/${id}`;
-      await api.patch(endpoint, { status: action });
-      toast.success(`Leave ${action} successfully`);
-      setPendingLeaves(p => p.filter(l => !(l.Type === type && l.Id === id)));
-    } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to update leave');
+      loadOverview();
+    } catch (error) {
+      toast.error(error.message || 'Failed to approve staff member');
     }
   };
 
-  const hasScheduleAlerts = pendingLeaves.length > 0;
+  // ── Navigation Configuration ──
+  const TABS = [
+    { id: 'overview', label: 'Overview Metrics', icon: LayoutDashboard },
+    { id: 'approvals', label: 'Pending Approvals', icon: Clock3 },
+    { id: 'departments', label: 'Departments', icon: Building2 },
+    { id: 'queues', label: 'Queues & Schedules', icon: CalendarRange },
+    { id: 'activity', label: 'Recent Activity', icon: Activity },
+  ];
 
+  const stats = overview.stats || {};
+  const greetingName = user?.firstName || 'Admin';
+
+  // ============================================================================
+  // RENDER SECTIONS
+  // ============================================================================
+
+  // 1. Overview Section
+  const renderOverview = () => (
+    <div className="space-y-6 slide-in content-section">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <OverviewCard icon={Users} label="Total Patients" value={stats.totalPatients || 0} accent="#2563eb" subLabel="Registered patients" />
+        <OverviewCard icon={UserCheck} label="Active Doctors" value={stats.activeDoctors || 0} accent="#0f766e" subLabel="Approved and active" />
+        <OverviewCard icon={Briefcase} label="Staff Members" value={stats.totalStaff || 0} accent="#7c3aed" subLabel="Approved staff accounts" />
+        <OverviewCard icon={Bed} label="Beds Occupied" value={`${stats.occupiedBeds || 0}/${stats.totalBeds || 0}`} accent="#16a34a" subLabel="Current active beds" />
+        <OverviewCard icon={IndianRupee} label="Revenue Today" value={`Rs. ${(stats.revenueToday || 0).toLocaleString('en-IN')}`} accent="#ea580c" subLabel="Bills generated today" />
+        <OverviewCard icon={CalendarRange} label="Today's Appointments" value={stats.todayAppointments || 0} accent="#4f46e5" subLabel={`${stats.todayQueueCount || 0} currently in queue`} />
+      </div>
+
+      <div className="card mt-6">
+        <div className="card-header border-b border-slate-100">
+          <div>
+            <h2 className="font-bold text-slate-800">Quick Admin Actions</h2>
+            <p className="text-xs text-slate-500 mt-1">Jump directly into dedicated management portals.</p>
+          </div>
+        </div>
+        <div className="card-body grid grid-cols-1 sm:grid-cols-3 gap-4 bg-slate-50/50">
+          {[
+            { label: 'Directory', desc: 'Manage all internal users', path: '/admin/people', icon: Users },
+            { label: 'Schedules', desc: 'Map out doctor availability', path: '/admin/schedule-manager', icon: ClipboardList },
+            { label: 'Appointments', desc: 'Oversee daily bookings', path: '/admin/appointments', icon: CalendarRange },
+          ].map((action) => {
+            const Icon = action.icon;
+            return (
+              <button
+                key={action.path}
+                onClick={() => navigate(action.path)}
+                className="group flex flex-col items-start rounded-2xl border border-slate-200 bg-white hover:border-indigo-300 hover:shadow-md transition-all px-5 py-5 text-left"
+              >
+                <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+                  <Icon size={18} />
+                </div>
+                <p className="font-bold text-slate-800 group-hover:text-indigo-600 transition-colors">{action.label}</p>
+                <p className="text-[11px] text-slate-400 mt-1">{action.desc}</p>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+
+  // 2. Approvals Section
+  const renderApprovals = () => (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 slide-in content-section">
+      <ApprovalCard
+        title="Pending Doctor Approvals"
+        items={overview.pendingDoctors}
+        loading={loading}
+        emptyText="No doctor approvals are waiting right now."
+        badgeClassName="bg-amber-100 text-amber-700"
+        actionLabel="Approve"
+        onApprove={approveDoctor}
+        onViewAll={() => navigate('/admin/doctor-approvals')}
+      />
+      <ApprovalCard
+        title="Pending Staff Approvals"
+        items={overview.pendingStaff}
+        loading={loading}
+        emptyText="No staff approvals are waiting right now."
+        badgeClassName="bg-cyan-100 text-cyan-700"
+        actionLabel="Approve"
+        onApprove={approveStaff}
+        onViewAll={() => navigate('/admin/staff-approvals')}
+      />
+    </div>
+  );
+
+  // 3. Departments Section
+  const renderDepartments = () => (
+    <div className="max-w-3xl slide-in content-section">
+      <ListCard
+        title="Department Capacity & Usage"
+        actionLabel="Open directory filter"
+        actionTo="/admin/people"
+        navigate={navigate}
+        rows={overview.departmentOverview}
+        loading={loading}
+        emptyText="Department data is not available yet."
+        renderRow={(row) => (
+          <div key={row.Id} className="px-6 py-4 hover:bg-slate-50 transition-colors border-b border-slate-50 last:border-b-0">
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <p className="font-semibold text-slate-800 truncate">{row.Name}</p>
+                <p className="text-xs text-slate-500 mt-1">{row.DoctorCount} doctor(s)</p>
+              </div>
+              <div className="text-right">
+                <span className="text-sm font-black text-slate-800">{row.TodayAppointments}</span>
+                <span className="text-[10px] text-slate-400 block font-medium uppercase tracking-wider">Today</span>
+              </div>
+            </div>
+            <div className="mt-4 h-2 rounded-full bg-slate-100 overflow-hidden">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-indigo-400 to-indigo-600"
+                style={{ width: `${Math.min(100, (Number(row.TodayAppointments || 0) / Math.max(1, Number(overview.departmentOverview?.[0]?.TodayAppointments || 1))) * 100)}%` }}
+              />
+            </div>
+          </div>
+        )}
+      />
+    </div>
+  );
+
+  // 4. Queues & Schedules Section
+  const renderQueues = () => (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 slide-in content-section p-4 -m-4 bg-slate-50/50 rounded-3xl">
+      <ListCard
+        title="Today's OPD Slot Utilisation"
+        actionLabel="Manage schedules"
+        actionTo="/admin/schedule-manager"
+        navigate={navigate}
+        rows={overview.slotSummary}
+        loading={loading}
+        emptyText="No slots have been generated for today. It might be a holiday or schedule wasn't run."
+        renderRow={(row) => {
+          const totalSlots = Number(row.TotalSlots || 0);
+          const bookedSlots = Number(row.BookedSlots || 0);
+          const bookedPercent = totalSlots ? Math.round((bookedSlots / totalSlots) * 100) : 0;
+
+          return (
+            <div key={row.DoctorId} className="px-6 py-4 bg-white m-2 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-all">
+              <div className="flex items-center justify-between gap-4 mb-3">
+                <div className="min-w-0">
+                  <p className="font-bold text-slate-800 truncate">Dr. {row.DoctorName}</p>
+                  <p className="text-[11px] font-semibold text-indigo-600 mt-0.5 uppercase tracking-wider">{row.DepartmentName || 'General'}</p>
+                </div>
+                <div className="w-12 h-12 rounded-full border-4 border-slate-50 flex items-center justify-center font-bold text-slate-700 bg-slate-100 flex-shrink-0">
+                  {bookedPercent}%
+                </div>
+              </div>
+              <div className="flex items-center justify-between text-xs text-slate-500 mb-2 font-medium">
+                <span>Booked: {bookedSlots}</span>
+                <span>Capacity: {totalSlots}</span>
+              </div>
+              <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                <div className={`h-full rounded-full ${bookedPercent > 80 ? 'bg-rose-500' : bookedPercent > 50 ? 'bg-amber-500' : 'bg-emerald-500'}`} style={{ width: `${bookedPercent}%` }} />
+              </div>
+            </div>
+          );
+        }}
+      />
+
+      <ListCard
+        title="Live Queue and Leave Requests"
+        actionLabel="Open scheduler"
+        actionTo="/admin/scheduling"
+        navigate={navigate}
+        rows={[...overview.pendingLeaves.slice(0, 3), ...overview.opdQueue.slice(0, 3)]}
+        loading={loading}
+        emptyText="Queue and leave requests are quiet right now."
+        renderRow={(row) => {
+          const isLeave = Object.prototype.hasOwnProperty.call(row, 'LeaveDate');
+
+          return (
+            <div key={`${isLeave ? 'leave' : 'queue'}-${row.Id}`} className="px-6 py-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 transition-colors">
+              {isLeave ? (
+                <>
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className="font-bold text-slate-800 truncate">{row.StaffName}</p>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded text-rose-700 bg-rose-50 inline-block mt-1">LEAVE REQUEST</span>
+                    </div>
+                    <span className="text-xs font-semibold px-2 py-1 rounded-full bg-slate-100 text-slate-600 flex-shrink-0">
+                      {new Date(row.LeaveDate).toLocaleDateString('en-IN', { month:'short', day:'numeric'})}
+                    </span>
+                  </div>
+                  {row.Reason && <p className="text-[11px] text-slate-500 mt-2 line-clamp-2 italic bg-slate-50 p-2 rounded-lg border border-slate-100">"{row.Reason}"</p>}
+                </>
+              ) : (
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="font-bold text-slate-800 truncate">{row.PatientName}</p>
+                    <p className="text-xs text-slate-500 mt-1">Consulting: <span className="font-medium text-slate-700">Dr. {row.DoctorName}</span></p>
+                  </div>
+                  <div className="text-center bg-indigo-50 border border-indigo-100 px-3 py-1.5 rounded-xl flex-shrink-0">
+                    <span className="block text-[9px] font-black text-indigo-400 uppercase tracking-widest leading-none">Token</span>
+                    <span className="block text-indigo-700 font-black text-lg leading-tight">#{row.TokenNumber}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        }}
+      />
+    </div>
+  );
+
+  // 5. Recent Activity Section
+  const renderActivity = () => (
+    <div className="max-w-3xl slide-in content-section">
+      <div className="card h-full">
+        <div className="card-header border-b border-slate-100">
+          <div>
+            <h2 className="font-bold text-slate-800">System Activity Log</h2>
+            <p className="text-xs text-slate-500 mt-1">Live feed assembled on the server representing actions across the hospital.</p>
+          </div>
+        </div>
+        <div className="card-body p-0 max-h-[600px] overflow-y-auto">
+          <RecentActivityList activities={overview.recentActivity} loading={loading} />
+        </div>
+      </div>
+    </div>
+  );
+
+
+  // ============================================================================
+  // MAIN RENDER (DUAL-COLUMN ARCHITECTURE)
+  // ============================================================================
   return (
     <div className="space-y-6">
-
-      {/* Greeting header */}
-      <div className="flex items-center justify-between">
+      <style>{`
+        @keyframes slide-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .slide-in { animation: slide-in 0.25s ease-out forwards; }
+        .content-section { min-height: 400px; }
+      `}</style>
+      
+      {/* ── Top Header Bar ── */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-3xl shadow-[0_2px_10px_-3px_rgba(6,81,237,0.1)] border border-slate-100">
         <div>
-          <h1 className="page-title">{greeting}, {user?.firstName || 'Admin'} 👋</h1>
-          <p className="page-subtitle">Here's what's happening at your hospital today.</p>
-        </div>
-        <div className="text-right hidden sm:block">
-          <p className="text-sm font-semibold text-slate-700">
-            {new Date().toLocaleDateString('en-IN', { weekday:'long', year:'numeric', month:'long', day:'numeric' })}
-          </p>
-          <p className="text-xs text-slate-400">
-            {user?.role === 'superadmin' ? 'Super Administrator' : 'Hospital Administrator'}
-          </p>
-        </div>
-      </div>
-
-      {/* Stat cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard icon={Users}      label="Total Patients" value="—" sub="This month" color="bg-blue-500" />
-        <StatCard icon={UserCheck}  label="Active Doctors" value="—" sub="On staff"   color="bg-primary-600" />
-        <StatCard icon={Bed}        label="Beds Occupied"  value="—" sub="/ Total"    color="bg-green-500" />
-        <StatCard icon={TrendingUp} label="Revenue Today"  value="—" sub="₹"          color="bg-orange-500" />
-      </div>
-
-      {/* Alert banners */}
-      {(pendingDoctors.length > 0 || pendingStaff.length > 0) && (
-        <div className="flex items-center gap-3 px-5 py-3.5 rounded-xl bg-amber-50 border border-amber-200">
-          <AlertCircle size={16} className="text-amber-500 flex-shrink-0" />
-          <p className="text-sm text-amber-700 font-medium">
-            You have{' '}
-            {pendingDoctors.length > 0 && (
-              <span className="font-bold">{pendingDoctors.length} doctor{pendingDoctors.length > 1 ? 's' : ''}</span>
-            )}
-            {pendingDoctors.length > 0 && pendingStaff.length > 0 && ' and '}
-            {pendingStaff.length > 0 && (
-              <span className="font-bold">{pendingStaff.length} staff member{pendingStaff.length > 1 ? 's' : ''}</span>
-            )}
-            {' '}awaiting approval.
-          </p>
-        </div>
-      )}
-
-      {hasScheduleAlerts && (
-        <div className="flex items-center gap-3 px-5 py-3.5 rounded-xl bg-red-50 border border-red-200">
-          <CalendarOff size={16} className="text-red-500 flex-shrink-0" />
-          <p className="text-sm text-red-700 font-medium">
-            <span className="font-bold">{pendingLeaves.length} leave request{pendingLeaves.length > 1 ? 's' : ''}</span>
-            {' '}pending your approval — affected slots will auto-block on approval.
-          </p>
-          <button
-            onClick={() => navigate('/admin/scheduling')}
-            className="ml-auto flex items-center gap-1 text-red-600 text-xs font-semibold hover:underline flex-shrink-0">
-            Review <ChevronRight size={12} />
-          </button>
-        </div>
-      )}
-
-      {/* Pending Doctor Approvals */}
-      <PendingCard
-        title="Pending Doctor Approvals"
-        icon={Stethoscope}
-        iconColor="text-yellow-500"
-        items={pendingDoctors}
-        loading={loadingDoctors}
-        approving={approvingDoc}
-        navigatePath="/admin/doctor-approvals"
-        badgeColor="bg-yellow-100 text-yellow-700"
-        avatarColor="bg-primary-100 text-primary-700"
-        avatarText="Dr."
-        onApprove={{ approve: handleApproveDoctor, reload: loadPendingDoctors }}
-        onRejectNavigate={navigate}
-        line1={d => `${d.SpecializationName || '—'} · ${d.QualificationName || d.QualificationCode || '—'}`}
-        line2={d => `${d.Email} · Lic: ${d.LicenseNumber}`}
-        meta={d => (
-          <>
-            {d.ExperienceYears && <p>{d.ExperienceYears} yrs exp</p>}
-            {d.ConsultationFee && <p>₹{d.ConsultationFee} fee</p>}
-          </>
-        )}
-      />
-
-      {/* Pending Staff Approvals */}
-      <PendingCard
-        title="Pending Staff Approvals"
-        icon={Briefcase}
-        iconColor="text-blue-500"
-        items={pendingStaff}
-        loading={loadingStaff}
-        approving={approvingStaff}
-        navigatePath="/admin/staff-approvals"
-        badgeColor="bg-blue-100 text-blue-700"
-        avatarColor="bg-blue-100 text-blue-700"
-        avatarText=""
-        onApprove={{ approve: handleApproveStaff, reload: loadPendingStaff }}
-        onRejectNavigate={navigate}
-        line1={s => `${s.Role ? s.Role.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : '—'} · ${s.DepartmentName || 'No dept'}`}
-        line2={s => `${s.Email} · ${s.Phone}`}
-        meta={s => (
-          <>
-            {s.Shift           && <p>{s.Shift} shift</p>}
-            {s.ExperienceYears && <p>{s.ExperienceYears} yrs exp</p>}
-          </>
-        )}
-      />
-
-      {/* Scheduling section header */}
-      <div className="flex items-center justify-between pt-2">
-        <div>
-          <h2 className="text-base font-bold text-slate-800 flex items-center gap-2">
-            <Calendar size={16} className="text-indigo-500" />
-            Scheduling & OPD
-          </h2>
-          <p className="text-xs text-slate-400 mt-0.5">
-            Manage doctor &amp; staff schedules, slots, leaves, and the live OPD queue.
-          </p>
+          <h1 className="text-2xl font-black text-slate-800 tracking-tight">Welcome back, {greetingName}!</h1>
+          <p className="text-sm text-slate-500 mt-1 font-medium">Manage and monitor the hospital metrics continuously.</p>
         </div>
         <button
-          onClick={() => navigate('/admin/scheduling')}
-          className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 transition-colors">
-          <Calendar size={13} /> Open Scheduler
+          onClick={loadOverview}
+          disabled={loading}
+          className="self-start sm:self-auto px-5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm font-bold text-slate-700 hover:bg-slate-100 hover:border-slate-300 transition-all focus:ring-4 focus:ring-slate-100 disabled:opacity-50 flex items-center gap-2"
+        >
+          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+          Sync Data
         </button>
       </div>
 
-      {/* Slot utilisation + Leave requests */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <SlotUtilisationCard
-          data={slotSummary}
-          loading={loadingSchedule}
-          navigate={navigate}
-        />
-        <LeaveRequestsCard
-          leaves={pendingLeaves}
-          loading={loadingSchedule}
-          onApprove={handleLeaveAction}
-          navigate={navigate}
-        />
-      </div>
+      {/* ── Optional Important Alert ── */}
+      {(stats.pendingDoctors || stats.pendingStaff || stats.pendingLeaves) ? (
+        <div className="rounded-2xl border-l-4 border-l-amber-500 bg-amber-50 px-5 py-4 flex flex-wrap items-center gap-3 shadow-sm">
+          <div className="w-8 h-8 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center flex-shrink-0">
+             <Clock3 size={16} />
+          </div>
+          <p className="text-sm text-amber-900 font-semibold">
+            Action Required: <span className="font-normal text-amber-700">{stats.pendingDoctors || 0} doctor approvals, {stats.pendingStaff || 0} staff approvals, and {stats.pendingLeaves || 0} leave requests await your review.</span>
+          </p>
+        </div>
+      ) : null}
 
-      {/* Doctor Schedules + Staff Shifts */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <DoctorScheduleCard
-          schedules={doctorSchedules}
-          loading={loadingSchedule}
-          navigate={navigate}
-        />
-        <StaffShiftCard
-          shifts={staffShifts}
-          loading={loadingSchedule}
-          navigate={navigate}
-        />
-      </div>
-
-      {/* OPD Queue (full width) */}
-      <OpdQueueCard
-        queue={opdQueue}
-        loading={loadingSchedule}
-        navigate={navigate}
+      {/* ── The Two-Column Layout ── */}
+      <DashboardTabs
+        tabs={TABS.map((tab) => ({ key: tab.id, label: tab.label, icon: tab.icon }))}
+        activeTab={activeTab}
+        onChange={setActiveTab}
+        theme="indigo"
       />
 
-      {/* Two column layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="card">
-          <div className="card-header">
-            <h3 className="font-semibold text-slate-700 flex items-center gap-2">
-              <Activity size={15} /> Recent Activity
-            </h3>
-          </div>
-          <div className="card-body p-0">
-            {[
-              { text: 'New patient registered',       time: '2 min ago', color: 'bg-blue-400'   },
-              { text: 'Dr. Sharma approved',          time: '1 hr ago',  color: 'bg-green-400'  },
-              { text: 'Invoice #1042 generated',      time: '2 hrs ago', color: 'bg-orange-400' },
-              { text: 'Lab report uploaded',          time: '3 hrs ago', color: 'bg-purple-400' },
-              { text: 'Bed #12 assigned to patient',  time: '4 hrs ago', color: 'bg-teal-400'   },
-            ].map((a, i) => (
-              <div key={i} className="flex items-center gap-3 px-6 py-3.5 border-b border-slate-50 last:border-0">
-                <div className={`w-2 h-2 rounded-full flex-shrink-0 ${a.color}`} />
-                <span className="text-sm text-slate-600 flex-1">{a.text}</span>
-                <span className="text-xs text-slate-400">{a.time}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="card-header">
-            <h3 className="font-semibold text-slate-700 flex items-center gap-2">
-              <Building2 size={15} /> Department Overview
-            </h3>
-          </div>
-          <div className="card-body space-y-3">
-            {[
-              { name: 'Cardiology',  patients: 24, capacity: 30 },
-              { name: 'Orthopedics', patients: 18, capacity: 25 },
-              { name: 'Pediatrics',  patients: 31, capacity: 40 },
-              { name: 'Neurology',   patients: 12, capacity: 20 },
-              { name: 'General',     patients: 45, capacity: 60 },
-            ].map(d => (
-              <div key={d.name}>
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-sm text-slate-600">{d.name}</span>
-                  <span className="text-xs text-slate-400">{d.patients}/{d.capacity}</span>
-                </div>
-                <div className="w-full bg-slate-100 rounded-full h-1.5">
-                  <div
-                    className="h-1.5 rounded-full bg-primary-500 transition-all"
-                    style={{ width: `${(d.patients / d.capacity) * 100}%` }}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+      <div className="w-full min-w-0 transition-all">
+        {activeTab === 'overview' && renderOverview()}
+        {activeTab === 'approvals' && renderApprovals()}
+        {activeTab === 'departments' && renderDepartments()}
+        {activeTab === 'queues' && renderQueues()}
+        {activeTab === 'activity' && renderActivity()}
       </div>
+
     </div>
   );
 }

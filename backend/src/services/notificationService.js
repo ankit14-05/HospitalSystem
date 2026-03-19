@@ -144,6 +144,16 @@ const notifyCompleted = (params) => apptNotif({
   link:  '/appointments',
 });
 
+const notifyMissed = (params) => createNotification({
+  hospitalId: params.hospitalId,
+  userId: params.patientUserId,
+  notifType: 'appointment',
+  title: 'Missed appointment',
+  body: `You missed your appointment with Dr. ${params.doctorName} on ${params.date} at ${params.time}. Please book another available slot.`,
+  link: '/appointments/book',
+  dataJson: { appointmentNo: params.appointmentNo },
+});
+
 const notifyReminder = (params) => createNotification({
   hospitalId:  params.hospitalId,
   userId:      params.patientUserId,
@@ -165,5 +175,6 @@ module.exports = {
   notifyCancelled,
   notifyRescheduled,
   notifyCompleted,
+  notifyMissed,
   notifyReminder,
 };

@@ -3,7 +3,24 @@ const { query, sql } = require('../config/database');
 const ApiResponse     = require('../utils/apiResponse');
 const AppError        = require('../utils/AppError');
 
-const getHospitalId = req => req.user?.hospitalId || req.user?.HospitalId || 1; // fallback to hospital 1
+const getHospitalId = (req) => {
+  const requestedHospitalId =
+    req.headers['x-hospital-id'] ||
+    req.query?.hospitalId ||
+    req.body?.hospitalId;
+
+  const parsedRequestedHospitalId = Number(requestedHospitalId);
+  if (Number.isInteger(parsedRequestedHospitalId) && parsedRequestedHospitalId > 0) {
+    return parsedRequestedHospitalId;
+  }
+
+  const userHospitalId = Number(req.user?.hospitalId ?? req.user?.HospitalId);
+  if (Number.isInteger(userHospitalId) && userHospitalId > 0) {
+    return userHospitalId;
+  }
+
+  return 1;
+};
 const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 
 // SQL Server: compute slot count from two TIME columns
@@ -72,6 +89,44 @@ exports.getAllDoctorSchedules = async (req, res, next) => {
 
     return ApiResponse.success(res, result.recordset, 'Doctor schedules fetched');
   } catch (err) { next(err); }
+};
+
+exports.getRooms = async (req, res, next) => {
+  try {
+    const hospitalId = getHospitalId(req);
+    const result = await query(
+      `
+        SELECT
+          r.Id,
+          r.HospitalId,
+          r.DepartmentId,
+          r.RoomNumber,
+          r.RoomName,
+          r.Floor,
+          r.Notes,
+          ISNULL(r.IsActive, 1) AS IsActive,
+          d.Name AS DepartmentName
+        FROM dbo.OpdRooms r
+        LEFT JOIN dbo.Departments d ON d.Id = r.DepartmentId
+        WHERE r.HospitalId = @HospitalId
+          AND ISNULL(r.IsActive, 1) = 1
+        ORDER BY
+          TRY_CONVERT(INT, r.RoomNumber),
+          r.RoomNumber,
+          r.RoomName
+      `,
+      {
+        HospitalId: { type: sql.BigInt, value: parseInt(hospitalId) },
+      }
+    );
+
+    return ApiResponse.success(res, result.recordset, 'OPD rooms fetched');
+  } catch (err) {
+    if (/Invalid object name 'dbo\.OpdRooms'/i.test(String(err?.message || ''))) {
+      return ApiResponse.success(res, [], 'OPD rooms table is not available in this database yet');
+    }
+    next(err);
+  }
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

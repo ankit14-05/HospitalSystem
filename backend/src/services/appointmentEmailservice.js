@@ -288,6 +288,64 @@ const sendCompletedPatient = async ({ to, patientName, doctorName, date, appoint
   return sendEmail({ to, subject, html: layout(body, GREEN) });
 };
 
+const sendMissedPatient = async ({ to, patientName, doctorName, date, time, appointmentNo }) => {
+  const subject = `Missed appointment — ${date} at ${time} | ${BRAND}`;
+
+  const body = `
+    <p style="margin:0 0 6px;font-size:22px;font-weight:800;color:#0f172a;">Appointment missed</p>
+    <p style="margin:0 0 24px;font-size:14px;color:#64748b;line-height:1.7;">
+      Hi <strong>${patientName}</strong>, our OPD desk marked your appointment with
+      <strong>Dr. ${doctorName}</strong> on <strong>${date} at ${time}</strong> as missed.
+    </p>
+    <div style="background:#fff7ed;border-left:4px solid #f97316;border-radius:0 8px 8px 0;padding:14px 16px;margin-bottom:20px;">
+      <p style="margin:0;font-size:13px;color:#9a3412;line-height:1.6;">
+        Please log in and choose another available slot if you still need the consultation.
+      </p>
+    </div>
+    <p style="margin:0;font-size:13px;color:#94a3b8;">Reference: <strong>${appointmentNo}</strong></p>
+  `;
+
+  return sendEmail({ to, subject, html: layout(body, ORANGE) });
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 9. DAILY SCHEDULE — Doctor
+// ─────────────────────────────────────────────────────────────────────────────
+const sendDoctorDailyScheduleEmail = async ({ to, doctorName, date, appointments = [] }) => {
+  const subject = `📅 Your OPD Schedule for Today — ${date} | ${BRAND}`;
+  
+  const appointmentsHtml = appointments.length === 0 
+    ? '<p style="font-size:14px;color:#64748b;font-style:italic;">You have no scheduled appointments for today yet.</p>'
+    : `<table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
+        <tr style="background:#f8fafc;">
+          <th style="padding:10px;text-align:left;font-size:12px;color:#64748b;border-bottom:1px solid #e2e8f0;">Time</th>
+          <th style="padding:10px;text-align:left;font-size:12px;color:#64748b;border-bottom:1px solid #e2e8f0;">Patient</th>
+          <th style="padding:10px;text-align:left;font-size:12px;color:#64748b;border-bottom:1px solid #e2e8f0;">Token</th>
+          <th style="padding:10px;text-align:left;font-size:12px;color:#64748b;border-bottom:1px solid #e2e8f0;">Type</th>
+        </tr>
+        ${appointments.map((a, i) => `
+          <tr style="${i % 2 === 0 ? 'background:#ffffff;' : 'background:#f8fafc;'}">
+            <td style="padding:10px;font-size:13px;font-weight:600;color:#0f172a;border-bottom:1px solid #e2e8f0;">${a.AppointmentTime.slice(0,5)}</td>
+            <td style="padding:10px;font-size:13px;color:#334155;border-bottom:1px solid #e2e8f0;">${a.PatientName || 'Unnamed'}</td>
+            <td style="padding:10px;font-size:13px;color:#3b82f6;font-family:monospace;border-bottom:1px solid #e2e8f0;">#${a.TokenNumber || '--'}</td>
+            <td style="padding:10px;font-size:12px;color:#64748b;border-bottom:1px solid #e2e8f0;">${a.VisitType}</td>
+          </tr>
+        `).join('')}
+      </table>`;
+
+  const body = `
+    <p style="margin:0 0 6px;font-size:22px;font-weight:800;color:#0f172a;">Today's OPD Schedule</p>
+    <p style="margin:0 0 24px;font-size:14px;color:#64748b;line-height:1.7;">
+      Good morning <strong>Dr. ${doctorName}</strong>, here is your OPD schedule for <strong>${date}</strong>.
+      <br/>Total Appointments: <span style="font-weight:700;color:#4f46e5;">${appointments.length}</span>
+    </p>
+    ${appointmentsHtml}
+    <p style="margin:16px 0 0;font-size:13px;color:#94a3b8;">Log in to the portal to manage your queue and view detailed patient records.</p>
+  `;
+
+  return sendEmail({ to, subject, html: layout(body, PURPLE) });
+};
+
 module.exports = {
   sendBookingConfirmedPatient,
   sendBookingConfirmedDoctor,
@@ -392,5 +450,7 @@ module.exports = {
   sendRescheduledDoctor,
   sendReminderPatient,
   sendCompletedPatient,
+  sendMissedPatient,
   sendTokenConfirmation,
+  sendDoctorDailyScheduleEmail,
 };

@@ -18,6 +18,8 @@ import {
   TEAL, BLUE, Sk, StatCard, StatusBadge, Empty,
   SectionHeader, Card, Modal, fmtDate, fmtTime, initials, InfoBadge
 } from '../../components/ui';
+import DashboardTabs from '../../components/dashboard/DashboardTabs';
+import { getList, getPayload } from '../../utils/apiPayload';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 // Safely parse a date — returns null for invalid/missing values instead of NaN
@@ -75,6 +77,28 @@ const sortAppointmentsBySoonest = (left, right) => {
   const rightTime = getAppointmentDateTime(right)?.getTime() ?? Number.MAX_SAFE_INTEGER;
   return leftTime - rightTime;
 };
+
+const isPrescriptionActive = (prescription) => {
+  const status = String(prescription?.Status || prescription?.status || '').trim().toLowerCase();
+  if (status) {
+    return !['completed', 'cancelled', 'inactive', 'expired'].includes(status);
+  }
+
+  const validUntil = safeDate(prescription?.ValidUntil || prescription?.validUntil);
+  return !validUntil || validUntil.getTime() >= Date.now();
+};
+
+const getPrescriptionItems = (prescription) =>
+  Array.isArray(prescription?.Items) ? prescription.Items : Array.isArray(prescription?.items) ? prescription.items : [];
+
+const getReportTests = (report) =>
+  Array.isArray(report?.Tests) ? report.Tests : Array.isArray(report?.tests) ? report.tests : [];
+
+const getPrescriptionCount = (appointment) =>
+  Number(appointment?.PrescriptionCount || appointment?.prescriptionCount || 0) || 0;
+
+const getLabOrderCount = (appointment) =>
+  Number(appointment?.LabOrderCount || appointment?.labOrderCount || 0) || 0;
 
 const VitalCard = ({ icon: Icon, label, value, unit, normal, color, loading }) => (
   <div className="bg-white rounded-2xl border border-slate-100 p-4 shadow-sm hover:shadow-md transition-shadow flex flex-col gap-3">
@@ -614,10 +638,22 @@ const OverviewTab = ({ profile, appointments, prescriptions, vitals, healthChart
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="font-bold text-slate-800 text-sm truncate">{nextAppt.DoctorName || nextAppt.doctorName}</p>
-                        <p className="text-xs text-slate-400 mt-0.5">{nextAppt.AppointmentTime || nextAppt.StartTime || nextAppt.time}</p>
+                        <p className="text-xs text-slate-400 mt-0.5">{fmtTime(String(nextAppt.AppointmentTime || nextAppt.StartTime || nextAppt.time || '').slice(0, 8))}</p>
                         <span className="inline-block text-xs font-semibold px-2 py-0.5 rounded-full mt-1" style={{ background: `${BLUE}15`, color: BLUE }}>
                           Token {nextAppt.TokenNumber || nextAppt.Token || nextAppt.token || '—'}
                         </span>
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {getPrescriptionCount(nextAppt) > 0 ? (
+                            <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-700">
+                              Prescription ready
+                            </span>
+                          ) : null}
+                          {getLabOrderCount(nextAppt) > 0 ? (
+                            <span className="rounded-full bg-cyan-50 px-2.5 py-1 text-[11px] font-bold text-cyan-700">
+                              Tests ordered
+                            </span>
+                          ) : null}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -640,18 +676,18 @@ const OverviewTab = ({ profile, appointments, prescriptions, vitals, healthChart
                     <div className="flex-1 space-y-1.5"><Sk h="h-3.5" /><Sk w="w-24" h="h-3" /></div>
                   </div>
                 ))
-              : prescriptions.filter(x => x.IsActive || x.isActive).length === 0
+              : prescriptions.filter(isPrescriptionActive).length === 0
                 ? <div className="py-6 text-center text-slate-400"><Pill size={18} className="mx-auto mb-2 text-slate-200" /><p className="text-xs">No active medications</p></div>
-                : prescriptions.filter(x => x.IsActive || x.isActive).map(rx => (
+                : prescriptions.filter(isPrescriptionActive).slice(0, 3).map(rx => (
                     <div key={rx.Id || rx.id} className="flex items-center gap-3 px-5 py-3.5 border-b border-slate-50 last:border-0 hover:bg-slate-50 transition-colors">
                       <div className="w-8 h-8 rounded-xl bg-emerald-50 flex items-center justify-center flex-shrink-0">
                         <Pill size={13} className="text-emerald-600" />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm font-semibold text-slate-700 truncate">{rx.DrugName || rx.drugName || rx.name}</p>
-                        <p className="text-xs text-slate-400">{rx.Dosage || rx.dosage}</p>
+                        <p className="text-sm font-semibold text-slate-700 truncate">{rx.RxNumber || 'Prescription'}</p>
+                        <p className="text-xs text-slate-400">{getPrescriptionItems(rx).length} medicine(s) · {rx.Diagnosis || 'Treatment plan'}</p>
                       </div>
-                      <span className="text-xs text-emerald-600 font-medium whitespace-nowrap">{rx.Duration || rx.duration}</span>
+                      <span className="text-xs text-emerald-600 font-medium whitespace-nowrap">{fmtDate(rx.ValidUntil || rx.validUntil || rx.RxDate || rx.date)}</span>
                     </div>
                   ))
             }
@@ -725,8 +761,22 @@ const AppointmentsTab = ({ appointments, loading, onRefresh, onBook, onCancel })
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="font-bold text-slate-800 text-sm">{a.DoctorName || a.doctorName || a.FullName || 'Doctor'}</p>
-                  <p className="text-xs text-slate-400 mt-0.5">{a.DepartmentName || a.departmentName} · {a.AppointmentTime || a.StartTime || a.time} · Token: {a.TokenNumber || a.Token || a.token || 'N/A'}</p>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    {a.DepartmentName || a.departmentName} · {fmtTime(String(a.AppointmentTime || a.StartTime || a.time || '').slice(0, 8))} · Token: {a.TokenNumber || a.Token || a.token || 'N/A'}
+                  </p>
                   <p className="text-xs text-slate-400 capitalize">{a.VisitType || a.Type || a.type}</p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {getPrescriptionCount(a) > 0 ? (
+                      <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-700">
+                        Prescription ready
+                      </span>
+                    ) : null}
+                    {getLabOrderCount(a) > 0 ? (
+                      <span className="rounded-full bg-cyan-50 px-2.5 py-1 text-[11px] font-bold text-cyan-700">
+                        Tests ordered
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
                 {/* ✅ FIX: use ?? so fee of 0 is still shown */}
                 {((a.ConsultationFee ?? a.fee) != null) && (
@@ -758,16 +808,18 @@ const PrescriptionsTab = ({ prescriptions, loading, onRefresh }) => (
         : <div className="divide-y divide-slate-50">
             {prescriptions.map(rx => (
               <div key={rx.Id || rx.id} className="flex items-center gap-4 px-6 py-4 hover:bg-slate-50 transition-colors">
-                <div className={`w-10 h-10 rounded-2xl flex items-center justify-center flex-shrink-0 ${(rx.IsActive || rx.isActive) ? 'bg-emerald-50' : 'bg-slate-100'}`}>
-                  <Pill size={14} className={(rx.IsActive || rx.isActive) ? 'text-emerald-600' : 'text-slate-400'} />
+                <div className={`w-10 h-10 rounded-2xl flex items-center justify-center flex-shrink-0 ${isPrescriptionActive(rx) ? 'bg-emerald-50' : 'bg-slate-100'}`}>
+                  <Pill size={14} className={isPrescriptionActive(rx) ? 'text-emerald-600' : 'text-slate-400'} />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-bold text-slate-800 text-sm">{rx.DrugName || rx.drugName || rx.name}</p>
-                  <p className="text-xs text-slate-400 mt-0.5">{rx.Dosage || rx.dosage} · {rx.Duration || rx.duration}</p>
-                  <p className="text-xs text-slate-400">{rx.DoctorName || rx.doctorName} · {fmtDate(rx.PrescribedDate || rx.date)}</p>
+                  <p className="font-bold text-slate-800 text-sm">{rx.RxNumber || 'Prescription'}</p>
+                  <p className="text-xs text-slate-400 mt-0.5">{rx.Diagnosis || 'Consultation prescription'}</p>
+                  <p className="text-xs text-slate-400">
+                    {rx.DoctorName || rx.doctorName || 'Doctor'} · {getPrescriptionItems(rx).length} medicine(s) · {fmtDate(rx.RxDate || rx.PrescribedDate || rx.date)}
+                  </p>
                 </div>
-                <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${(rx.IsActive || rx.isActive) ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
-                  {(rx.IsActive || rx.isActive) ? 'Active' : 'Completed'}
+                <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${isPrescriptionActive(rx) ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                  {isPrescriptionActive(rx) ? 'Active' : (rx.Status || rx.status || 'Completed')}
                 </span>
                 <button className="p-2 rounded-xl hover:bg-slate-100 text-slate-300 hover:text-slate-600 transition-colors">
                   <Download size={13} />
@@ -795,8 +847,11 @@ const ReportsTab = ({ reports, loading, onRefresh }) => (
                   <FileText size={14} style={{ color: BLUE }} />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-bold text-slate-800 text-sm">{r.Name || r.name || r.TestName || r.testName}</p>
-                  <p className="text-xs text-slate-400 mt-0.5">{r.Type || r.type || r.Category} · {r.DoctorName || r.doctorName} · {fmtDate(r.Date || r.date)}</p>
+                  <p className="font-bold text-slate-800 text-sm">{r.OrderNumber || 'Lab Order'}</p>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    {getReportTests(r).length ? `${getReportTests(r).length} test(s)` : 'Investigation order'} · {r.OrderedByName || r.DoctorName || r.doctorName || 'Doctor'} · {fmtDate(r.OrderDate || r.Date || r.date)}
+                  </p>
+                  <p className="text-xs text-slate-400">{getReportTests(r).slice(0, 2).map((test) => test.TestName || test.Name).join(', ') || 'Tests pending'}</p>
                 </div>
                 <StatusBadge status={r.Status || r.status || 'pending'} />
                 {(r.Status || r.status) === 'ready' && (
@@ -917,22 +972,22 @@ export default function PatientDashboard() {
     setLoading({ profile: true, appointments: true, prescriptions: true, reports: true, bills: true, vitals: true });
 
     api.get('/patients/profile')
-      .then(r => setProfile(r?.data?.data || r?.data || {}))
+      .then(r => setProfile(getPayload(r) || {}))
       .catch(() => {})
       .finally(() => setL('profile', false));
 
     api.get('/appointments/my')
-      .then(r => setAppointments(r?.data?.data || []))
+      .then(r => setAppointments(getList(r)))
       .catch(() => setAppointments([]))
       .finally(() => setL('appointments', false));
 
     api.get('/prescriptions/my')
-      .then(r => setPrescriptions(r?.data?.data || []))
+      .then(r => setPrescriptions(getList(r)))
       .catch(() => setPrescriptions([]))
       .finally(() => setL('prescriptions', false));
 
     api.get('/reports/my')
-      .then(r => setReports(r?.data?.data || []))
+      .then(r => setReports(getList(r)))
       .catch(() => setReports([]))
       .finally(() => setL('reports', false));
 
@@ -963,12 +1018,12 @@ export default function PatientDashboard() {
   const p           = profile || {};
   const displayName = `${p.FirstName || user?.firstName || ''} ${p.LastName || user?.lastName || ''}`.trim() || 'Patient';
   const upcoming    = appointments.filter(isUpcomingAppointment);
-  const activeMeds  = prescriptions.filter(x => x.IsActive || x.isActive);
+  const activeMeds  = prescriptions.filter(isPrescriptionActive);
 
   const refreshAppointments = useCallback(() => {
     setL('appointments', true);
     api.get('/appointments/my')
-      .then(r => setAppointments(r?.data?.data || []))
+      .then(r => setAppointments(getList(r)))
       .catch(() => {})
       .finally(() => setL('appointments', false));
   }, [setL]);
@@ -984,7 +1039,7 @@ export default function PatientDashboard() {
   const refreshPrescriptions = useCallback(() => {
     setL('prescriptions', true);
     api.get('/prescriptions/my')
-      .then(r => setPrescriptions(r?.data?.data || r?.data || []))
+      .then(r => setPrescriptions(getList(r)))
       .catch(() => {})
       .finally(() => setL('prescriptions', false));
   }, [setL]);
@@ -992,7 +1047,7 @@ export default function PatientDashboard() {
   const refreshReports = useCallback(() => {
     setL('reports', true);
     api.get('/reports/my')
-      .then(r => setReports(r?.data?.data || r?.data || []))
+      .then(r => setReports(getList(r)))
       .catch(() => {})
       .finally(() => setL('reports', false));
   }, [setL]);
@@ -1009,6 +1064,8 @@ export default function PatientDashboard() {
     const refreshLiveAppointments = () => {
       if (document.hidden) return;
       refreshAppointments();
+      refreshPrescriptions();
+      refreshReports();
     };
 
     const handleVisibilityChange = () => {
@@ -1026,7 +1083,7 @@ export default function PatientDashboard() {
       window.removeEventListener('focus', refreshLiveAppointments);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [refreshAppointments]);
+  }, [refreshAppointments, refreshPrescriptions, refreshReports]);
 
   const TABS = [
     { key: 'overview',      label: 'Dashboard',       icon: Activity                            },
@@ -1134,28 +1191,12 @@ export default function PatientDashboard() {
         </button>
       </div>
 
-      {/* ── Tab bar ── */}
-      <div className="flex gap-0.5 flex-wrap border-b border-slate-200">
-        {TABS.map(({ key, label, icon: Icon, badge }) => (
-          <button key={key} onClick={() => setActiveTab(key)}
-            className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold rounded-t-xl border-b-2 transition-all
-              ${activeTab === key
-                ? 'border-blue-600 text-blue-700 bg-blue-50'
-                : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-50'}`}>
-            <Icon size={14} />
-            {label}
-            {badge > 0 && (
-              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full
-                ${activeTab === key ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-600'}`}>
-                {badge}
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
+      {/* ── The Two-Column Layout ── */}
+      <DashboardTabs tabs={TABS} activeTab={activeTab} onChange={setActiveTab} theme="blue" />
 
-      {/* ── Tab content ── */}
-      {tabContent[activeTab] ?? null}
+      <div className="w-full min-w-0 transition-all">
+        {tabContent[activeTab] ?? null}
+      </div>
 
       {/* ── Modals ── */}
       {showBook    && <BookModal    onClose={() => setShowBook(false)}    onSuccess={() => { setShowBook(false);    fetchAll(); }} />}

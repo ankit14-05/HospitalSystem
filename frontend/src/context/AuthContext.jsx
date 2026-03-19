@@ -2,20 +2,9 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { authAPI } from '../services/api';
 import toast from 'react-hot-toast';
+import { ROLE_LABELS } from '../config/roles';
 
 const AuthContext = createContext(null);
-
-const ROLE_LABELS = {
-  superadmin:    'Super Admin',
-  admin:         'Hospital Admin',
-  doctor:        'Doctor',
-  nurse:         'Nurse / Staff',
-  receptionist:  'Receptionist',
-  pharmacist:    'Pharmacist',
-  labtech:       'Lab Technician',
-  patient:       'Patient',
-  auditor:       'Auditor',
-};
 
 export function AuthProvider({ children }) {
   const [user, setUser]       = useState(() => {

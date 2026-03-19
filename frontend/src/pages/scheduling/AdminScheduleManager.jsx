@@ -11,6 +11,7 @@ import {
 import api from '../../services/api';
 import toast from 'react-hot-toast';
 import { useAuth } from '../../context/AuthContext';
+import { useNavigate } from 'react-router-dom';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const DAYS     = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -52,6 +53,12 @@ const initials = n => (n||'').split(' ').map(w=>w[0]).join('').slice(0,2).toUppe
 const fmtDate  = d => d ? new Date(d).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}) : '—';
 
 // ─── Skeleton ─────────────────────────────────────────────────────────────────
+const extractList = (response) => {
+  if (Array.isArray(response?.data)) return response.data;
+  if (Array.isArray(response)) return response;
+  return [];
+};
+
 const Sk = ({ w='w-full', h='h-4', r='rounded-lg' }) => (
   <div className={`${w} ${h} ${r} bg-slate-100 animate-pulse`} />
 );
@@ -341,6 +348,7 @@ const ScheduleCard = ({ schedule, onEdit, onDelete }) => {
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function AdminScheduleManager() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [schedules, setSchedules] = useState([]);
   const [doctors,   setDoctors]   = useState([]);
   const [rooms,     setRooms]     = useState([]);
@@ -358,16 +366,45 @@ export default function AdminScheduleManager() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [schRes, docRes, roomRes] = await Promise.all([
+      const [schRes, docRes, roomRes] = await Promise.allSettled([
         api.get('/scheduling/doctor-schedules'),
         api.get('/scheduling/doctors-list'),
         api.get('/scheduling/rooms'),
       ]);
-      setSchedules(schRes.data || []);
-      setDoctors(docRes.data   || []);
-      setRooms(roomRes.data    || []);
+
+      const loadErrors = [];
+
+      if (schRes.status === 'fulfilled') {
+        setSchedules(extractList(schRes.value));
+      } else {
+        setSchedules([]);
+        loadErrors.push(schRes.reason?.message || 'Failed to load schedules');
+      }
+
+      if (docRes.status === 'fulfilled') {
+        setDoctors(extractList(docRes.value));
+      } else {
+        setDoctors([]);
+        loadErrors.push(docRes.reason?.message || 'Failed to load doctors');
+      }
+
+      if (roomRes.status === 'fulfilled') {
+        setRooms(extractList(roomRes.value));
+      } else {
+        setRooms([]);
+        const roomMessage = roomRes.reason?.message || 'Failed to load OPD rooms';
+        if (schRes.status === 'fulfilled' && docRes.status === 'fulfilled') {
+          toast.error(`${roomMessage}. You can still manage schedules without assigning a room.`);
+        } else {
+          loadErrors.push(roomMessage);
+        }
+      }
+
+      if (loadErrors.length) {
+        toast.error(loadErrors.join(' | '));
+      }
     } catch (e) {
-      toast.error('Failed to load schedules');
+      toast.error(e?.message || 'Failed to load schedules');
     } finally { setLoading(false); }
   }, []);
 
@@ -433,7 +470,7 @@ export default function AdminScheduleManager() {
             <button onClick={load} className="w-9 h-9 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 flex items-center justify-center text-slate-500 transition-colors">
               <RefreshCw size={15} />
             </button>
-            <button onClick={()=>{ setEditTarget(null); setShowForm(true); }}
+            <button onClick={() => navigate('/admin/schedule-manager/new')}
               className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-teal-600 hover:bg-teal-700 rounded-xl transition-all shadow-sm">
               <Plus size={15} /> Assign Schedule
             </button>
@@ -526,7 +563,7 @@ export default function AdminScheduleManager() {
                     {byDay[i].length === 0 ? (
                       <div className="border-2 border-dashed border-slate-200 rounded-xl p-4 text-center">
                         <p className="text-xs text-slate-400">No schedule</p>
-                        <button onClick={()=>{ setEditTarget(null); setShowForm(true); }}
+                        <button onClick={() => navigate(`/admin/schedule-manager/new?day=${i}`)}
                           className="text-xs text-teal-600 hover:text-teal-700 font-medium mt-1 block mx-auto">
                           + Add
                         </button>
@@ -556,7 +593,7 @@ export default function AdminScheduleManager() {
                         </div>
                         {/* Action buttons on hover */}
                         <div className="absolute inset-0 bg-white/90 flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity rounded-xl">
-                          <button onClick={()=>{ setEditTarget(sch); setShowForm(true); }}
+                          <button onClick={() => navigate(`/admin/schedule-manager/${sch.Id}/edit`)}
                             className="w-7 h-7 bg-blue-100 rounded-lg flex items-center justify-center text-blue-600 hover:bg-blue-200 transition-colors">
                             <Edit2 size={12} />
                           </button>
@@ -583,7 +620,7 @@ export default function AdminScheduleManager() {
               </div>
             ) : filtered.map(sch => (
               <ScheduleCard key={sch.Id} schedule={sch}
-                onEdit={s=>{ setEditTarget(s); setShowForm(true); }}
+                onEdit={s => navigate(`/admin/schedule-manager/${s.Id}/edit`)}
                 onDelete={s=>setDelTarget(s)} />
             ))}
           </div>

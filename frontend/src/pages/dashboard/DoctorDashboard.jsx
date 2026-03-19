@@ -17,6 +17,10 @@ import {
   TEAL, BLUE, Sk, StatCard, StatusBadge, Empty,
   SectionHeader, Card, Modal, fmtDate, fmtTime, initials, InfoBadge
 } from '../../components/ui';
+import CompleteAppointmentModal from '../../components/appointments/CompleteAppointmentModal';
+import PrescriptionComposerModal from '../../components/prescriptions/PrescriptionComposerModal';
+import DashboardTabs from '../../components/dashboard/DashboardTabs';
+import { getList } from '../../utils/apiPayload';
 
 // ─── Token status config ──────────────────────────────────────────────────────
 const Q_STATUS = {
@@ -760,7 +764,7 @@ const ProfileModal = ({ profile, avatar, onClose, onSave }) => {
 };
 
 // ─── Overview Tab ─────────────────────────────────────────────────────────────
-const OverviewTab = ({ profile, queue, weeklyStats, loading }) => {
+const OverviewTab = ({ profile, queue, weeklyStats, loading, upcomingCount }) => {
   const done    = queue.filter(x => (x.Status || x.status) === 'done');
   const waiting = queue.filter(x => (x.Status || x.status) === 'waiting');
   const current = queue.find(x  => (x.Status || x.status) === 'current');
@@ -771,7 +775,7 @@ const OverviewTab = ({ profile, queue, weeklyStats, loading }) => {
         <StatCard icon={Users}       label="Today's Queue" color={BLUE}    value={loading.queue ? null : queue.length}   loading={loading.queue}   trend={5}  />
         <StatCard icon={CheckCircle} label="Seen Today"    color="#059669" value={loading.queue ? null : done.length}    loading={loading.queue}   trend={12} />
         <StatCard icon={Clock}       label="In Queue"      color="#d97706" value={loading.queue ? null : waiting.length} loading={loading.queue}              />
-        <StatCard icon={Bell}        label="New Requests"  color="#ef4444" value={loading.requests ? null : 0}           loading={loading.requests}           />
+        <StatCard icon={Bell}        label="Upcoming Visits" color="#ef4444" value={loading.requests ? null : upcomingCount} loading={loading.requests} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
@@ -891,7 +895,18 @@ const QueueTab = ({ queue, loading, onRefresh, onCallIn, onMarkDone, onRx, searc
                 {filtered.map(pt => {
                   const rawSt = (pt.QueueStatus||pt.Status||pt.status||'waiting').toLowerCase();
                   // Map appointment statuses to queue display statuses
-                  const stMap = { scheduled:'waiting', confirmed:'waiting', 'in progress':'current', completed:'done', cancelled:'done', noshow:'done' };
+                  const stMap = {
+                    scheduled:'waiting',
+                    confirmed:'waiting',
+                    called:'current',
+                    serving:'current',
+                    'in progress':'current',
+                    served:'done',
+                    completed:'done',
+                    cancelled:'done',
+                    skipped:'done',
+                    noshow:'done',
+                  };
                   const st = stMap[rawSt] || rawSt;
                   const tok = Q_STATUS[st] || Q_STATUS.waiting;
                   const id  = pt.Id||pt.id;
@@ -958,16 +973,16 @@ const QueueTab = ({ queue, loading, onRefresh, onCallIn, onMarkDone, onRx, searc
 };
 
 // ─── Requests Tab ─────────────────────────────────────────────────────────────
-const RequestsTab = ({ requests, loading, onRefresh, onApprove, onReject, approvingId, rejectingId, onViewPatient }) => (
+const RequestsTab = ({ requests, loading, onRefresh, onViewPatient }) => (
   <Card>
-    <SectionHeader title="Appointment Requests" icon={Calendar}
-      badge={requests.filter(r => (r.Status||r.status||'').toLowerCase()==='pending').length}>
+    <SectionHeader title="Upcoming Appointments" icon={Calendar}
+      badge={requests.length}>
       <button onClick={onRefresh} className="p-2 hover:bg-slate-100 rounded-xl"><RefreshCw size={13} className="text-slate-400" /></button>
     </SectionHeader>
     {loading
       ? [1,2,3].map(i => <SkRow key={i} />)
       : requests.length === 0
-        ? <Empty icon={Calendar} text="No appointment requests" />
+        ? <Empty icon={Calendar} text="No upcoming appointments" />
         : <div className="divide-y divide-slate-50">
             {requests.map(req => {
               const id        = req.Id||req.id;
@@ -1013,17 +1028,10 @@ const RequestsTab = ({ requests, loading, onRefresh, onApprove, onReject, approv
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
                     <StatusBadge status={req.Status||req.status||'pending'} />
-                    {(st==='pending' || st==='scheduled') && (
-                      <>
-                        <button onClick={() => onApprove(id)} disabled={approvingId===id}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border bg-emerald-50 text-emerald-700 border-emerald-100 hover:bg-emerald-100 disabled:opacity-50">
-                          {approvingId===id ? <Loader size={11} className="animate-spin" /> : <CheckCircle size={11} />} Confirm
-                        </button>
-                        <button onClick={() => onReject(id)} disabled={rejectingId===id}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border bg-red-50 text-red-600 border-red-100 hover:bg-red-100 disabled:opacity-50">
-                          {rejectingId===id ? <Loader size={11} className="animate-spin" /> : <XCircle size={11} />} Cancel
-                        </button>
-                      </>
+                    {['pending', 'scheduled', 'confirmed', 'rescheduled'].includes(st) && (
+                      <span className="flex items-center gap-1 text-xs text-amber-600 font-semibold bg-amber-50 px-2.5 py-1 rounded-full">
+                        <Clock size={10}/> Managed by OPD desk
+                      </span>
                     )}
                     {st==='completed' && (
                       <span className="flex items-center gap-1 text-xs text-emerald-600 font-semibold bg-emerald-50 px-2.5 py-1 rounded-full">
@@ -1059,9 +1067,9 @@ const RxTab = ({ prescriptions, loading, onRefresh, onNew }) => (
                   <Pill size={14} style={{ color: TEAL }} />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-bold text-slate-800 text-sm">{rx.DrugName||rx.drugName||rx.name||rx.RxNumber||'Prescription'}</p>
-                  <p className="text-xs text-slate-400 mt-0.5">{rx.Dosage||rx.dosage} · {rx.Frequency||rx.frequency} · {rx.Duration||rx.duration}</p>
-                  <p className="text-xs text-slate-400">Patient: {rx.PatientName||rx.patientName||'—'} · {fmtDate(rx.RxDate||rx.PrescribedDate||rx.date)}</p>
+                  <p className="font-bold text-slate-800 text-sm">{rx.RxNumber || 'Prescription'}</p>
+                  <p className="text-xs text-slate-400 mt-0.5">{rx.Diagnosis || 'Consultation prescription'}</p>
+                  <p className="text-xs text-slate-400">Patient: {rx.PatientName || rx.patientName || '-'} · {(Array.isArray(rx.Items) ? rx.Items : Array.isArray(rx.items) ? rx.items : []).length} medicine(s) · {fmtDate(rx.RxDate || rx.PrescribedDate || rx.date)}</p>
                 </div>
                 <InfoBadge color={TEAL}>{rx.Status||rx.status||'active'}</InfoBadge>
                 <button className="p-2 rounded-xl hover:bg-slate-100 text-slate-300 hover:text-slate-600 transition-colors">
@@ -1185,8 +1193,6 @@ export default function DoctorDashboard() {
   const [showComplete, setShowComplete] = useState(null); // appointment to complete
   const [showRx,      setShowRx]      = useState(null);
   const [profilePic,  setProfilePic]  = useState(null);
-  const [approvingId, setApprovingId] = useState(null);
-  const [rejectingId, setRejectingId] = useState(null);
 
   const setL = (k, v) => setLoading(l => ({ ...l, [k]: v }));
 
@@ -1227,8 +1233,7 @@ export default function DoctorDashboard() {
   const fetchPrescriptions = useCallback(async () => {
     setL('prescriptions', true);
     try {
-      const r    = await api.get('/prescriptions/issued');
-      const list = r?.data?.data ?? r?.data ?? r ?? [];
+      const list = getList(await api.get('/prescriptions/issued'));
       setPrescriptions(Array.isArray(list) ? list : []);
     } catch { setPrescriptions([]); }
     finally { setL('prescriptions', false); }
@@ -1287,8 +1292,9 @@ export default function DoctorDashboard() {
     if (document.hidden) return;
     fetchQueue();
     fetchRequests();
+    fetchPrescriptions();
     fetchSchedule();
-  }, [fetchQueue, fetchRequests, fetchSchedule]);
+  }, [fetchPrescriptions, fetchQueue, fetchRequests, fetchSchedule]);
 
   useEffect(() => {
     fetchProfile();
@@ -1337,28 +1343,6 @@ export default function DoctorDashboard() {
     } catch (e) { toast.error(e?.message || 'Could not update status'); }
   };;
 
-  const handleApprove = async (id) => {
-    setApprovingId(id);
-    try {
-      await api.patch(`/appointments/${id}/status`, { status: 'Confirmed' });
-      setRequests(r => r.map(a => (a.Id||a.id)===id ? { ...a, Status:'Confirmed', status:'confirmed' } : a));
-      toast.success('Appointment confirmed');
-      refreshLiveAppointmentData();
-    } catch (e) { toast.error(e?.message || 'Failed to approve'); }
-    finally { setApprovingId(null); }
-  };
-
-  const handleReject = async (id) => {
-    setRejectingId(id);
-    try {
-      await api.patch(`/appointments/${id}/cancel`, { cancelReason: 'Cancelled by doctor' });
-      setRequests(r => r.map(a => (a.Id||a.id)===id ? { ...a, Status:'Cancelled', status:'cancelled' } : a));
-      toast.success('Appointment cancelled');
-      refreshLiveAppointmentData();
-    } catch (e) { toast.error(e?.message || 'Failed to cancel'); }
-    finally { setRejectingId(null); }
-  };;
-
   const p          = profile || {};
   const doctorName = `Dr. ${p.FirstName||user?.firstName||''} ${p.LastName||user?.lastName||''}`.trim();
   // Filter: show non-completed, non-cancelled requests
@@ -1366,14 +1350,13 @@ export default function DoctorDashboard() {
     const st = (x.Status||x.status||'').toLowerCase();
     return st !== 'completed' && st !== 'cancelled' && st !== 'noshow';
   });
-  const pending = requests.filter(x => (x.Status||x.status||'').toLowerCase()==='pending');
   const waiting    = queue.filter(x   => (x.Status||x.status)==='waiting');
   const current    = queue.find(x    => (x.Status||x.status)==='current');
 
   const TABS = [
     { key:'overview',  label:'Overview',       icon:Activity   },
     { key:'queue',     label:"Today's Queue",  icon:Users,    badge:waiting.length  },
-    { key:'requests',  label:'Requests',       icon:Calendar, badge:activeRequests.length },
+    { key:'requests',  label:'Upcoming',       icon:Calendar, badge:activeRequests.length },
     { key:'rx',        label:'Prescriptions',  icon:Pill                            },
     { key:'schedule',  label:'Schedule',       icon:Clock                           },
     { key:'analytics', label:'Analytics',      icon:BarChart2                       },
@@ -1381,7 +1364,7 @@ export default function DoctorDashboard() {
   ];
 
   const tabContent = {
-    overview: <OverviewTab profile={p} queue={queue} weeklyStats={weeklyStats} loading={loading} />,
+    overview: <OverviewTab profile={p} queue={queue} weeklyStats={weeklyStats} loading={loading} upcomingCount={activeRequests.length} />,
     queue: (
       <QueueTab queue={queue} loading={loading.queue} onRefresh={fetchQueue}
         onViewPatient={(patientId, name) => setShowPatient({ patientId, patientName: name })}
@@ -1391,14 +1374,18 @@ export default function DoctorDashboard() {
     ),
     requests: (
       <RequestsTab requests={activeRequests} loading={loading.requests} onRefresh={fetchRequests}
-        onViewPatient={(patientId, name) => setShowPatient({ patientId, patientName: name })}
-        onApprove={handleApprove} onReject={handleReject}
-        approvingId={approvingId} rejectingId={rejectingId} />
+        onViewPatient={(patientId, name) => setShowPatient({ patientId, patientName: name })} />
     ),
     rx: (
       <RxTab prescriptions={prescriptions} loading={loading.prescriptions}
         onRefresh={fetchPrescriptions}
-        onNew={() => setShowRx({ Name:'Manual Entry', name:'Manual Entry' })} />
+        onNew={() => {
+          if (current) {
+            setShowRx(current);
+            return;
+          }
+          toast.error('Open a patient from the queue before writing a prescription');
+        }} />
     ),
     schedule: (
       <ScheduleTab profile={p} schedule={schedule} todaySlots={todaySlots} weeklyStats={weeklyStats}
@@ -1472,29 +1459,9 @@ export default function DoctorDashboard() {
         </button>
       </div>
 
-      {/* ── Tab bar ── */}
-      <div className="flex gap-1.5 flex-wrap border-b border-slate-200">
-        {TABS.map(({ key, label, icon:Icon, badge }) => (
-          <button key={key} onClick={() => setActiveTab(key)}
-            className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold rounded-t-xl border-b-2 transition-all
-              ${activeTab===key
-                ? 'border-teal-600 text-teal-700 bg-teal-50'
-                : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-50'}`}>
-            <Icon size={14} />
-            {label}
-            {badge > 0 && (
-              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full
-                ${activeTab===key ? 'bg-teal-600 text-white' : 'bg-slate-200 text-slate-600'}`}>
-                {badge}
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
-
       {/* ── Current patient banner ── */}
       {!loading.queue && current && (
-        <div className="rounded-2xl border border-emerald-100 overflow-hidden bg-white shadow-sm">
+        <div className="rounded-2xl border border-emerald-100 overflow-hidden bg-white shadow-sm mb-6">
           <div className="flex items-center gap-2 px-5 py-2" style={{ background:'#059669' }}>
             <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
             <p className="text-white text-xs font-bold tracking-widest uppercase">Currently In Consultation</p>
@@ -1519,7 +1486,7 @@ export default function DoctorDashboard() {
                 style={{ color:TEAL, borderColor:`${TEAL}30`, background:`${TEAL}0c` }}>
                 <Pill size={13} /> Write Rx
               </button>
-              <button onClick={() => markDone(current.Id||current.id)}
+              <button onClick={() => setShowComplete(current)}
                 className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-white text-sm font-semibold"
                 style={{ background:'#059669' }}>
                 <CheckCircle size={13} /> Mark Done
@@ -1529,15 +1496,25 @@ export default function DoctorDashboard() {
         </div>
       )}
 
-      {/* ── Tab content ── */}
-      {tabContent[activeTab] || null}
+      {/* ── The Two-Column Layout ── */}
+      <DashboardTabs tabs={TABS} activeTab={activeTab} onChange={setActiveTab} theme="teal" />
+
+      <div className="w-full min-w-0 transition-all">
+        {tabContent[activeTab] || null}
+      </div>
 
       {/* ── Modals ── */}
       {showComplete && (
-        <CompleteModal
+        <CompleteAppointmentModal
           appointment={showComplete}
           onClose={() => setShowComplete(null)}
-          onDone={() => { setShowComplete(null); fetchQueue(); fetchRequests(); }}
+          onCompleted={() => {
+            setShowComplete(null);
+            fetchQueue();
+            fetchRequests();
+            fetchPrescriptions();
+            fetchSchedule();
+          }}
         />
       )}
       {showPatient && (
@@ -1553,9 +1530,18 @@ export default function DoctorDashboard() {
           onSave={d => { setProfile(pr => ({ ...pr, ...d })); setProfilePic(d.profilePicUrl); fetchSchedule(); setShowProfile(false); }} />
       )}
       {showRx && (
-        <RxModal patient={showRx} onClose={() => setShowRx(null)}
-          onSave={() => { fetchPrescriptions(); setShowRx(null); }} />
+        <PrescriptionComposerModal
+          patient={showRx}
+          onClose={() => setShowRx(null)}
+          onSaved={() => {
+            fetchPrescriptions();
+            fetchQueue();
+            fetchRequests();
+            setShowRx(null);
+          }}
+        />
       )}
     </div>
   );
 }
+

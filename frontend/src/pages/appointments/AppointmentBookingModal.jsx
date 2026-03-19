@@ -63,7 +63,17 @@ const PickBtn = ({ selected, onClick, children, sub }) => (
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-export default function AppointmentBookingModal({ onClose, onSuccess, prefilledPatientId = null }) {
+export default function AppointmentBookingModal({
+  onClose,
+  onSuccess,
+  prefilledPatientId = null,
+  prefillDoctorId = null,
+  prefillDepartmentId = '',
+  prefillDate = '',
+  prefillTime = '',
+  prefillVisitType = 'OPD',
+  prefillPriority = 'Normal',
+}) {
   const hospitalId = getHospitalId();
   const [step,       setStep]      = useState(1);
   const [submitting, setSubmitting]= useState(false);
@@ -87,13 +97,13 @@ export default function AppointmentBookingModal({ onClose, onSuccess, prefilledP
 
   const [form, setForm] = useState({
     patientId:       prefilledPatientId || '',
-    departmentId:    '',
-    doctorId:        '',
-    appointmentDate: '',
-    appointmentTime: '',
-    visitType:       'OPD',
+    departmentId:    prefillDepartmentId || '',
+    doctorId:        prefillDoctorId || '',
+    appointmentDate: prefillDate || '',
+    appointmentTime: prefillTime || '',
+    visitType:       prefillVisitType || 'OPD',
     reason:          '',
-    priority:        'Normal',
+    priority:        prefillPriority || 'Normal',
   });
 
   // ── Correct endpoint confirmed from server logs ───────────────────────────
@@ -212,6 +222,22 @@ export default function AppointmentBookingModal({ onClose, onSuccess, prefilledP
       .catch(() => setSlots([]))
       .finally(() => setLdSlots(false));
   }, [form.doctorId, form.appointmentDate]);
+
+  useEffect(() => {
+    if (!prefillTime || form.appointmentTime || !slots.length) return;
+    const exactSlot = slots.find((slot) => slot.time === prefillTime);
+    if (exactSlot) {
+      setForm((current) => ({ ...current, appointmentTime: prefillTime }));
+    }
+  }, [form.appointmentTime, prefillTime, slots]);
+
+  useEffect(() => {
+    if (!prefillDoctorId || !doctors.length || selDoctor) return;
+    const doctor = doctors.find((item) => String(getDocId(item)) === String(prefillDoctorId));
+    if (doctor) {
+      setSelDoctor(doctor);
+    }
+  }, [doctors, prefillDoctorId, selDoctor]);
 
   const selDeptObj = departments.find(d => String(getDeptId(d)) === String(form.departmentId));
 

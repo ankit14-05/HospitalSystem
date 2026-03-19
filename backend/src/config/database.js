@@ -40,22 +40,24 @@ async function query(queryStr, params = {}) {
   const request = p.request();
 
   for (const [key, { type, value }] of Object.entries(params)) {
-    // For Time/Date types: skip entirely when value is null/undefined/empty.
-    // mssql throws "Invalid time" / "Invalid date" even for null on these types.
-    // The column gets its DEFAULT (NULL) because the @param is simply absent.
+    if (value === undefined) continue;
+
+    let t = type;
+    let v = value;
+
     const isTemporal = (
       type === sql.Time     ||
       type === sql.Date     ||
       type === sql.DateTime ||
       type === sql.DateTime2
     );
-    if (isTemporal && (value === null || value === undefined || value === '')) {
-      continue;
+    
+    if (isTemporal && (v === null || v === '')) {
+      t = sql.NVarChar(10);
+      v = null;
     }
-    // For all other types: skip only undefined (null is valid and intentional).
-    if (value === undefined) continue;
 
-    request.input(key, type, value);
+    request.input(key, t, v);
   }
 
   return request.query(queryStr);
@@ -66,17 +68,24 @@ async function execute(procedure, params = {}, outputs = {}) {
   const request = p.request();
 
   for (const [key, { type, value }] of Object.entries(params)) {
+    if (value === undefined) continue;
+
+    let t = type;
+    let v = value;
+
     const isTemporal = (
       type === sql.Time     ||
       type === sql.Date     ||
       type === sql.DateTime ||
       type === sql.DateTime2
     );
-    if (isTemporal && (value === null || value === undefined || value === '')) {
-      continue;
+    
+    if (isTemporal && (v === null || v === '')) {
+      t = sql.NVarChar(10);
+      v = null;
     }
-    if (value === undefined) continue;
-    request.input(key, type, value);
+
+    request.input(key, t, v);
   }
   for (const [key, type] of Object.entries(outputs)) {
     request.output(key, type);
@@ -107,4 +116,12 @@ async function closePool() {
   }
 }
 
-module.exports = { sql, getPool, query, execute, withTransaction, closePool };
+module.exports = {
+  sql,
+  getPool,
+  getDb: getPool,
+  query,
+  execute,
+  withTransaction,
+  closePool,
+};

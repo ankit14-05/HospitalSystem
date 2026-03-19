@@ -272,6 +272,25 @@ const getGeneratedSlotRows = async (pool, { doctorId, date, hospitalId = null, e
   return result.recordset;
 };
 
+const getAppointmentSchemaInfo = async (pool) => {
+  const [columnResult, consultationTableResult] = await Promise.all([
+    pool.request().query(`
+      SELECT name
+      FROM sys.columns
+      WHERE object_id = OBJECT_ID('dbo.Appointments')
+        AND name IN ('PrimaryDiagnosis', 'FollowUpDate', 'FollowUpNotes')
+    `),
+    pool.request().query(`
+      SELECT OBJECT_ID('dbo.AppointmentConsultations', 'U') AS TableId
+    `),
+  ]);
+
+  return {
+    appointmentColumns: new Set(columnResult.recordset.map((row) => row.name)),
+    hasConsultationTable: Boolean(consultationTableResult.recordset[0]?.TableId),
+  };
+};
+
 const getScheduleSegments = async (pool, { doctor, date }) => {
   const dayOfWeek = new Date(`${date}T00:00:00`).getDay();
 
@@ -436,6 +455,43 @@ const ensureBookableSlot = async ({
 // ── Fetch full appointment with doctor, patient, dept info ───────────────────
 const getAppointmentById = async (id, hospitalId = null) => {
   const pool = await getDb();
+  const schema = await getAppointmentSchemaInfo(pool);
+  const hasPrimaryDiagnosisColumn = schema.appointmentColumns.has('PrimaryDiagnosis');
+  const hasFollowUpDateColumn = schema.appointmentColumns.has('FollowUpDate');
+  const hasFollowUpNotesColumn = schema.appointmentColumns.has('FollowUpNotes');
+
+  const consultationJoin = schema.hasConsultationTable
+    ? 'LEFT JOIN dbo.AppointmentConsultations ac ON ac.AppointmentId = a.Id'
+    : '';
+
+  const diagnosisSelect = hasPrimaryDiagnosisColumn && schema.hasConsultationTable
+    ? 'COALESCE(ac.PrimaryDiagnosis, a.PrimaryDiagnosis) AS PrimaryDiagnosis,'
+    : hasPrimaryDiagnosisColumn
+      ? 'a.PrimaryDiagnosis AS PrimaryDiagnosis,'
+      : schema.hasConsultationTable
+        ? 'ac.PrimaryDiagnosis AS PrimaryDiagnosis,'
+        : 'CAST(NULL AS NVARCHAR(MAX)) AS PrimaryDiagnosis,';
+
+  const followUpDateSelect = hasFollowUpDateColumn && schema.hasConsultationTable
+    ? 'COALESCE(ac.FollowUpDate, a.FollowUpDate) AS FollowUpDate,'
+    : hasFollowUpDateColumn
+      ? 'a.FollowUpDate AS FollowUpDate,'
+      : schema.hasConsultationTable
+        ? 'ac.FollowUpDate AS FollowUpDate,'
+        : 'CAST(NULL AS DATE) AS FollowUpDate,';
+
+  const followUpNotesSelect = hasFollowUpNotesColumn && schema.hasConsultationTable
+    ? 'COALESCE(ac.FollowUpNotes, a.FollowUpNotes) AS FollowUpNotes,'
+    : hasFollowUpNotesColumn
+      ? 'a.FollowUpNotes AS FollowUpNotes,'
+      : schema.hasConsultationTable
+        ? 'ac.FollowUpNotes AS FollowUpNotes,'
+        : 'CAST(NULL AS NVARCHAR(MAX)) AS FollowUpNotes,';
+
+  const consultationNotesSelect = schema.hasConsultationTable
+    ? 'ac.ConsultationNotes AS ConsultationNotes, ac.CompletedAt AS ConsultationCompletedAt, ac.VitalsJson AS ConsultationVitalsJson,'
+    : 'CAST(NULL AS NVARCHAR(MAX)) AS ConsultationNotes, CAST(NULL AS DATETIME2(0)) AS ConsultationCompletedAt, CAST(NULL AS NVARCHAR(MAX)) AS ConsultationVitalsJson,';
+
   const r = await pool.request()
     .input('Id',         sql.BigInt, id)
     .input('HospitalId', sql.BigInt, hospitalId)
@@ -444,6 +500,32 @@ const getAppointmentById = async (id, hospitalId = null) => {
         a.Id, a.HospitalId, a.AppointmentNo, a.AppointmentDate, a.AppointmentTime,
         a.EndTime, a.VisitType, a.Status, a.Priority, a.Reason, a.Notes,
         a.TokenNumber, a.CancelReason, a.CancelledAt, a.FollowUpOf,
+        ${diagnosisSelect}
+        ${followUpDateSelect}
+        ${followUpNotesSelect}
+        ${consultationNotesSelect}
+        (
+          SELECT COUNT(*)
+          FROM dbo.Prescriptions rx
+          WHERE rx.AppointmentId = a.Id
+        ) AS PrescriptionCount,
+        (
+          SELECT TOP 1 rx.Id
+          FROM dbo.Prescriptions rx
+          WHERE rx.AppointmentId = a.Id
+          ORDER BY rx.CreatedAt DESC, rx.Id DESC
+        ) AS LatestPrescriptionId,
+        (
+          SELECT COUNT(*)
+          FROM dbo.LabOrders lo
+          WHERE lo.AppointmentId = a.Id
+        ) AS LabOrderCount,
+        (
+          SELECT TOP 1 lo.Id
+          FROM dbo.LabOrders lo
+          WHERE lo.AppointmentId = a.Id
+          ORDER BY lo.CreatedAt DESC, lo.Id DESC
+        ) AS LatestLabOrderId,
 
         -- Patient
         pp.Id         AS PatientId,
@@ -474,6 +556,7 @@ const getAppointmentById = async (id, hospitalId = null) => {
       JOIN dbo.DoctorProfiles dp  ON dp.Id = a.DoctorId
       JOIN dbo.Users ud           ON ud.Id = dp.UserId
       LEFT JOIN dbo.Departments d ON d.Id  = a.DepartmentId
+      ${consultationJoin}
       WHERE a.Id = @Id
         AND (@HospitalId IS NULL OR a.HospitalId = @HospitalId)
     `);
@@ -632,16 +715,46 @@ const updateAppointmentStatus = async ({ id, hospitalId, status, cancelReason, u
       WHERE Id = @Id
     `);
 
-  const isCancelled = status === 'Cancelled';
+  const releasesSlot = ['Cancelled', 'NoShow'].includes(status);
   await syncGeneratedSlotRow(pool, {
     hospitalId,
     doctorId: appt.DoctorId,
     date: appt.AppointmentDate,
     time: appt.AppointmentTime,
-    appointmentId: isCancelled ? null : id,
-    tokenNumber: isCancelled ? null : appt.TokenNumber,
-    status: isCancelled ? 'Available' : status,
+    appointmentId: releasesSlot ? null : id,
+    tokenNumber: releasesSlot ? null : appt.TokenNumber,
+    status: releasesSlot ? 'Available' : status,
   });
+
+  if (status === 'Cancelled' || status === 'NoShow') {
+    await pool.request()
+      .input('AppointmentId', sql.BigInt, id)
+      .input('HospitalId', sql.BigInt, hospitalId)
+      .input('QueueStatus', sql.NVarChar, status === 'NoShow' ? 'skipped' : 'cancelled')
+      .query(`
+        UPDATE dbo.OpdQueue
+        SET QueueStatus = @QueueStatus,
+            UpdatedAt = SYSUTCDATETIME()
+        WHERE AppointmentId = @AppointmentId
+          AND HospitalId = @HospitalId
+          AND QueueStatus IN ('waiting', 'called', 'serving')
+      `);
+  }
+
+  if (status === 'Completed') {
+    await pool.request()
+      .input('AppointmentId', sql.BigInt, id)
+      .input('HospitalId', sql.BigInt, hospitalId)
+      .query(`
+        UPDATE dbo.OpdQueue
+        SET QueueStatus = 'served',
+            ServedAt = COALESCE(ServedAt, SYSUTCDATETIME()),
+            UpdatedAt = SYSUTCDATETIME()
+        WHERE AppointmentId = @AppointmentId
+          AND HospitalId = @HospitalId
+          AND QueueStatus IN ('waiting', 'called', 'serving')
+      `);
+  }
 
   return { ...appt, Status: status, CancelReason: cancelReason };
 };
@@ -735,16 +848,29 @@ const rescheduleAppointment = async ({ id, hospitalId, newDate, newTime, updated
 // ─────────────────────────────────────────────────────────────────────────────
 // LIST — with filters, pagination
 // ─────────────────────────────────────────────────────────────────────────────
-const listAppointments = async ({ hospitalId, patientId, doctorId, status, date, page = 1, limit = 20 }) => {
+const listAppointments = async ({
+  hospitalId,
+  patientId,
+  doctorId,
+  departmentId,
+  status,
+  date,
+  search,
+  page = 1,
+  limit = 20,
+}) => {
   const pool   = await getDb();
   const offset = (page - 1) * limit;
+  const searchText = search ? `%${String(search).trim()}%` : null;
 
   const r = await pool.request()
     .input('HospitalId', sql.BigInt,   hospitalId)
     .input('PatientId',  sql.BigInt,   patientId  || null)
     .input('DoctorId',   sql.BigInt,   doctorId   || null)
+    .input('DepartmentId', sql.BigInt, departmentId || null)
     .input('Status',     sql.NVarChar, status     || null)
     .input('Date',       sql.Date,     date       || null)
+    .input('Search',     sql.NVarChar, searchText)
     .input('Limit',      sql.Int,      limit)
     .input('Offset',     sql.Int,      offset)
     .query(`
@@ -752,10 +878,35 @@ const listAppointments = async ({ hospitalId, patientId, doctorId, status, date,
         a.Id, a.AppointmentNo, a.AppointmentDate, a.AppointmentTime,
         a.VisitType, a.Status, a.Priority, a.TokenNumber, a.Reason,
         a.CancelReason, a.CreatedAt,
+        (
+          SELECT COUNT(*)
+          FROM dbo.Prescriptions rx
+          WHERE rx.AppointmentId = a.Id
+        ) AS PrescriptionCount,
+        (
+          SELECT TOP 1 rx.Id
+          FROM dbo.Prescriptions rx
+          WHERE rx.AppointmentId = a.Id
+          ORDER BY rx.CreatedAt DESC, rx.Id DESC
+        ) AS LatestPrescriptionId,
+        (
+          SELECT COUNT(*)
+          FROM dbo.LabOrders lo
+          WHERE lo.AppointmentId = a.Id
+        ) AS LabOrderCount,
+        (
+          SELECT TOP 1 lo.Id
+          FROM dbo.LabOrders lo
+          WHERE lo.AppointmentId = a.Id
+          ORDER BY lo.CreatedAt DESC, lo.Id DESC
+        ) AS LatestLabOrderId,
         pp.Id   AS PatientId,
         pp.UHID, pp.FirstName AS PatientFirstName, pp.LastName AS PatientLastName, pp.Phone AS PatientPhone,
+        pp.UserId AS PatientUserId,
         ud.FirstName AS DoctorFirstName, ud.LastName AS DoctorLastName,
+        ud.Id AS DoctorUserId,
         dp.Id   AS DoctorProfileId,
+        dept.Id AS DepartmentId,
         dept.Name AS DepartmentName,
         dp.ConsultationFee
       FROM dbo.Appointments a
@@ -766,8 +917,22 @@ const listAppointments = async ({ hospitalId, patientId, doctorId, status, date,
       WHERE a.HospitalId = @HospitalId
         AND (@PatientId IS NULL OR a.PatientId = @PatientId)
         AND (@DoctorId  IS NULL OR a.DoctorId  = @DoctorId)
+        AND (@DepartmentId IS NULL OR a.DepartmentId = @DepartmentId OR dp.DepartmentId = @DepartmentId)
         AND (@Status    IS NULL OR a.Status    = @Status)
         AND (@Date      IS NULL OR a.AppointmentDate = @Date)
+        AND (
+          @Search IS NULL
+          OR a.AppointmentNo LIKE @Search
+          OR pp.UHID LIKE @Search
+          OR pp.Phone LIKE @Search
+          OR pp.FirstName LIKE @Search
+          OR pp.LastName LIKE @Search
+          OR CONCAT(pp.FirstName, ' ', pp.LastName) LIKE @Search
+          OR ud.FirstName LIKE @Search
+          OR ud.LastName LIKE @Search
+          OR CONCAT(ud.FirstName, ' ', ud.LastName) LIKE @Search
+          OR dept.Name LIKE @Search
+        )
       ORDER BY a.AppointmentDate DESC, a.AppointmentTime DESC
       OFFSET @Offset ROWS FETCH NEXT @Limit ROWS ONLY
     `);
@@ -776,16 +941,36 @@ const listAppointments = async ({ hospitalId, patientId, doctorId, status, date,
     .input('HospitalId', sql.BigInt, hospitalId)
     .input('PatientId',  sql.BigInt, patientId  || null)
     .input('DoctorId',   sql.BigInt, doctorId   || null)
+    .input('DepartmentId', sql.BigInt, departmentId || null)
     .input('Status',     sql.NVarChar, status   || null)
     .input('Date',       sql.Date,   date       || null)
+    .input('Search',     sql.NVarChar, searchText)
     .query(`
       SELECT COUNT(*) AS total
       FROM dbo.Appointments a
+      JOIN dbo.PatientProfiles pp ON pp.Id = a.PatientId
+      JOIN dbo.DoctorProfiles dp  ON dp.Id = a.DoctorId
+      JOIN dbo.Users ud           ON ud.Id = dp.UserId
+      LEFT JOIN dbo.Departments dept ON dept.Id = a.DepartmentId
       WHERE a.HospitalId = @HospitalId
         AND (@PatientId IS NULL OR a.PatientId = @PatientId)
         AND (@DoctorId  IS NULL OR a.DoctorId  = @DoctorId)
+        AND (@DepartmentId IS NULL OR a.DepartmentId = @DepartmentId OR dp.DepartmentId = @DepartmentId)
         AND (@Status    IS NULL OR a.Status    = @Status)
         AND (@Date      IS NULL OR a.AppointmentDate = @Date)
+        AND (
+          @Search IS NULL
+          OR a.AppointmentNo LIKE @Search
+          OR pp.UHID LIKE @Search
+          OR pp.Phone LIKE @Search
+          OR pp.FirstName LIKE @Search
+          OR pp.LastName LIKE @Search
+          OR CONCAT(pp.FirstName, ' ', pp.LastName) LIKE @Search
+          OR ud.FirstName LIKE @Search
+          OR ud.LastName LIKE @Search
+          OR CONCAT(ud.FirstName, ' ', ud.LastName) LIKE @Search
+          OR dept.Name LIKE @Search
+        )
     `);
 
   return {
@@ -793,6 +978,48 @@ const listAppointments = async ({ hospitalId, patientId, doctorId, status, date,
     total: countR.recordset[0]?.total || 0,
     page,
     limit,
+  };
+};
+
+const getAppointmentFilters = async ({ hospitalId, doctorId = null }) => {
+  const pool = await getDb();
+
+  const doctorRequest = pool.request()
+    .input('HospitalId', sql.BigInt, hospitalId)
+    .input('DoctorId', sql.BigInt, doctorId);
+
+  const doctorsResult = await doctorRequest.query(`
+    SELECT
+      dp.Id AS DoctorId,
+      dp.Id AS DoctorProfileId,
+      dp.DepartmentId,
+      dep.Name AS DepartmentName,
+      u.FirstName,
+      u.LastName,
+      CONCAT(u.FirstName, ' ', u.LastName) AS DoctorName
+    FROM dbo.DoctorProfiles dp
+    JOIN dbo.Users u ON u.Id = dp.UserId
+    LEFT JOIN dbo.Departments dep ON dep.Id = dp.DepartmentId
+    WHERE dp.HospitalId = @HospitalId
+      AND dp.ApprovalStatus = 'approved'
+      AND u.DeletedAt IS NULL
+      AND (@DoctorId IS NULL OR dp.Id = @DoctorId)
+    ORDER BY u.FirstName, u.LastName
+  `);
+
+  const departmentsResult = await pool.request()
+    .input('HospitalId', sql.BigInt, hospitalId)
+    .query(`
+      SELECT Id AS DepartmentId, Name AS DepartmentName
+      FROM dbo.Departments
+      WHERE HospitalId = @HospitalId
+        AND IsActive = 1
+      ORDER BY Name
+    `);
+
+  return {
+    doctors: doctorsResult.recordset,
+    departments: departmentsResult.recordset,
   };
 };
 
@@ -862,6 +1089,7 @@ module.exports = {
   updateAppointmentStatus,
   rescheduleAppointment,
   listAppointments,
+  getAppointmentFilters,
   getMyAppointments,
   getStats,
 };
