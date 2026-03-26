@@ -100,6 +100,9 @@ const resolveHospitalId = (hospitalId) => {
   return Number.isNaN(parsed) ? null : parsed;
 };
 
+const getSlotIdentityKey = ({ slotSessionId = null, assignmentId = null, time = '' }) =>
+  `${slotSessionId ?? ''}|${assignmentId ?? ''}|${normalizeTime(time)}`;
+
 const getDoctorProfile = async (pool, { doctorId, hospitalId = null }) => {
   const resolvedHospitalId = resolveHospitalId(hospitalId);
   const request = pool.request()
@@ -184,6 +187,8 @@ const syncGeneratedSlotRow = async (pool, {
   doctorId,
   date,
   time,
+  assignmentId = null,
+  slotSessionId = null,
   appointmentId = null,
   tokenNumber = null,
   status = null,
@@ -196,6 +201,8 @@ const syncGeneratedSlotRow = async (pool, {
     .input('DoctorId', sql.BigInt, doctorId)
     .input('Date', sql.Date, normalizeDateValue(date))
     .input('Time', sql.NVarChar, normalizedTime)
+    .input('AssignmentId', sql.BigInt, assignmentId)
+    .input('SlotSessionId', sql.BigInt, slotSessionId)
     .input('AppointmentId', sql.BigInt, appointmentId)
     .input('TokenNumber', sql.SmallInt, tokenNumber)
     .input('Status', sql.NVarChar, status)
@@ -208,6 +215,8 @@ const syncGeneratedSlotRow = async (pool, {
       WHERE DoctorId = @DoctorId
         AND SlotDate = @Date
         AND CONVERT(VARCHAR(5), StartTime, 108) = @Time
+        AND (@AssignmentId IS NULL OR AssignmentId = @AssignmentId)
+        AND (@SlotSessionId IS NULL OR SlotSessionId = @SlotSessionId)
         AND (@HospitalId IS NULL OR HospitalId = @HospitalId)
     `);
 
@@ -241,12 +250,12 @@ const syncGeneratedSlotRow = async (pool, {
     `);
 
   const session = sessionResult.recordset[0];
-  let assignmentId = session?.AssignmentId || null;
-  let slotSessionId = session?.SlotSessionId || null;
+  let resolvedAssignmentId = assignmentId ?? session?.AssignmentId ?? null;
+  let resolvedSlotSessionId = slotSessionId ?? session?.SlotSessionId ?? null;
   let opdRoomId = session?.OpdRoomId || null;
   let slotDurationMins = Number(session?.SlotDurationMins) || 15;
 
-  if (!session) {
+  if (!session && (resolvedAssignmentId == null || resolvedSlotSessionId == null)) {
     const assignmentResult = await pool.request()
       .input('DoctorId', sql.BigInt, doctorId)
       .input('Date', sql.Date, normalizeDateValue(date))
@@ -275,7 +284,7 @@ const syncGeneratedSlotRow = async (pool, {
       return;
     }
 
-    assignmentId = assignment.AssignmentId;
+    resolvedAssignmentId = resolvedAssignmentId ?? assignment.AssignmentId;
     opdRoomId = assignment.OpdRoomId || null;
     slotDurationMins = Number(assignment.SlotDurationMins) || 15;
   }
@@ -287,8 +296,8 @@ const syncGeneratedSlotRow = async (pool, {
   await pool.request()
     .input('HospitalId', sql.BigInt, resolveHospitalId(hospitalId))
     .input('DoctorId', sql.BigInt, doctorId)
-    .input('AssignmentId', sql.BigInt, assignmentId)
-    .input('SlotSessionId', sql.BigInt, slotSessionId)
+    .input('AssignmentId', sql.BigInt, resolvedAssignmentId)
+    .input('SlotSessionId', sql.BigInt, resolvedSlotSessionId)
     .input('OpdRoomId', sql.BigInt, opdRoomId)
     .input('SlotDate', sql.Date, normalizeDateValue(date))
     .input('StartTime', sql.NVarChar, normalizedTime)
@@ -325,18 +334,23 @@ const buildDerivedSlots = (segments, { date, bookedAppointmentsByTime }) => {
       const hours = Math.floor(current / 60);
       const minutes = current % 60;
       const time = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+      const slotEndMinutes = current + duration;
+      if (slotEndMinutes > end) break;
+      const endTime = `${String(Math.floor(slotEndMinutes / 60)).padStart(2, '0')}:${String(slotEndMinutes % 60).padStart(2, '0')}`;
       const bookedAppointment = bookedAppointmentsByTime.get(time);
       const past = isPastSlotTime(date, time);
       const available = !bookedAppointment && !past;
 
       slots.push({
         time,
-        endTime: segment.endTime ? normalizeTime(segment.endTime) : '',
+        endTime,
         available,
         isBooked: !available,
         blockedReason: null,
         status: bookedAppointment ? (bookedAppointment.Status || 'Booked') : (past ? 'Passed' : 'Available'),
         source: segment.source,
+        assignmentId: segment.assignmentId ?? null,
+        slotSessionId: segment.slotSessionId ?? null,
       });
 
       current += duration;
@@ -356,6 +370,8 @@ const getGeneratedSlotRows = async (pool, { doctorId, date, hospitalId = null, e
     .query(`
       SELECT
         s.Id,
+        s.AssignmentId,
+        s.SlotSessionId,
         CONVERT(VARCHAR(8), s.StartTime, 108) AS StartTime,
         CONVERT(VARCHAR(8), s.EndTime,   108) AS EndTime,
         s.Status,
@@ -420,6 +436,8 @@ const getAdvancedAssignmentsForDate = async (pool, { doctorId, date, hospitalId 
         a.Id,
         a.BookingEnabled,
         atp.AllowsOpdSlots,
+        a.SlotDurationMins,
+        a.MaxSlots,
         CONVERT(VARCHAR(5), a.StartTime, 108) AS StartTime,
         CONVERT(VARCHAR(5), a.EndTime, 108) AS EndTime
       FROM dbo.DoctorScheduleAssignments a
@@ -523,6 +541,7 @@ const buildPublishedSessionSlots = (sessions, { date, bookedAppointmentsByTime }
       const minutes = current % 60;
       const time = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
       const slotEndMinutes = current + duration;
+      if (slotEndMinutes > end) break;
       const endTime = `${String(Math.floor(slotEndMinutes / 60)).padStart(2, '0')}:${String(slotEndMinutes % 60).padStart(2, '0')}`;
       const bookedAppointment = bookedAppointmentsByTime.get(time);
       const past = isPastSlotTime(date, time);
@@ -546,6 +565,101 @@ const buildPublishedSessionSlots = (sessions, { date, bookedAppointmentsByTime }
   }
 
   return slots;
+};
+
+const buildGeneratedSlotState = (row, { date, bookedAppointmentsByTime, excludeAppointmentId = null }) => {
+  const time = normalizeTime(row.StartTime);
+  const bookedAppointment = bookedAppointmentsByTime.get(time);
+  const slotStatus = (row.Status || '').trim().toLowerCase();
+  const linkedAppointmentStatus = (row.LinkedAppointmentStatus || '').trim().toLowerCase();
+  const blockedBySlotStatus = !OPEN_SLOT_STATUSES.has(slotStatus);
+  const occupiedByLinkedAppointment =
+    row.AppointmentId != null &&
+    row.AppointmentId !== excludeAppointmentId &&
+    !['cancelled', 'noshow', 'completed', 'rescheduled'].includes(linkedAppointmentStatus);
+  const occupiedBySlot = occupiedByLinkedAppointment ||
+    (row.AppointmentId == null && row.TokenNumber != null);
+  const past = isPastSlotTime(date, time);
+  const available = !blockedBySlotStatus && !occupiedBySlot && !bookedAppointment && !past;
+
+  return {
+    id: row.Id,
+    time,
+    endTime: normalizeTime(row.EndTime),
+    available,
+    isBooked: !available,
+    blockedReason: row.BlockedReason || null,
+    status: row.Status || (bookedAppointment ? bookedAppointment.Status : (past ? 'Passed' : 'Available')),
+    source: 'AppointmentSlots',
+    assignmentId: row.AssignmentId ?? null,
+    slotSessionId: row.SlotSessionId ?? null,
+  };
+};
+
+const overlayGeneratedSlotState = (baseSlots, generatedSlotRows, {
+  date,
+  bookedAppointmentsByTime,
+  excludeAppointmentId = null,
+}) => {
+  const generatedStates = generatedSlotRows.map((row) =>
+    buildGeneratedSlotState(row, { date, bookedAppointmentsByTime, excludeAppointmentId })
+  );
+
+  if (!baseSlots.length) {
+    return generatedStates;
+  }
+
+  const indexedStates = generatedStates.map((state, index) => ({ ...state, index }));
+  const statesByIdentity = new Map();
+  const statesByTime = new Map();
+
+  for (const state of indexedStates) {
+    if (state.slotSessionId != null || state.assignmentId != null) {
+      statesByIdentity.set(getSlotIdentityKey(state), state);
+    }
+
+    if (!statesByTime.has(state.time)) {
+      statesByTime.set(state.time, []);
+    }
+    statesByTime.get(state.time).push(state);
+  }
+
+  const matchedStateIndexes = new Set();
+
+  const mergedSlots = baseSlots.map((slot) => {
+    let matchedState = statesByIdentity.get(getSlotIdentityKey(slot));
+
+    if (!matchedState) {
+      const timeBucket = statesByTime.get(slot.time) || [];
+      matchedState = timeBucket.find((candidate) => !matchedStateIndexes.has(candidate.index)) || null;
+    }
+
+    if (!matchedState) {
+      return slot;
+    }
+
+    matchedStateIndexes.add(matchedState.index);
+
+    return {
+      ...slot,
+      id: matchedState.id,
+      endTime: matchedState.endTime || slot.endTime,
+      available: matchedState.available,
+      isBooked: matchedState.isBooked,
+      blockedReason: matchedState.blockedReason,
+      status: matchedState.status,
+      assignmentId: matchedState.assignmentId ?? slot.assignmentId ?? null,
+      slotSessionId: matchedState.slotSessionId ?? slot.slotSessionId ?? null,
+      source: matchedState.source || slot.source,
+    };
+  });
+
+  const unmatchedGeneratedStates = indexedStates
+    .filter((state) => !matchedStateIndexes.has(state.index))
+    .map(({ index, ...state }) => state);
+
+  return [...mergedSlots, ...unmatchedGeneratedStates]
+    .sort((left, right) => toMinutes(left.time) - toMinutes(right.time));
 };
 
 const getDoctorSlots = async ({
@@ -585,37 +699,10 @@ const getDoctorSlots = async ({
     hospitalId: doctor.HospitalId,
   });
 
-  let allSlots = [];
+  let baseSlots = [];
 
-  if (generatedSlotRows.length) {
-    allSlots = generatedSlotRows.map((row) => {
-      const time = normalizeTime(row.StartTime);
-      const bookedAppointment = bookedAppointmentsByTime.get(time);
-      const slotStatus = (row.Status || '').trim().toLowerCase();
-      const linkedAppointmentStatus = (row.LinkedAppointmentStatus || '').trim().toLowerCase();
-      const blockedBySlotStatus = !OPEN_SLOT_STATUSES.has(slotStatus);
-      const occupiedByLinkedAppointment =
-        row.AppointmentId != null &&
-        row.AppointmentId !== excludeAppointmentId &&
-        !['cancelled', 'noshow', 'completed', 'rescheduled'].includes(linkedAppointmentStatus);
-      const occupiedBySlot = occupiedByLinkedAppointment ||
-        (row.AppointmentId == null && row.TokenNumber != null);
-      const past = isPastSlotTime(date, time);
-      const available = !blockedBySlotStatus && !occupiedBySlot && !bookedAppointment && !past;
-
-      return {
-        id: row.Id,
-        time,
-        endTime: normalizeTime(row.EndTime),
-        available,
-        isBooked: !available,
-        blockedReason: row.BlockedReason || null,
-        status: row.Status || (bookedAppointment ? bookedAppointment.Status : (past ? 'Passed' : 'Available')),
-        source: 'AppointmentSlots',
-      };
-    });
-  } else if (publishedSessions.length) {
-    allSlots = buildPublishedSessionSlots(publishedSessions, { date, bookedAppointmentsByTime });
+  if (publishedSessions.length) {
+    baseSlots = buildPublishedSessionSlots(publishedSessions, { date, bookedAppointmentsByTime });
   } else if (advancedAssignments.length) {
     const bookableAssignments = advancedAssignments.filter(
       (assignment) => assignment.AllowsOpdSlots && assignment.BookingEnabled
@@ -627,13 +714,20 @@ const getDoctorSlots = async ({
       slotDurationMins: assignment.SlotDurationMins || 15,
       maxSlots: assignment.MaxSlots || null,
       source: 'DoctorScheduleAssignments',
+      assignmentId: assignment.Id,
     }));
 
-    allSlots = buildDerivedSlots(assignmentSegments, { date, bookedAppointmentsByTime });
+    baseSlots = buildDerivedSlots(assignmentSegments, { date, bookedAppointmentsByTime });
   } else {
     const scheduleSegments = await getScheduleSegments(pool, { doctor, date });
-    allSlots = buildDerivedSlots(scheduleSegments, { date, bookedAppointmentsByTime });
+    baseSlots = buildDerivedSlots(scheduleSegments, { date, bookedAppointmentsByTime });
   }
+
+  const allSlots = overlayGeneratedSlotState(baseSlots, generatedSlotRows, {
+    date,
+    bookedAppointmentsByTime,
+    excludeAppointmentId,
+  });
 
   const visibleSlots = includeUnavailable ? allSlots : allSlots.filter((slot) => slot.available);
 
@@ -900,6 +994,8 @@ const bookAppointment = async ({ hospitalId, patientId, doctorId, departmentId, 
     doctorId: doctor.Id,
     date: appointmentDate,
     time: normalizedAppointmentTime,
+    assignmentId: bookableSlot?.assignmentId ?? null,
+    slotSessionId: bookableSlot?.slotSessionId ?? null,
     appointmentId: newId,
     tokenNumber: token,
     status: 'Booked',
@@ -1069,6 +1165,8 @@ const rescheduleAppointment = async ({ id, hospitalId, newDate, newTime, updated
     doctorId: appt.DoctorId,
     date: newDate,
     time: normalizedNewTime,
+    assignmentId: bookableSlot?.assignmentId ?? null,
+    slotSessionId: bookableSlot?.slotSessionId ?? null,
     appointmentId: id,
     tokenNumber: newToken,
     status: 'Booked',
