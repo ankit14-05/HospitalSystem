@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import api from '../../services/api';
 import toast from 'react-hot-toast';
+import { fmtTimeRange } from '../../components/ui';
 
 const BLUE = '#4f46e5';
 const getHospitalId = () => String(localStorage.getItem('hospitalId') || '1');
@@ -46,8 +47,9 @@ const getDocSpec  = d => d?.SpecializationName ?? d?.Specialization ?? d?.Design
 const normalizeSlot = slot => {
   if (typeof slot === 'string') return { time: slot, available: true };
   const time = slot?.time || slot?.StartTime || slot?.AppointmentTime || '';
+  const endTime = slot?.endTime || slot?.EndTime || '';
   const available = slot?.available ?? !(slot?.isBooked ?? slot?.IsBooked ?? false);
-  return { ...slot, time, available, isBooked: !available };
+  return { ...slot, time, endTime, available, isBooked: !available };
 };
 
 const PickBtn = ({ selected, onClick, children, sub }) => (
@@ -105,6 +107,7 @@ export default function AppointmentBookingModal({
     reason:          '',
     priority:        prefillPriority || 'Normal',
   });
+  const selectedSlot = slots.find((slot) => slot.time === form.appointmentTime) || null;
 
   // ── Correct endpoint confirmed from server logs ───────────────────────────
   // ✅  GET /api/v1/hospitals/1/departments  → 304
@@ -531,7 +534,7 @@ export default function AppointmentBookingModal({
                             form.appointmentTime === time
                               ? 'border-indigo-400 bg-indigo-600 text-white shadow-sm'
                               : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-                          }`}>{time}</button>
+                          }`}>{fmtTimeRange(time, slot.endTime)}</button>
                       );
                     })}
                   </div>
@@ -562,12 +565,19 @@ export default function AppointmentBookingModal({
                       ? new Date(form.appointmentDate + 'T00:00:00').toLocaleDateString('en-IN', { weekday:'long', day:'2-digit', month:'short', year:'numeric' })
                       : '—'],
                     ['Time',       form.appointmentTime || '—'],
+                    ['Time', form.appointmentTime ? fmtTimeRange(form.appointmentTime, selectedSlot?.endTime) : '—'],
                     ['Visit Type', form.visitType],
                     ['Priority',   form.priority],
                     selDoctor && (selDoctor.ConsultationFee ?? selDoctor.consultationFee)
                       ? ['Fee', `₹${selDoctor.ConsultationFee ?? selDoctor.consultationFee}`]
                       : null,
-                  ].filter(Boolean).map(([k, v]) => (
+                  ]
+                    .filter(Boolean)
+                    .reduce((rows, entry) => {
+                      const [key] = entry;
+                      return [...rows.filter(([existingKey]) => existingKey !== key), entry];
+                    }, [])
+                    .map(([k, v]) => (
                     <div key={k} className="flex items-center justify-between px-5 py-3">
                       <span className="text-xs text-slate-400">{k}</span>
                       <span className="text-sm font-semibold text-slate-700">{v}</span>

@@ -3,6 +3,8 @@
 
 const { getPool: getDb, sql } = require('../config/database');
 const AppError = require('../utils/AppError');
+const { getSchemaState } = require('./schedule.service');
+const { requireActivePatientProfile } = require('./patientAccess.service');
 
 const OPEN_SLOT_STATUSES = new Set(['', 'available', 'open', 'free', 'unbooked']);
 
@@ -189,7 +191,7 @@ const syncGeneratedSlotRow = async (pool, {
   const normalizedTime = normalizeTime(time);
   if (!doctorId || !date || !normalizedTime) return;
 
-  await pool.request()
+  const updateResult = await pool.request()
     .input('HospitalId', sql.BigInt, resolveHospitalId(hospitalId))
     .input('DoctorId', sql.BigInt, doctorId)
     .input('Date', sql.Date, normalizeDateValue(date))
@@ -208,6 +210,101 @@ const syncGeneratedSlotRow = async (pool, {
         AND CONVERT(VARCHAR(5), StartTime, 108) = @Time
         AND (@HospitalId IS NULL OR HospitalId = @HospitalId)
     `);
+
+  const updatedExistingRow = Array.isArray(updateResult.rowsAffected)
+    ? updateResult.rowsAffected.some((count) => Number(count) > 0)
+    : false;
+
+  if (updatedExistingRow) {
+    return;
+  }
+
+  const sessionResult = await pool.request()
+    .input('DoctorId', sql.BigInt, doctorId)
+    .input('Date', sql.Date, normalizeDateValue(date))
+    .input('Time', sql.NVarChar, normalizedTime)
+    .input('HospitalId', sql.BigInt, resolveHospitalId(hospitalId))
+    .query(`
+      SELECT TOP 1
+        s.Id AS SlotSessionId,
+        s.AssignmentId,
+        s.OpdRoomId,
+        s.SlotDurationMins
+      FROM dbo.OpdSlotSessions s
+      WHERE s.DoctorId = @DoctorId
+        AND s.SessionDate = @Date
+        AND s.Status <> 'Cancelled'
+        AND CONVERT(VARCHAR(5), s.StartTime, 108) <= @Time
+        AND CONVERT(VARCHAR(5), s.EndTime, 108) > @Time
+        AND (@HospitalId IS NULL OR s.HospitalId = @HospitalId)
+      ORDER BY s.StartTime
+    `);
+
+  const session = sessionResult.recordset[0];
+  let assignmentId = session?.AssignmentId || null;
+  let slotSessionId = session?.SlotSessionId || null;
+  let opdRoomId = session?.OpdRoomId || null;
+  let slotDurationMins = Number(session?.SlotDurationMins) || 15;
+
+  if (!session) {
+    const assignmentResult = await pool.request()
+      .input('DoctorId', sql.BigInt, doctorId)
+      .input('Date', sql.Date, normalizeDateValue(date))
+      .input('Time', sql.NVarChar, normalizedTime)
+      .input('HospitalId', sql.BigInt, resolveHospitalId(hospitalId))
+      .query(`
+        SELECT TOP 1
+          a.Id AS AssignmentId,
+          a.OpdRoomId,
+          a.SlotDurationMins
+        FROM dbo.DoctorScheduleAssignments a
+        JOIN dbo.DoctorScheduleActivityTypes atp ON atp.Id = a.ActivityTypeId
+        WHERE a.DoctorId = @DoctorId
+          AND a.AssignmentDate = @Date
+          AND a.Status IN ('Active', 'Published')
+          AND a.BookingEnabled = 1
+          AND atp.AllowsOpdSlots = 1
+          AND CONVERT(VARCHAR(5), a.StartTime, 108) <= @Time
+          AND CONVERT(VARCHAR(5), a.EndTime, 108) > @Time
+          AND (@HospitalId IS NULL OR a.HospitalId = @HospitalId)
+        ORDER BY a.StartTime
+      `);
+
+    const assignment = assignmentResult.recordset[0];
+    if (!assignment) {
+      return;
+    }
+
+    assignmentId = assignment.AssignmentId;
+    opdRoomId = assignment.OpdRoomId || null;
+    slotDurationMins = Number(assignment.SlotDurationMins) || 15;
+  }
+
+  const slotStartMinutes = toMinutes(normalizedTime);
+  const slotEndMinutes = slotStartMinutes + slotDurationMins;
+  const slotEndTime = `${String(Math.floor(slotEndMinutes / 60)).padStart(2, '0')}:${String(slotEndMinutes % 60).padStart(2, '0')}`;
+
+  await pool.request()
+    .input('HospitalId', sql.BigInt, resolveHospitalId(hospitalId))
+    .input('DoctorId', sql.BigInt, doctorId)
+    .input('AssignmentId', sql.BigInt, assignmentId)
+    .input('SlotSessionId', sql.BigInt, slotSessionId)
+    .input('OpdRoomId', sql.BigInt, opdRoomId)
+    .input('SlotDate', sql.Date, normalizeDateValue(date))
+    .input('StartTime', sql.NVarChar, normalizedTime)
+    .input('EndTime', sql.NVarChar, slotEndTime)
+    .input('VisitType', sql.NVarChar, 'opd')
+    .input('Status', sql.NVarChar, status || 'Available')
+    .input('AppointmentId', sql.BigInt, appointmentId)
+    .input('TokenNumber', sql.SmallInt, tokenNumber)
+    .query(`
+      INSERT INTO dbo.AppointmentSlots
+        (HospitalId, DoctorId, ScheduleId, AssignmentId, SlotSessionId, OpdRoomId, SlotDate,
+         StartTime, EndTime, VisitType, Status, AppointmentId, TokenNumber, IsWalkIn, BlockedReason, CreatedAt, UpdatedAt)
+      VALUES
+        (@HospitalId, @DoctorId, NULL, @AssignmentId, @SlotSessionId, @OpdRoomId, @SlotDate,
+         @StartTime, @EndTime, @VisitType, @Status, @AppointmentId, @TokenNumber, 0, NULL, SYSUTCDATETIME(), SYSUTCDATETIME())
+    `);
 };
 
 const buildDerivedSlots = (segments, { date, bookedAppointmentsByTime }) => {
@@ -217,10 +314,14 @@ const buildDerivedSlots = (segments, { date, bookedAppointmentsByTime }) => {
     let current = toMinutes(segment.startTime);
     const end = toMinutes(segment.endTime);
     const duration = Number(segment.slotDurationMins) || 30;
+    const limit = Number(segment.maxSlots) || 0;
+    let count = 0;
 
     if (!current || !end || duration <= 0 || end <= current) continue;
 
     while (current < end) {
+      if (limit && count >= limit) break;
+
       const hours = Math.floor(current / 60);
       const minutes = current % 60;
       const time = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
@@ -239,6 +340,7 @@ const buildDerivedSlots = (segments, { date, bookedAppointmentsByTime }) => {
       });
 
       current += duration;
+      count += 1;
     }
   }
 
@@ -267,6 +369,66 @@ const getGeneratedSlotRows = async (pool, { doctorId, date, hospitalId = null, e
         AND s.SlotDate = @Date
         AND (@HospitalId IS NULL OR s.HospitalId = @HospitalId)
       ORDER BY s.StartTime
+    `);
+
+  return result.recordset;
+};
+
+const getPublishedOpdSessions = async (pool, { doctorId, date, hospitalId = null }) => {
+  const schema = await getSchemaState(pool);
+  if (!schema.hasAdvancedScheduling) {
+    return [];
+  }
+
+  const resolvedHospitalId = resolveHospitalId(hospitalId);
+  const result = await pool.request()
+    .input('DoctorId', sql.BigInt, doctorId)
+    .input('Date', sql.Date, date)
+    .input('HospitalId', sql.BigInt, resolvedHospitalId)
+    .query(`
+      SELECT
+        s.Id,
+        s.AssignmentId,
+        CONVERT(VARCHAR(5), s.StartTime, 108) AS StartTime,
+        CONVERT(VARCHAR(5), s.EndTime, 108) AS EndTime,
+        s.SlotDurationMins,
+        s.TotalSlots
+      FROM dbo.OpdSlotSessions s
+      WHERE s.DoctorId = @DoctorId
+        AND s.SessionDate = @Date
+        AND s.Status IN ('Draft', 'Published')
+        AND (@HospitalId IS NULL OR s.HospitalId = @HospitalId)
+      ORDER BY s.StartTime
+    `);
+
+  return result.recordset;
+};
+
+const getAdvancedAssignmentsForDate = async (pool, { doctorId, date, hospitalId = null }) => {
+  const schema = await getSchemaState(pool);
+  if (!schema.hasAdvancedScheduling) {
+    return [];
+  }
+
+  const resolvedHospitalId = resolveHospitalId(hospitalId);
+  const result = await pool.request()
+    .input('DoctorId', sql.BigInt, doctorId)
+    .input('Date', sql.Date, date)
+    .input('HospitalId', sql.BigInt, resolvedHospitalId)
+    .query(`
+      SELECT
+        a.Id,
+        a.BookingEnabled,
+        atp.AllowsOpdSlots,
+        CONVERT(VARCHAR(5), a.StartTime, 108) AS StartTime,
+        CONVERT(VARCHAR(5), a.EndTime, 108) AS EndTime
+      FROM dbo.DoctorScheduleAssignments a
+      JOIN dbo.DoctorScheduleActivityTypes atp ON atp.Id = a.ActivityTypeId
+      WHERE a.DoctorId = @DoctorId
+        AND a.AssignmentDate = @Date
+        AND (@HospitalId IS NULL OR a.HospitalId = @HospitalId)
+        AND a.Status IN ('Active', 'Published')
+      ORDER BY a.StartTime
     `);
 
   return result.recordset;
@@ -342,6 +504,50 @@ const getScheduleSegments = async (pool, { doctor, date }) => {
   }];
 };
 
+const buildPublishedSessionSlots = (sessions, { date, bookedAppointmentsByTime }) => {
+  const slots = [];
+
+  for (const session of sessions) {
+    let current = toMinutes(session.StartTime);
+    const end = toMinutes(session.EndTime);
+    const duration = Number(session.SlotDurationMins) || 15;
+    const limit = Number(session.TotalSlots) || 0;
+    let count = 0;
+
+    if (!current || !end || duration <= 0 || end <= current) continue;
+
+    while (current < end) {
+      if (limit && count >= limit) break;
+
+      const hours = Math.floor(current / 60);
+      const minutes = current % 60;
+      const time = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+      const slotEndMinutes = current + duration;
+      const endTime = `${String(Math.floor(slotEndMinutes / 60)).padStart(2, '0')}:${String(slotEndMinutes % 60).padStart(2, '0')}`;
+      const bookedAppointment = bookedAppointmentsByTime.get(time);
+      const past = isPastSlotTime(date, time);
+      const available = !bookedAppointment && !past;
+
+      slots.push({
+        time,
+        endTime,
+        available,
+        isBooked: !available,
+        blockedReason: null,
+        status: bookedAppointment ? (bookedAppointment.Status || 'Booked') : (past ? 'Passed' : 'Available'),
+        source: 'OpdSlotSessions',
+        assignmentId: session.AssignmentId,
+        slotSessionId: session.Id,
+      });
+
+      current += duration;
+      count += 1;
+    }
+  }
+
+  return slots;
+};
+
 const getDoctorSlots = async ({
   doctorId,
   date,
@@ -367,6 +573,16 @@ const getDoctorSlots = async ({
     date,
     hospitalId: doctor.HospitalId,
     excludeAppointmentId,
+  });
+  const publishedSessions = await getPublishedOpdSessions(pool, {
+    doctorId: doctor.Id,
+    date,
+    hospitalId: doctor.HospitalId,
+  });
+  const advancedAssignments = await getAdvancedAssignmentsForDate(pool, {
+    doctorId: doctor.Id,
+    date,
+    hospitalId: doctor.HospitalId,
   });
 
   let allSlots = [];
@@ -398,6 +614,22 @@ const getDoctorSlots = async ({
         source: 'AppointmentSlots',
       };
     });
+  } else if (publishedSessions.length) {
+    allSlots = buildPublishedSessionSlots(publishedSessions, { date, bookedAppointmentsByTime });
+  } else if (advancedAssignments.length) {
+    const bookableAssignments = advancedAssignments.filter(
+      (assignment) => assignment.AllowsOpdSlots && assignment.BookingEnabled
+    );
+
+    const assignmentSegments = bookableAssignments.map((assignment) => ({
+      startTime: assignment.StartTime,
+      endTime: assignment.EndTime,
+      slotDurationMins: assignment.SlotDurationMins || 15,
+      maxSlots: assignment.MaxSlots || null,
+      source: 'DoctorScheduleAssignments',
+    }));
+
+    allSlots = buildDerivedSlots(assignmentSegments, { date, bookedAppointmentsByTime });
   } else {
     const scheduleSegments = await getScheduleSegments(pool, { doctor, date });
     allSlots = buildDerivedSlots(scheduleSegments, { date, bookedAppointmentsByTime });
@@ -497,8 +729,10 @@ const getAppointmentById = async (id, hospitalId = null) => {
     .input('HospitalId', sql.BigInt, hospitalId)
     .query(`
       SELECT
-        a.Id, a.HospitalId, a.AppointmentNo, a.AppointmentDate, a.AppointmentTime,
-        a.EndTime, a.VisitType, a.Status, a.Priority, a.Reason, a.Notes,
+        a.Id, a.HospitalId, a.AppointmentNo, a.AppointmentDate,
+        CONVERT(VARCHAR(5), TRY_CONVERT(time, a.AppointmentTime), 108) AS AppointmentTime,
+        CONVERT(VARCHAR(5), TRY_CONVERT(time, a.EndTime), 108) AS EndTime,
+        a.VisitType, a.Status, a.Priority, a.Reason, a.Notes,
         a.TokenNumber, a.CancelReason, a.CancelledAt, a.FollowUpOf,
         ${diagnosisSelect}
         ${followUpDateSelect}
@@ -592,12 +826,13 @@ const bookAppointment = async ({ hospitalId, patientId, doctorId, departmentId, 
   if (!patient) throw new AppError('Patient not found in this hospital', 404);
 
   // 3. Validate that the requested slot exists and is still bookable
-  await ensureBookableSlot({
+  const { slot: bookableSlot } = await ensureBookableSlot({
     doctorId: doctor.Id,
     hospitalId,
     date: appointmentDate,
     time: normalizedAppointmentTime,
   });
+  const normalizedEndTime = normalizeTime(bookableSlot?.endTime || bookableSlot?.EndTime || '');
 
   const patientConflict = await getPatientConflictAtTime(pool, {
     patientId: patient.Id,
@@ -637,6 +872,7 @@ const bookAppointment = async ({ hospitalId, patientId, doctorId, departmentId, 
     .input('AppointmentNo',   sql.NVarChar, appointmentNo)
     .input('AppointmentDate', sql.Date,     appointmentDate)
     .input('AppointmentTime', sql.NVarChar, normalizedAppointmentTime)
+    .input('EndTime',         sql.NVarChar, normalizedEndTime || null)
     .input('VisitType',       sql.NVarChar, visitType)
     .input('Status',          sql.NVarChar, 'Scheduled')
     .input('Priority',        sql.NVarChar, priority)
@@ -648,11 +884,11 @@ const bookAppointment = async ({ hospitalId, patientId, doctorId, departmentId, 
     .query(`
       INSERT INTO dbo.Appointments
         (HospitalId, PatientId, DoctorId, DepartmentId, AppointmentNo, AppointmentDate,
-         AppointmentTime, VisitType, Status, Priority, Reason, TokenNumber,
+         AppointmentTime, EndTime, VisitType, Status, Priority, Reason, TokenNumber,
          BookedByUserId, BookedByRole, CreatedBy)
       VALUES
         (@HospitalId, @PatientId, @DoctorId, @DepartmentId, @AppointmentNo, @AppointmentDate,
-         @AppointmentTime, @VisitType, @Status, @Priority, @Reason, @TokenNumber,
+         @AppointmentTime, @EndTime, @VisitType, @Status, @Priority, @Reason, @TokenNumber,
          @BookedByUserId, @BookedByRole, @CreatedBy);
       SELECT SCOPE_IDENTITY() AS NewId;
     `);
@@ -675,6 +911,7 @@ const bookAppointment = async ({ hospitalId, patientId, doctorId, departmentId, 
     token,
     appointmentDate,
     appointmentTime: normalizedAppointmentTime,
+    endTime: normalizedEndTime || null,
     visitType,
     status:        'Scheduled',
     doctor:  { id: doctor.UserId, name: `${doctor.FirstName} ${doctor.LastName}`, email: doctor.Email },
@@ -772,13 +1009,14 @@ const rescheduleAppointment = async ({ id, hospitalId, newDate, newTime, updated
     throw new AppError(`Cannot reschedule a ${appt.Status} appointment`, 400);
   }
 
-  await ensureBookableSlot({
+  const { slot: bookableSlot } = await ensureBookableSlot({
     doctorId: appt.DoctorId,
     hospitalId,
     date: newDate,
     time: normalizedNewTime,
     excludeAppointmentId: id,
   });
+  const normalizedNewEndTime = normalizeTime(bookableSlot?.endTime || bookableSlot?.EndTime || appt.EndTime || '');
 
   const patientConflict = await getPatientConflictAtTime(pool, {
     patientId: appt.PatientId,
@@ -798,12 +1036,14 @@ const rescheduleAppointment = async ({ id, hospitalId, newDate, newTime, updated
     .input('Id',          sql.BigInt,  id)
     .input('NewDate',     sql.Date,    newDate)
     .input('NewTime',     sql.NVarChar, normalizedNewTime)
+    .input('NewEndTime',  sql.NVarChar, normalizedNewEndTime || null)
     .input('NewToken',    sql.SmallInt, newToken)
     .input('UpdatedBy',   sql.BigInt,  updatedBy)
     .query(`
       UPDATE dbo.Appointments
       SET AppointmentDate  = @NewDate,
           AppointmentTime  = @NewTime,
+          EndTime          = @NewEndTime,
           TokenNumber      = @NewToken,
           Status           = 'Rescheduled',
           FollowUpOf       = Id,
@@ -840,6 +1080,7 @@ const rescheduleAppointment = async ({ id, hospitalId, newDate, newTime, updated
     OldTime:          oldTime,
     AppointmentDate:  newDate,
     AppointmentTime:  normalizedNewTime,
+    EndTime:          normalizedNewEndTime || appt.EndTime || null,
     TokenNumber:      newToken,
     Status:           'Rescheduled',
   };
@@ -875,7 +1116,9 @@ const listAppointments = async ({
     .input('Offset',     sql.Int,      offset)
     .query(`
       SELECT
-        a.Id, a.AppointmentNo, a.AppointmentDate, a.AppointmentTime,
+        a.Id, a.AppointmentNo, a.AppointmentDate,
+        CONVERT(VARCHAR(5), TRY_CONVERT(time, a.AppointmentTime), 108) AS AppointmentTime,
+        CONVERT(VARCHAR(5), TRY_CONVERT(time, a.EndTime), 108) AS EndTime,
         a.VisitType, a.Status, a.Priority, a.TokenNumber, a.Reason,
         a.CancelReason, a.CreatedAt,
         (
@@ -1026,17 +1269,23 @@ const getAppointmentFilters = async ({ hospitalId, doctorId = null }) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // MY APPOINTMENTS (for logged-in patient or doctor)
 // ─────────────────────────────────────────────────────────────────────────────
-const getMyAppointments = async ({ userId, role, hospitalId }) => {
+const getMyAppointments = async ({ userId, role, hospitalId, activePatientId = null, sessionId = null }) => {
   const pool = await getDb();
 
   let profileId = null;
 
   if (role === 'patient') {
-    const r = await pool.request()
-      .input('UserId', sql.BigInt, userId)
-      .query(`SELECT Id FROM dbo.PatientProfiles WHERE UserId = @UserId AND DeletedAt IS NULL`);
-    profileId = r.recordset[0]?.Id;
-    if (!profileId) return [];
+    const activeProfile = await requireActivePatientProfile(
+      {
+        id: userId,
+        userId,
+        hospitalId,
+        activePatientId,
+      },
+      sessionId,
+      pool
+    );
+    profileId = activeProfile.patientId;
   } else if (role === 'doctor') {
     const r = await pool.request()
       .input('UserId', sql.BigInt, userId)

@@ -1,5 +1,6 @@
 import React from 'react';
 import { ArrowRight, CalendarClock, CheckCircle2, Clock3, Ticket } from 'lucide-react';
+import { fmtTimeRange } from '../../ui';
 
 const STATUS_STYLES = {
   Scheduled: 'bg-amber-50 text-amber-700 border-amber-200',
@@ -54,7 +55,7 @@ export default function OpdAppointmentsPanel({
                 className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3.5 py-2 text-xs font-semibold text-slate-600"
               >
                 <Clock3 size={12} className="text-slate-400" />
-                <span>{schedule.StartTime} - {schedule.EndTime}</span>
+                <span>{fmtTimeRange(schedule.StartTime, schedule.EndTime)}</span>
                 <span className="text-slate-300">|</span>
                 <span className="truncate">{schedule.DoctorName}</span>
               </div>
@@ -98,7 +99,7 @@ export default function OpdAppointmentsPanel({
                   <div className="flex flex-col items-end gap-2">
                     <div className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1.5 text-xs font-bold text-slate-500 shadow-sm">
                       <CalendarClock size={12} className="text-teal-500" />
-                      {formatDateLabel(appointment.AppointmentDate)} - {appointment.AppointmentTime || 'TBD'}
+                      {formatDateLabel(appointment.AppointmentDate)} - {fmtTimeRange(appointment.AppointmentTime, appointment.EndTime)}
                     </div>
                     {appointment.TokenNumber ? (
                       <div className="inline-flex items-center gap-2 rounded-full bg-indigo-50 px-3 py-1.5 text-xs font-black text-indigo-700">

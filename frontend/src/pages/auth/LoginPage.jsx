@@ -64,7 +64,11 @@ export default function LoginPage() {
     setLoading(true); setError('');
     try {
       const user = await login(form.username.trim(), form.password);
-      navigate(`/dashboard/${ROLE_ROUTES[user.role] || 'admin'}`, { replace: true });
+      if (user.role === 'patient') {
+        navigate('/patient/profiles', { replace: true });
+      } else {
+        navigate(`/dashboard/${ROLE_ROUTES[user.role] || 'admin'}`, { replace: true });
+      }
     } catch (err) {
       setError(err.message || 'Invalid credentials. Please try again.');
     } finally { setLoading(false); }

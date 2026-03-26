@@ -79,19 +79,20 @@ const NAV = {
   opdmanager: [
     { path:'/dashboard/opd',          label:'Dashboard',       icon: LayoutDashboard },
     { path:'/appointments',           label:'Appointments',    icon: Calendar        },
-    { path:'/admin/schedule-manager', label:'Doctor Schedules',icon: Clock           },
+    { path:'/admin/schedule-manager', label:'OPD Slots',       icon: Clock           },
     { path:'/staff/profile',          label:'My Profile',      icon: UserCircle      },
   ],
   opd_manager: [
     { path:'/dashboard/opd',          label:'Dashboard',       icon: LayoutDashboard },
     { path:'/appointments',           label:'Appointments',    icon: Calendar        },
-    { path:'/admin/schedule-manager', label:'Doctor Schedules',icon: Clock           },
+    { path:'/admin/schedule-manager', label:'OPD Slots',       icon: Clock           },
     { path:'/staff/profile',          label:'My Profile',      icon: UserCircle      },
   ],
   patient: [
     { path:'/dashboard/patient',      label:'Dashboard',          icon: LayoutDashboard },
     { path:'/appointments/book',      label:'Book Appointment',   icon: Calendar        },
     { path:'/appointments',           label:'My Appointments',    icon: ClipboardList   },
+    { path:'/patient/profiles',       label:'Patient Profiles',   icon: Users           },
     { path:'/patient/profile',        label:'My Profile',         icon: UserCircle      },
   ],
   nurse:        staffNav('/dashboard/nurse'),
@@ -115,7 +116,7 @@ const NAV = {
 
 // ═════════════════════════════════════════════════════════════════════════════
 export default function DashboardLayout() {
-  const { user, logout }  = useAuth();
+  const { user, logout, activePatientProfile }  = useAuth();
   const navigate           = useNavigate();
   const location           = useLocation();
   const { branding }       = useHospitalBranding();
@@ -146,7 +147,10 @@ export default function DashboardLayout() {
   const name     = `${user?.firstName || ''} ${user?.lastName || ''}`.trim() || 'User';
   const picUrl   = user?.profilePicUrl || user?.ProfilePicUrl || null;
 
-  const handleLogout = () => { logout(); navigate('/login', { replace: true }); };
+  const handleLogout = async () => {
+    await logout();
+    navigate('/login', { replace: true });
+  };
   const isActive = (path) => location.pathname === path || location.pathname.startsWith(path + '/');
 
   const SW = sidebarOpen ? 240 : 60;
@@ -382,12 +386,24 @@ export default function DashboardLayout() {
                           )}
                         </div>
                       </div>
+                      {role === 'patient' && activePatientProfile && (
+                        <div className="mt-3 rounded-xl bg-indigo-50 px-3 py-2">
+                          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-indigo-500">Active Profile</p>
+                          <p className="mt-1 text-sm font-semibold text-slate-800">{activePatientProfile.fullName}</p>
+                          <p className="text-[11px] text-slate-500">
+                            {activePatientProfile.relationshipToUser || 'Self'} · {activePatientProfile.uhid || 'UHID pending'}
+                          </p>
+                        </div>
+                      )}
                     </div>
                     <div className="p-2">
                       {[
                         { icon: UserCircle, label:'My Profile',   path:getProfilePath(role)  },
                         { icon: Edit2,      label:'Edit Profile', path:getProfilePath(role)  },
                         { icon: Shield,     label:'Security',     path:getSecurityPath(role) },
+                        ...(role === 'patient'
+                          ? [{ icon: Users, label:'Patient Profiles', path:'/patient/profiles' }]
+                          : []),
                       ].map(item => {
                         const Icon = item.icon;
                         return (

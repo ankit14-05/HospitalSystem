@@ -241,7 +241,9 @@ router.get('/pending-requests', protect, authorize('doctor'), async (req, res, n
       .input('DoctorId', doctorProfileId)
       .query(`
         SELECT
-          a.Id, a.AppointmentNo, a.AppointmentDate, a.AppointmentTime,
+          a.Id, a.AppointmentNo, a.AppointmentDate,
+          CONVERT(VARCHAR(5), TRY_CONVERT(time, a.AppointmentTime), 108) AS AppointmentTime,
+          CONVERT(VARCHAR(5), TRY_CONVERT(time, a.EndTime), 108) AS EndTime,
           a.VisitType, a.Status, a.Priority, a.Reason, a.CreatedAt,
           pp.FirstName + ' ' + pp.LastName AS PatientName,
           pp.UHID, pp.Phone AS PatientPhone,

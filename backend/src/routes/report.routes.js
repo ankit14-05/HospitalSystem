@@ -4,6 +4,7 @@
 const router = require('express').Router();
 const { authenticate: protect, authorize } = require('../middleware/auth.middleware');
 const { getPool, sql, withTransaction }    = require('../config/database');
+const { requireActivePatientProfile }      = require('../services/patientAccess.service');
 
 router.use(protect);
 
@@ -22,14 +23,8 @@ router.get('/my', async (req, res, next) => {
     let result;
 
     if (role === 'patient') {
-      const patRes = await pool.request()
-        .input('UserId', req.user.id)
-        .query(`SELECT Id FROM dbo.PatientProfiles WHERE UserId = @UserId AND DeletedAt IS NULL`);
-
-      if (!patRes.recordset.length) {
-        return res.status(404).json({ success: false, message: 'Patient not found' });
-      }
-      const patientId = patRes.recordset[0].Id;
+      const activeProfile = await requireActivePatientProfile(req.user, req.sessionId, pool);
+      const patientId = activeProfile.patientId;
 
       result = await pool.request()
         .input('PatientId', patientId)

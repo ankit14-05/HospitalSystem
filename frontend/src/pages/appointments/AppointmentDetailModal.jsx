@@ -8,6 +8,7 @@ import {
 import api from '../../services/api';
 import toast from 'react-hot-toast';
 import { useAuth } from '../../context/AuthContext';
+import { fmtLongDate, fmtTimeRange } from '../../components/ui';
 
 const STATUS_CONFIG = {
   Scheduled:   { color: 'bg-blue-100 text-blue-700',   label: 'Scheduled',   icon: Clock },
@@ -30,19 +31,6 @@ const InfoRow = ({ icon: Icon, label, value }) => (
 
 const DESK_ROLES = ['admin', 'superadmin', 'receptionist', 'nurse', 'opdmanager', 'opd_manager'];
 const CANCELLATION_ROLES = [...DESK_ROLES, 'doctor', 'patient'];
-
-const formatAppointmentDate = (value) => value
-  ? new Date(value).toLocaleDateString('en-IN', { weekday:'long', day:'2-digit', month:'long', year:'numeric' })
-  : '—';
-
-const formatAppointmentTime = (value) => {
-  if (!value) return '—';
-  const text = String(value).slice(0, 5);
-  const [hours, minutes] = text.split(':').map(Number);
-  if (Number.isNaN(hours) || Number.isNaN(minutes)) return value;
-  const suffix = hours >= 12 ? 'PM' : 'AM';
-  return `${(hours % 12) || 12}:${String(minutes).padStart(2, '0')} ${suffix}`;
-};
 
 export default function AppointmentDetailModal({ appt, onClose, onAction, onCompleteAppointment = null }) {
   const { user } = useAuth();
@@ -108,8 +96,10 @@ export default function AppointmentDetailModal({ appt, onClose, onAction, onComp
             </div>
             <div>
               <p className="text-xs text-indigo-400 font-semibold uppercase tracking-wide">Token Number</p>
-              <p className="text-sm font-bold text-indigo-800 mt-0.5">{formatAppointmentDate(appt.AppointmentDate)}</p>
-              <p className="text-sm text-indigo-600 font-semibold">{formatAppointmentTime(appt.AppointmentTime)}</p>
+              <p className="text-sm font-bold text-indigo-800 mt-0.5">{fmtLongDate(appt.AppointmentDate)}</p>
+              <p className="text-sm text-indigo-600 font-semibold">
+                {fmtTimeRange(appt.AppointmentTime || appt.StartTime, appt.EndTime)}
+              </p>
             </div>
           </div>
 
@@ -161,8 +151,8 @@ export default function AppointmentDetailModal({ appt, onClose, onAction, onComp
           {/* Details */}
           <div className="bg-white border border-slate-100 rounded-2xl px-5 py-4">
             <InfoRow icon={Building2} label="Department"  value={appt.DepartmentName} />
-            <InfoRow icon={Calendar}  label="Date"        value={formatAppointmentDate(appt.AppointmentDate)} />
-            <InfoRow icon={Clock}     label="Time"        value={formatAppointmentTime(appt.AppointmentTime)} />
+            <InfoRow icon={Calendar}  label="Date"        value={fmtLongDate(appt.AppointmentDate)} />
+            <InfoRow icon={Clock}     label="Time"        value={fmtTimeRange(appt.AppointmentTime || appt.StartTime, appt.EndTime)} />
             <InfoRow icon={Hash}      label="Visit Type"  value={appt.VisitType} />
             <InfoRow icon={AlertCircle} label="Priority"  value={appt.Priority} />
             <InfoRow icon={FileText} label="Prescription" value={(Number(appt.PrescriptionCount || 0) || 0) > 0 ? `Issued (${appt.PrescriptionCount})` : 'Not issued'} />

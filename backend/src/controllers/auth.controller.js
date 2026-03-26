@@ -105,22 +105,12 @@ const verifyOtp = async (req, res, next) => {
  */
 const me = async (req, res, next) => {
   try {
-    const { query, sql } = require('../config/database');
-    const userRes = await query(
-      `SELECT u.Id, u.HospitalId, u.Username, u.Email, u.Phone, u.Role,
-              u.FirstName, u.LastName, u.Gender, u.DateOfBirth,
-              u.ProfilePhotoUrl, u.IsActive, u.Is2FaEnabled,
-              u.IsEmailVerified, u.IsPhoneVerified, u.LastLoginAt,
-              u.Designation, u.DepartmentId, d.Name AS DepartmentName,
-              h.Name AS HospitalName, h.LogoUrl AS HospitalLogo
-       FROM dbo.Users u
-       LEFT JOIN dbo.Departments d ON d.Id = u.DepartmentId
-       LEFT JOIN dbo.HospitalSetup h ON h.Id = u.HospitalId
-       WHERE u.Id = @id AND u.DeletedAt IS NULL`,
-      { id: { type: sql.BigInt, value: req.user.userId } }
-    );
-    if (!userRes.recordset.length) throw new AppError('User not found.', 404);
-    success(res, userRes.recordset[0], 'Profile retrieved.');
+    const userContext = await authService.getCurrentUserContext({
+      userId: req.user.userId,
+      sessionId: req.sessionId,
+      activePatientId: req.user.activePatientId || null,
+    });
+    success(res, userContext, 'Profile retrieved.');
   } catch (err) {
     next(err);
   }

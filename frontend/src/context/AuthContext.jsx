@@ -1,40 +1,47 @@
-// src/context/AuthContext.jsx
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { authAPI } from '../services/api';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
+import { authAPI, resetAuthExpiredHandling, setAuthExpiredSuppressed } from '../services/api';
 import { ROLE_LABELS } from '../config/roles';
 
 const AuthContext = createContext(null);
 
+const parseStoredUser = () => {
+  try {
+    return JSON.parse(localStorage.getItem('user'));
+  } catch {
+    return null;
+  }
+};
+
+const extractAuthUser = (payload) => {
+  if (!payload) return null;
+  if (payload.user) return payload.user;
+  if (payload.data?.user) return payload.data.user;
+  if (payload.data) return payload.data;
+  return payload;
+};
+
 export function AuthProvider({ children }) {
-  const [user, setUser]       = useState(() => {
-    try { return JSON.parse(localStorage.getItem('user')); } catch { return null; }
-  });
+  const [user, setUser] = useState(() => parseStoredUser());
   const [loading, setLoading] = useState(true);
   const [initialized, setInitialized] = useState(false);
 
-  // Verify token on app load
-  useEffect(() => {
-    const token = localStorage.getItem('accessToken');
-    if (token && !user) {
-      authAPI.me()
-        .then(res => setUser(res.data))
-        .catch(() => clearAuth())
-        .finally(() => { setLoading(false); setInitialized(true); });
-    } else {
-      setLoading(false);
-      setInitialized(true);
+  const persistUser = useCallback((nextUser) => {
+    if (!nextUser) {
+      localStorage.removeItem('user');
+      localStorage.removeItem('hospitalId');
+      setUser(null);
+      return null;
     }
-  }, []);
 
-  // Listen for auth:expired events from axios interceptor
-  useEffect(() => {
-    const handler = () => {
-      clearAuth();
-      toast.error('Session expired. Please log in again.');
-    };
-    window.addEventListener('auth:expired', handler);
-    return () => window.removeEventListener('auth:expired', handler);
+    localStorage.setItem('user', JSON.stringify(nextUser));
+    if (nextUser.hospitalId) {
+      localStorage.setItem('hospitalId', nextUser.hospitalId);
+    } else {
+      localStorage.removeItem('hospitalId');
+    }
+    setUser(nextUser);
+    return nextUser;
   }, []);
 
   const clearAuth = useCallback(() => {
@@ -44,27 +51,86 @@ export function AuthProvider({ children }) {
     setUser(null);
   }, []);
 
+  const refreshCurrentUser = useCallback(async () => {
+    const response = await authAPI.me();
+    const nextUser = extractAuthUser(response);
+    resetAuthExpiredHandling();
+    return persistUser(nextUser);
+  }, [persistUser]);
+
+  useEffect(() => {
+    const token = localStorage.getItem('accessToken');
+    if (!token) {
+      setLoading(false);
+      setInitialized(true);
+      return;
+    }
+
+    refreshCurrentUser()
+      .catch(() => clearAuth())
+      .finally(() => {
+        setLoading(false);
+        setInitialized(true);
+      });
+  }, [clearAuth, refreshCurrentUser]);
+
+  useEffect(() => {
+    const handler = () => {
+      clearAuth();
+      toast.error('Session expired. Please log in again.', { id: 'auth-expired' });
+    };
+    window.addEventListener('auth:expired', handler);
+    return () => window.removeEventListener('auth:expired', handler);
+  }, [clearAuth]);
+
   const login = useCallback(async (identifier, password) => {
-    const res = await authAPI.login({ identifier, password });
-    const { accessToken, user: userData } = res.data;
-    localStorage.setItem('accessToken', accessToken);
-    localStorage.setItem('user', JSON.stringify(userData));
-    if (userData.hospitalId) localStorage.setItem('hospitalId', userData.hospitalId);
-    setUser(userData);
-    return userData;
-  }, []);
+    resetAuthExpiredHandling();
+    const response = await authAPI.login({ identifier, password });
+    const payload = response?.data || response;
+    const nextUser = extractAuthUser(payload);
+    const accessToken = payload?.accessToken || response?.accessToken;
+
+    if (accessToken) {
+      localStorage.setItem('accessToken', accessToken);
+    }
+
+    resetAuthExpiredHandling();
+    return persistUser(nextUser);
+  }, [persistUser]);
 
   const logout = useCallback(async () => {
-    try { await authAPI.logout(); } catch {}
+    setAuthExpiredSuppressed(true);
+    try {
+      await authAPI.logout();
+    } catch {}
     clearAuth();
+    toast.dismiss('auth-expired');
     toast.success('Logged out successfully.');
   }, [clearAuth]);
 
+  const switchPatientProfile = useCallback(async (patientId) => {
+    await authAPI.switchPatientProfile({ patientId });
+    const nextUser = await refreshCurrentUser();
+    toast.success('Patient profile switched successfully.');
+    return nextUser;
+  }, [refreshCurrentUser]);
+
+  const addFamilyMember = useCallback(async (payload) => {
+    await authAPI.addFamilyMember(payload);
+    const nextUser = await refreshCurrentUser();
+    toast.success('Patient profile added successfully.');
+    return nextUser;
+  }, [refreshCurrentUser]);
+
   const hasRole = useCallback((...roles) => {
-    return user && roles.includes(user.role);
+    return Boolean(user && roles.includes(user.role));
   }, [user]);
 
   const isAdmin = useCallback(() => hasRole('superadmin', 'admin'), [hasRole]);
+
+  const patientProfiles = useMemo(() => user?.patientProfiles || [], [user]);
+  const activePatientProfile = user?.activePatientProfile || null;
+  const familyAccessEnabled = Boolean(user?.familyAccessEnabled);
 
   const value = {
     user,
@@ -73,8 +139,14 @@ export function AuthProvider({ children }) {
     login,
     logout,
     clearAuth,
+    refreshCurrentUser,
+    switchPatientProfile,
+    addFamilyMember,
     hasRole,
     isAdmin,
+    patientProfiles,
+    activePatientProfile,
+    familyAccessEnabled,
     isAuthenticated: !!user,
     roleLabel: user ? (ROLE_LABELS[user.role] || user.role) : '',
   };

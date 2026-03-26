@@ -135,15 +135,61 @@ export const PageTitle = ({ title, subtitle }) => (
 );
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-export const fmtDate = (d) => d
-  ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
-  : '—';
+const parseDisplayDate = (value) => {
+  if (!value) return null;
+
+  const text = String(value);
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (match) {
+    return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 0, 0, 0, 0);
+  }
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const getTimeParts = (value) => {
+  if (!value) return null;
+
+  const match = String(value).match(/(\d{1,2}):(\d{2})/);
+  if (!match) return null;
+
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) return null;
+
+  return { hours, minutes };
+};
+
+export const fmtDate = (d) => {
+  const parsed = parseDisplayDate(d);
+  return parsed
+    ? parsed.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+    : '—';
+};
+
+export const fmtLongDate = (d) => {
+  const parsed = parseDisplayDate(d);
+  return parsed
+    ? parsed.toLocaleDateString('en-IN', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })
+    : '—';
+};
 
 export const fmtTime = (t) => {
-  if (!t) return '—';
-  try {
-    return new Date(`1970-01-01T${t}`).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
-  } catch { return t; }
+  const parts = getTimeParts(t);
+  if (!parts) return '—';
+
+  const suffix = parts.hours >= 12 ? 'PM' : 'AM';
+  return `${(parts.hours % 12) || 12}:${String(parts.minutes).padStart(2, '0')} ${suffix}`;
+};
+
+export const fmtTimeRange = (start, end) => {
+  const startText = fmtTime(start);
+  const endText = fmtTime(end);
+
+  if (startText === '—' && endText === '—') return '—';
+  if (startText !== '—' && endText !== '—') return `${startText} - ${endText}`;
+  return startText !== '—' ? startText : endText;
 };
 
 export const initials = (first, last) =>

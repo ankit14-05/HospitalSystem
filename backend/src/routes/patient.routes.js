@@ -2,6 +2,7 @@
 const router = require('express').Router();
 const { authenticate: protect, authorize } = require('../middleware/auth.middleware');
 const { getPool }                          = require('../config/database');
+const { requireActivePatientProfile }      = require('../services/patientAccess.service');
 
 router.use(protect);
 
@@ -46,8 +47,9 @@ router.get('/search', async (req, res, next) => {
 router.get('/profile', async (req, res, next) => {
   try {
     const pool   = await getPool();
+    const activeProfile = await requireActivePatientProfile(req.user, req.sessionId, pool);
     const result = await pool.request()
-      .input('UserId', req.user.id)
+      .input('PatientId', activeProfile.patientId)
       .query(`
         SELECT
           p.Id, p.UHID,
@@ -71,7 +73,7 @@ router.get('/profile', async (req, res, next) => {
         LEFT JOIN dbo.Districts dist ON dist.Id = p.DistrictId
         LEFT JOIN dbo.States    st   ON st.Id   = p.StateId
         LEFT JOIN dbo.Countries co   ON co.Id   = p.CountryId
-        WHERE p.UserId    = @UserId
+        WHERE p.Id        = @PatientId
           AND p.DeletedAt IS NULL
       `);
 
@@ -97,8 +99,12 @@ router.put('/profile', async (req, res, next) => {
     } = req.body;
 
     const pool   = await getPool();
+    const activeProfile = await requireActivePatientProfile(req.user, req.sessionId, pool);
+    if (!activeProfile.canUpdateProfile) {
+      return res.status(403).json({ success: false, message: 'You do not have permission to update this profile' });
+    }
     const result = await pool.request()
-      .input('UserId',              req.user.id)
+      .input('PatientId',           activeProfile.patientId)
       .input('FirstName',           firstName           ?? null)
       .input('LastName',            lastName            ?? null)
       .input('Gender',              gender              ?? null)
@@ -166,7 +172,7 @@ router.put('/profile', async (req, res, next) => {
           CurrentMedications  = COALESCE(@CurrentMedications,  CurrentMedications),
           UpdatedBy           = @UpdatedBy,
           UpdatedAt           = SYSUTCDATETIME()
-        WHERE UserId    = @UserId
+        WHERE Id        = @PatientId
           AND DeletedAt IS NULL;
         SELECT @@ROWCOUNT AS Affected;
       `);
@@ -182,19 +188,8 @@ router.put('/profile', async (req, res, next) => {
 router.get('/vitals', async (req, res, next) => {
   try {
     const pool = await getPool();
-
-    const patRes = await pool.request()
-      .input('UserId', req.user.id)
-      .query(`
-        SELECT Id FROM dbo.PatientProfiles
-        WHERE UserId = @UserId AND DeletedAt IS NULL
-      `);
-
-    if (!patRes.recordset.length) {
-      return res.status(404).json({ success: false, message: 'Patient not found' });
-    }
-
-    const patientId = patRes.recordset[0].Id;
+    const activeProfile = await requireActivePatientProfile(req.user, req.sessionId, pool);
+    const patientId = activeProfile.patientId;
 
     const result = await pool.request()
       .input('PatientId', patientId)
@@ -203,7 +198,8 @@ router.get('/vitals', async (req, res, next) => {
           a.Id              AS AppointmentId,
           a.AppointmentNo,
           a.AppointmentDate,
-          a.AppointmentTime,
+          CONVERT(VARCHAR(5), TRY_CONVERT(time, a.AppointmentTime), 108) AS AppointmentTime,
+          CONVERT(VARCHAR(5), TRY_CONVERT(time, a.EndTime), 108) AS EndTime,
           a.VisitType,
           a.Status,
           a.Notes,
@@ -314,6 +310,7 @@ router.get('/:id',
           SELECT TOP 20
             a.Id, a.AppointmentNo, a.AppointmentDate,
             CONVERT(VARCHAR(8), a.AppointmentTime, 108) AS AppointmentTime,
+            CONVERT(VARCHAR(8), a.EndTime, 108) AS EndTime,
             a.VisitType, a.Status, a.Priority, a.Reason, a.Notes,
             a.TokenNumber, a.CancelReason,
             u.FirstName + ' ' + u.LastName AS DoctorName,

@@ -3,6 +3,20 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 
 const BASE_URL = import.meta.env.VITE_API_URL || '/api/v1';
+let authExpiredDispatched = false;
+let suppressAuthExpired = false;
+
+export const setAuthExpiredSuppressed = (value) => {
+  suppressAuthExpired = Boolean(value);
+  if (suppressAuthExpired) {
+    authExpiredDispatched = true;
+  }
+};
+
+export const resetAuthExpiredHandling = () => {
+  suppressAuthExpired = false;
+  authExpiredDispatched = false;
+};
 
 const api = axios.create({
   baseURL: BASE_URL,
@@ -35,8 +49,15 @@ api.interceptors.response.use(
     if (status === 401) {
       localStorage.removeItem('accessToken');
       localStorage.removeItem('user');
-      // Redirect to login (handled by AuthContext)
-      window.dispatchEvent(new Event('auth:expired'));
+      localStorage.removeItem('hospitalId');
+
+      const requestUrl = String(error.config?.url || '');
+      const isLogoutRequest = requestUrl.includes('/auth/logout');
+
+      if (!isLogoutRequest && !suppressAuthExpired && !authExpiredDispatched) {
+        authExpiredDispatched = true;
+        window.dispatchEvent(new Event('auth:expired'));
+      }
     } else if (status === 422) {
       // Let callers handle validation errors
     } else if (status === 429) {
@@ -59,6 +80,9 @@ export const authAPI = {
   resetPassword:  (data) => api.post('/auth/reset-password', data),
   verifyOtp:      (data) => api.post('/auth/verify-otp', data),
   me:             ()     => api.get('/auth/me'),
+  patientProfiles: ()    => api.get('/profile/patient-profiles'),
+  switchPatientProfile: (data) => api.post('/profile/patient-profiles/switch', data),
+  addFamilyMember: (data) => api.post('/profile/patient-profiles', data),
 };
 
 // ── Geography

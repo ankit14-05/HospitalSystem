@@ -325,7 +325,7 @@ const sendDoctorDailyScheduleEmail = async ({ to, doctorName, date, appointments
         </tr>
         ${appointments.map((a, i) => `
           <tr style="${i % 2 === 0 ? 'background:#ffffff;' : 'background:#f8fafc;'}">
-            <td style="padding:10px;font-size:13px;font-weight:600;color:#0f172a;border-bottom:1px solid #e2e8f0;">${a.AppointmentTime.slice(0,5)}</td>
+            <td style="padding:10px;font-size:13px;font-weight:600;color:#0f172a;border-bottom:1px solid #e2e8f0;">${String(a.AppointmentTime || '--').slice(0,5)}${a.EndTime ? ` - ${String(a.EndTime).slice(0,5)}` : ''}</td>
             <td style="padding:10px;font-size:13px;color:#334155;border-bottom:1px solid #e2e8f0;">${a.PatientName || 'Unnamed'}</td>
             <td style="padding:10px;font-size:13px;color:#3b82f6;font-family:monospace;border-bottom:1px solid #e2e8f0;">#${a.TokenNumber || '--'}</td>
             <td style="padding:10px;font-size:12px;color:#64748b;border-bottom:1px solid #e2e8f0;">${a.VisitType}</td>

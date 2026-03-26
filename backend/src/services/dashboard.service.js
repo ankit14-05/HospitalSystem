@@ -587,6 +587,7 @@ const getOpdOverview = async ({ user, requestedHospitalId }) => {
         a.AppointmentNo,
         a.AppointmentDate,
         CONVERT(varchar(5), TRY_CONVERT(time, a.AppointmentTime), 108) AS AppointmentTime,
+        CONVERT(varchar(5), TRY_CONVERT(time, a.EndTime), 108) AS EndTime,
         a.VisitType,
         a.Status,
         a.Priority,
@@ -647,6 +648,16 @@ const getOpdOverview = async ({ user, requestedHospitalId }) => {
             AND (@HospitalId IS NULL OR a.HospitalId = @HospitalId)
           ORDER BY TRY_CONVERT(time, a.AppointmentTime) ASC
         ) AS NextAppointmentTime,
+        (
+          SELECT TOP 1 CONVERT(varchar(5), TRY_CONVERT(time, a.EndTime), 108)
+          FROM dbo.Appointments a
+          WHERE a.DoctorId = dp.Id
+            AND a.AppointmentDate = CAST(GETDATE() AS date)
+            AND a.Status IN ('Scheduled', 'Confirmed', 'Rescheduled')
+            AND TRY_CONVERT(time, a.AppointmentTime) >= CAST(GETDATE() AS time)
+            AND (@HospitalId IS NULL OR a.HospitalId = @HospitalId)
+          ORDER BY TRY_CONVERT(time, a.AppointmentTime) ASC
+        ) AS NextAppointmentEndTime,
         STUFF((
           SELECT ', ' +
             LEFT(CONVERT(varchar(8), ds2.StartTime, 108), 5) + '-' +

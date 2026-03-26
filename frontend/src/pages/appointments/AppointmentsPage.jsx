@@ -1,6 +1,7 @@
 // src/pages/appointments/AppointmentsPage.jsx
 // Admin / Doctor / Receptionist — full appointment management with status actions
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Calendar, Search, Filter, RefreshCw, Plus, CheckCircle, XCircle,
   Clock, Eye, RotateCcw, ChevronLeft, ChevronRight, AlertCircle,
@@ -10,7 +11,6 @@ import {
 import api from '../../services/api';
 import toast from 'react-hot-toast';
 import { useAuth } from '../../context/AuthContext';
-import AppointmentBookingModal from './AppointmentBookingModal';
 import AppointmentDetailModal from './AppointmentDetailModal';
 import { APPOINTMENT_DESK_ROLES } from '../../config/roles';
 import { getPageData, getPayload } from '../../utils/apiPayload';
@@ -37,17 +37,58 @@ const StatusBadge = ({ status }) => {
   );
 };
 
-const formatAppointmentDate = (value) => value
-  ? new Date(value).toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' })
-  : '—';
+const parseAppointmentDate = (value) => {
+  if (!value) return null;
+
+  const text = String(value);
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (match) {
+    return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 0, 0, 0, 0);
+  }
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const extractAppointmentTimeParts = (value) => {
+  if (!value) return null;
+
+  const match = String(value).match(/(\d{1,2}):(\d{2})/);
+  if (!match) return null;
+
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) return null;
+
+  return { hours, minutes };
+};
+
+const formatAppointmentDate = (value) => {
+  const parsed = parseAppointmentDate(value);
+  return parsed
+    ? parsed.toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' })
+    : '—';
+};
 
 const formatAppointmentTime = (value) => {
-  if (!value) return '—';
-  const text = String(value).slice(0, 5);
-  const [hours, minutes] = text.split(':').map(Number);
-  if (Number.isNaN(hours) || Number.isNaN(minutes)) return value;
-  const suffix = hours >= 12 ? 'PM' : 'AM';
-  return `${(hours % 12) || 12}:${String(minutes).padStart(2, '0')} ${suffix}`;
+  const parts = extractAppointmentTimeParts(value);
+  if (!parts) return '—';
+  const suffix = parts.hours >= 12 ? 'PM' : 'AM';
+  return `${(parts.hours % 12) || 12}:${String(parts.minutes).padStart(2, '0')} ${suffix}`;
+};
+
+const formatAppointmentTimeRange = (start, end) => {
+  const startText = formatAppointmentTime(start);
+  const endText = formatAppointmentTime(end);
+
+  if (startText === '—' && endText === '—') return '—';
+  if (startText !== '—' && endText !== '—') return `${startText} - ${endText}`;
+  return startText !== '—' ? startText : endText;
+};
+
+const getAppointmentTimeInputValue = (value) => {
+  const parts = extractAppointmentTimeParts(value);
+  return parts ? `${String(parts.hours).padStart(2, '0')}:${String(parts.minutes).padStart(2, '0')}` : '';
 };
 
 const matchesSearch = (appointment, query) => {
@@ -147,7 +188,9 @@ const CancelModal = ({ appt, onClose, onDone }) => {
         <div className="px-6 py-5 space-y-4">
           <div className="p-4 rounded-xl bg-slate-50 border border-slate-100 text-sm">
             <p className="font-semibold text-slate-700">{appt.PatientFirstName} {appt.PatientLastName}</p>
-            <p className="text-slate-500 mt-0.5">Dr. {appt.DoctorFirstName} {appt.DoctorLastName} · {new Date(appt.AppointmentDate).toLocaleDateString('en-IN')} at {appt.AppointmentTime}</p>
+            <p className="text-slate-500 mt-0.5">
+              Dr. {appt.DoctorFirstName} {appt.DoctorLastName} · {formatAppointmentDate(appt.AppointmentDate)} at {formatAppointmentTimeRange(appt.AppointmentTime, appt.EndTime)}
+            </p>
           </div>
           <div>
             <label className="block text-xs font-semibold text-slate-600 mb-1.5">Reason for cancellation *</label>
@@ -207,7 +250,9 @@ const RescheduleModal = ({ appt, onClose, onDone }) => {
         </div>
         <div className="px-6 py-5 space-y-4">
           <div className="p-4 rounded-xl bg-slate-50 border border-slate-100 text-sm">
-            <p className="font-semibold text-slate-700">Current: {new Date(appt.AppointmentDate).toLocaleDateString('en-IN')} at {appt.AppointmentTime}</p>
+            <p className="font-semibold text-slate-700">
+              Current: {formatAppointmentDate(appt.AppointmentDate)} at {formatAppointmentTimeRange(appt.AppointmentTime, appt.EndTime)}
+            </p>
             <p className="text-slate-500 mt-0.5">{appt.PatientFirstName} {appt.PatientLastName} · Dr. {appt.DoctorFirstName} {appt.DoctorLastName}</p>
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -244,6 +289,7 @@ const RescheduleModal = ({ appt, onClose, onDone }) => {
 
 // ═════════════════════════════════════════════════════════════════════════════
 export default function AppointmentsPage() {
+  const navigate = useNavigate();
   const { user } = useAuth();
 
   const [appointments,  setAppointments]  = useState([]);
@@ -264,8 +310,6 @@ export default function AppointmentsPage() {
   const [filtersLoading, setFiltersLoading] = useState(false);
 
   // Modals
-  const [showBook,       setShowBook]     = useState(false);
-  const [bookingPrefill, setBookingPrefill] = useState(null);
   const [cancelAppt,     setCancelAppt]   = useState(null);
   const [reschedAppt,    setReschedAppt]  = useState(null);
   const [detailAppt,     setDetailAppt]   = useState(null);
@@ -395,16 +439,15 @@ export default function AppointmentsPage() {
     try {
       await api.patch(`/appointments/${id}/status`, { status: 'NoShow' });
       toast.success('Appointment marked as missed. The patient has been notified and the slot is open again.');
-      setBookingPrefill({
-        doctorId: appointment.DoctorProfileId || appointment.DoctorId,
-        departmentId: appointment.DepartmentId,
-        appointmentDate: String(appointment.AppointmentDate || '').slice(0, 10),
-        appointmentTime: String(appointment.AppointmentTime || '').slice(0, 5),
-        visitType: appointment.VisitType || 'OPD',
-        priority: appointment.Priority || 'Normal',
-      });
-      setShowBook(true);
       load();
+      const params = new URLSearchParams();
+      if (appointment.DoctorProfileId || appointment.DoctorId) params.set('doctorId', appointment.DoctorProfileId || appointment.DoctorId);
+      if (appointment.DepartmentId) params.set('departmentId', appointment.DepartmentId);
+      if (appointment.AppointmentDate) params.set('date', String(appointment.AppointmentDate).slice(0, 10));
+      if (appointment.AppointmentTime) params.set('time', getAppointmentTimeInputValue(appointment.AppointmentTime));
+      if (appointment.VisitType) params.set('visitType', appointment.VisitType);
+      if (appointment.Priority) params.set('priority', appointment.Priority);
+      navigate(`/appointments/book${params.toString() ? `?${params.toString()}` : ''}`);
     } catch (error) {
       toast.error(error?.message || 'Could not mark the appointment as missed');
     } finally {
@@ -435,7 +478,7 @@ export default function AppointmentsPage() {
             <RefreshCw size={15} />
           </button>
           {isDeskRole && (
-            <button onClick={() => { setBookingPrefill(null); setShowBook(true); }}
+            <button onClick={() => navigate('/appointments/book')}
               className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 transition-colors shadow-sm shadow-indigo-200">
               <Plus size={15} /> New Appointment
             </button>
@@ -581,7 +624,7 @@ export default function AppointmentsPage() {
                             {formatAppointmentDate(a.AppointmentDate)}
                           </p>
                           <p className="mt-1 inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
-                            <Clock size={10} /> {formatAppointmentTime(a.AppointmentTime)}
+                            <Clock size={10} /> {formatAppointmentTimeRange(a.AppointmentTime, a.EndTime)}
                           </p>
                         </td>
 
@@ -693,25 +736,6 @@ export default function AppointmentsPage() {
       </div>
 
       {/* ── Modals ──────────────────────────────────────────────────────────── */}
-      {showBook && (
-        <AppointmentBookingModal
-          onClose={() => {
-            setShowBook(false);
-            setBookingPrefill(null);
-          }}
-          onSuccess={() => {
-            setShowBook(false);
-            setBookingPrefill(null);
-            load();
-          }}
-          prefillDoctorId={bookingPrefill?.doctorId || null}
-          prefillDepartmentId={bookingPrefill?.departmentId || ''}
-          prefillDate={bookingPrefill?.appointmentDate || ''}
-          prefillTime={bookingPrefill?.appointmentTime || ''}
-          prefillVisitType={bookingPrefill?.visitType || 'OPD'}
-          prefillPriority={bookingPrefill?.priority || 'Normal'}
-        />
-      )}
       {cancelAppt  && <CancelModal     appt={cancelAppt}  onClose={() => setCancelAppt(null)}  onDone={() => { setCancelAppt(null);  load(); }} />}
       {reschedAppt && <RescheduleModal appt={reschedAppt} onClose={() => setReschedAppt(null)} onDone={() => { setReschedAppt(null); load(); }} />}
       {detailAppt  && (

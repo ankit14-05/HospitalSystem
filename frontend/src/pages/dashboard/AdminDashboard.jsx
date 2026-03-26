@@ -389,7 +389,7 @@ export default function AdminDashboard() {
       <ListCard
         title="Live Queue and Leave Requests"
         actionLabel="Open scheduler"
-        actionTo="/admin/scheduling"
+        actionTo="/admin/schedule-manager"
         navigate={navigate}
         rows={[...overview.pendingLeaves.slice(0, 3), ...overview.opdQueue.slice(0, 3)]}
         loading={loading}

@@ -16,7 +16,7 @@ import api from '../../services/api';
 import toast from 'react-hot-toast';
 import {
   TEAL, BLUE, Sk, StatCard, StatusBadge, Empty,
-  SectionHeader, Card, Modal, fmtDate, fmtTime, initials, InfoBadge
+  SectionHeader, Card, Modal, fmtDate, fmtTime, fmtTimeRange, initials, InfoBadge
 } from '../../components/ui';
 import DashboardTabs from '../../components/dashboard/DashboardTabs';
 import { getList, getPayload } from '../../utils/apiPayload';
@@ -509,7 +509,7 @@ const BookModal = ({ onClose, onSuccess }) => {
                           slotId === sId
                             ? 'border-blue-400 bg-blue-50 text-blue-700'
                             : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
-                        {s.StartTime || s.time}
+                        {fmtTimeRange(s.StartTime || s.time, s.EndTime || s.endTime)}
                       </button>
                     );
                   })}
@@ -533,7 +533,7 @@ const BookModal = ({ onClose, onSuccess }) => {
               {[
                 ['Doctor', selDoc ? `Dr. ${selDoc.FirstName || selDoc.firstName} ${selDoc.LastName || selDoc.lastName}` : '—'],
                 ['Date',   fmtDate(visitDate)],
-                ['Time',   selSlot?.StartTime || selSlot?.time || '—'],
+                ['Time',   fmtTimeRange(selSlot?.StartTime || selSlot?.time, selSlot?.EndTime || selSlot?.endTime)],
                 ['Type',   visitType],
                 ['Fee',    (selDoc?.ConsultationFee ?? selDoc?.consultationFee) != null
                             ? `₹${selDoc.ConsultationFee ?? selDoc.consultationFee}`
@@ -638,7 +638,9 @@ const OverviewTab = ({ profile, appointments, prescriptions, vitals, healthChart
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="font-bold text-slate-800 text-sm truncate">{nextAppt.DoctorName || nextAppt.doctorName}</p>
-                        <p className="text-xs text-slate-400 mt-0.5">{fmtTime(String(nextAppt.AppointmentTime || nextAppt.StartTime || nextAppt.time || '').slice(0, 8))}</p>
+                        <p className="text-xs text-slate-400 mt-0.5">
+                          {fmtTimeRange(nextAppt.AppointmentTime || nextAppt.StartTime || nextAppt.time, nextAppt.EndTime || nextAppt.endTime)}
+                        </p>
                         <span className="inline-block text-xs font-semibold px-2 py-0.5 rounded-full mt-1" style={{ background: `${BLUE}15`, color: BLUE }}>
                           Token {nextAppt.TokenNumber || nextAppt.Token || nextAppt.token || '—'}
                         </span>
@@ -725,7 +727,9 @@ const OverviewTab = ({ profile, appointments, prescriptions, vitals, healthChart
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-bold text-slate-800 truncate">{a.DoctorName || a.doctorName || a.FullName || 'Doctor'}</p>
-                  <p className="text-xs text-slate-400 mt-0.5">{a.DepartmentName || a.departmentName} · {a.AppointmentTime || a.StartTime || a.time}</p>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    {a.DepartmentName || a.departmentName} · {fmtTimeRange(a.AppointmentTime || a.StartTime || a.time, a.EndTime || a.endTime)}
+                  </p>
                 </div>
                 <StatusBadge status={a.Status || a.status} />
               </div>
@@ -762,7 +766,7 @@ const AppointmentsTab = ({ appointments, loading, onRefresh, onBook, onCancel })
                 <div className="flex-1 min-w-0">
                   <p className="font-bold text-slate-800 text-sm">{a.DoctorName || a.doctorName || a.FullName || 'Doctor'}</p>
                   <p className="text-xs text-slate-400 mt-0.5">
-                    {a.DepartmentName || a.departmentName} · {fmtTime(String(a.AppointmentTime || a.StartTime || a.time || '').slice(0, 8))} · Token: {a.TokenNumber || a.Token || a.token || 'N/A'}
+                    {a.DepartmentName || a.departmentName} · {fmtTimeRange(a.AppointmentTime || a.StartTime || a.time, a.EndTime || a.endTime)} · Token: {a.TokenNumber || a.Token || a.token || 'N/A'}
                   </p>
                   <p className="text-xs text-slate-400 capitalize">{a.VisitType || a.Type || a.type}</p>
                   <div className="mt-2 flex flex-wrap gap-1.5">

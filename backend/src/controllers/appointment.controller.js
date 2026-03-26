@@ -7,6 +7,7 @@ const notifService = require('../services/notificationService');
 const emailService = require('../services/appointmentEmailservice');
 const AppError = require('../utils/AppError');
 const { APPOINTMENT_DESK_ROLES } = require('../constants/roles');
+const { requireActivePatientProfile } = require('../services/patientAccess.service');
 
 // ── Import apiResponse safely ─────────────────────────────────────────────────
 const apiResponse = require('../utils/apiResponse');
@@ -53,7 +54,9 @@ const assertAppointmentAccess = async (req, appointmentId) => {
   }
 
   if (role === 'patient') {
-    if (appt.PatientUserId !== userId) {
+    const canAccessActiveProfile = req.user.activePatientId && appt.PatientId === req.user.activePatientId;
+    const canAccessDirectProfile = appt.PatientUserId === userId;
+    if (!canAccessActiveProfile && !canAccessDirectProfile) {
       throw new AppError('Access denied to this appointment', 403);
     }
     return appt;
@@ -148,11 +151,8 @@ exports.book = async (req, res) => {
     if (role === 'patient') {
       const { getPool } = require('../config/database');
       const pool = await getPool();
-      const r = await pool.request()
-        .input('UserId', parseInt(userId))
-        .query(`SELECT Id FROM dbo.PatientProfiles WHERE UserId = @UserId AND DeletedAt IS NULL`);
-      patientId = r.recordset[0]?.Id;
-      if (!patientId) return sendError(res, 'Patient profile not found for this user', 404);
+      const activeProfile = await requireActivePatientProfile(req.user, req.sessionId, pool);
+      patientId = activeProfile.patientId;
     }
 
     if (!patientId) return sendError(res, 'patientId is required', 422);
@@ -231,9 +231,15 @@ exports.list = async (req, res) => {
 // GET /appointments/my — Logged-in patient or doctor
 // ─────────────────────────────────────────────────────────────────────────────
 exports.myAppointments = async (req, res) => {
-  const { id: userId, role, hospitalId } = req.user;
+  const { id: userId, role, hospitalId, activePatientId } = req.user;
   try {
-    const data = await apptService.getMyAppointments({ userId, role, hospitalId });
+    const data = await apptService.getMyAppointments({
+      userId,
+      role,
+      hospitalId,
+      activePatientId: activePatientId || null,
+      sessionId: req.sessionId || null,
+    });
     return sendSuccess(res, { data });
   } catch (err) {
     return sendError(res, err.message, err.statusCode || 500);
@@ -277,6 +283,7 @@ exports.myQueue = async (req, res) => {
           DATEDIFF(YEAR, pp.DateOfBirth, GETDATE()) AS Age,
           a.Id AS AppointmentId, a.AppointmentNo, a.Reason, a.VisitType,
           CONVERT(VARCHAR(8), a.AppointmentTime, 108) AS AppointmentTime,
+          CONVERT(VARCHAR(8), a.EndTime, 108) AS EndTime,
           (
             SELECT COUNT(*)
             FROM dbo.Prescriptions rx
@@ -318,6 +325,7 @@ exports.myQueue = async (req, res) => {
             a.Id, a.TokenNumber, a.Status AS QueueStatus, a.Status,
             a.Priority, a.Reason, a.VisitType,
             CONVERT(VARCHAR(8), a.AppointmentTime, 108) AS AppointmentTime,
+            CONVERT(VARCHAR(8), a.EndTime, 108) AS EndTime,
             a.Id AS AppointmentId, a.AppointmentNo, a.Notes,
             (
               SELECT COUNT(*)
@@ -388,7 +396,9 @@ exports.pendingRequests = async (req, res) => {
       .input('DoctorId', doctorProfileId)
       .query(`
         SELECT
-          a.Id, a.AppointmentNo, a.AppointmentDate, a.AppointmentTime,
+          a.Id, a.AppointmentNo, a.AppointmentDate,
+          CONVERT(VARCHAR(8), a.AppointmentTime, 108) AS AppointmentTime,
+          CONVERT(VARCHAR(8), a.EndTime, 108) AS EndTime,
           a.VisitType, a.Status, a.Priority, a.Reason, a.CreatedAt,
           (
             SELECT COUNT(*)

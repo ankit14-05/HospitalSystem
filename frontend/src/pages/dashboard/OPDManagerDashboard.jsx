@@ -10,7 +10,6 @@ import {
 import toast from 'react-hot-toast';
 import api from '../../services/api';
 import { getPayload } from '../../utils/apiPayload';
-import AppointmentBookingModal from '../appointments/AppointmentBookingModal';
 import RecentActivityList from '../../components/dashboard/RecentActivityList';
 import OpdAppointmentsPanel from '../../components/dashboard/opd/OpdAppointmentsPanel';
 import OpdDoctorRosterPanel from '../../components/dashboard/opd/OpdDoctorRosterPanel';
@@ -40,7 +39,6 @@ export default function OPDManagerDashboard() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [overview, setOverview] = useState(EMPTY_OVERVIEW);
-  const [showBook, setShowBook] = useState(false);
   const [sendingEmailId, setSendingEmailId] = useState(null);
   const [activeTab, setActiveTab] = useState('overview');
 
@@ -151,7 +149,7 @@ export default function OPDManagerDashboard() {
           </div>
 
           <OpdQuickActions
-            onBook={() => setShowBook(true)}
+            onBook={() => navigate('/appointments/book')}
             onAppointments={() => navigate('/appointments')}
             onSchedules={() => navigate('/admin/schedule-manager')}
           />
@@ -185,16 +183,6 @@ export default function OPDManagerDashboard() {
             <RecentActivityList activities={overview.recentActivity} loading={loading} emptyText="No recent OPD-facing activity yet." />
           </div>
         </div>
-      ) : null}
-
-      {showBook ? (
-        <AppointmentBookingModal
-          onClose={() => setShowBook(false)}
-          onSuccess={() => {
-            setShowBook(false);
-            loadOverview();
-          }}
-        />
       ) : null}
     </div>
   );

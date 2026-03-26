@@ -40,7 +40,6 @@ import AdminReports        from './pages/dashboard/AdminReports';
 import AdminSettings       from './pages/dashboard/AdminSettings';
 
 // Scheduling
-import SchedulingDashboard  from './pages/scheduling/SchedulingDashboard';
 import AdminScheduleManager from './pages/scheduling/AdminScheduleManager';
 import DoctorSchedulePage   from './pages/scheduling/DoctorSchedulePage';
 import DoctorScheduleEditorPage from './pages/scheduling/DoctorScheduleEditorPage';
@@ -57,7 +56,9 @@ import BookAppointmentPage  from './pages/appointments/BookAppointmentPage';
 
 // Profiles
 import ProfilePage from './pages/profile/ProfilePage';
-import { STAFF_ROLES } from './config/roles';
+import PatientProfilesPage from './pages/profile/PatientProfilesPage';
+import AddFamilyMemberPage from './pages/profile/AddFamilyMemberPage';
+import { APPOINTMENT_DESK_ROLES, STAFF_ROLES } from './config/roles';
 
 import SecuritySettings from './pages/dashboard/SecuritySettings';
 
@@ -81,7 +82,10 @@ const ROLE_ROUTES = {
 };
 
 
-const getDashboard = (role) => `/dashboard/${ROLE_ROUTES[role] || 'admin'}`;
+const getDashboard = (role) => {
+  if (role === 'patient') return '/patient/profiles';
+  return `/dashboard/${ROLE_ROUTES[role] || 'admin'}`;
+};
 
 // ── Guards ────────────────────────────────────────────────────────────────────
 
@@ -151,6 +155,28 @@ export default function App() {
           <Route path="/register/patient" element={<RedirectIfAuth><PatientRegisterPage /></RedirectIfAuth>} />
           <Route path="/register/doctor"  element={<RedirectIfAuth><DoctorRegisterPage /></RedirectIfAuth>} />
           <Route path="/register/staff"   element={<RedirectIfAuth><StaffRegisterPage /></RedirectIfAuth>} />
+
+          {/* ── Custom Fullscreen Routes ── */}
+          <Route
+            path="/patient/profiles"
+            element={
+              <RequireAuth>
+                <RequireRole roles={['patient']}>
+                  <PatientProfilesPage />
+                </RequireRole>
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/patient/family/add"
+            element={
+              <RequireAuth>
+                <RequireRole roles={['patient']}>
+                  <AddFamilyMemberPage />
+                </RequireRole>
+              </RequireAuth>
+            }
+          />
 
           {/* ── Protected routes — DashboardLayout (sidebar + topbar) ── */}
           <Route
@@ -253,6 +279,8 @@ export default function App() {
                 </RequireRole>
               }
             />
+
+
             <Route
               path="dashboard/opd"
               element={
@@ -318,7 +346,7 @@ export default function App() {
               path="admin/scheduling"
               element={
                 <RequireRole roles={['superadmin', 'admin', 'auditor']}>
-                  <SchedulingDashboard />
+                  <Navigate to="/admin/schedule-manager" replace />
                 </RequireRole>
               }
             />
@@ -341,7 +369,7 @@ export default function App() {
             <Route
               path="admin/schedule-manager/:id/edit"
               element={
-                <RequireRole roles={['superadmin', 'admin', 'opdmanager', 'opd_manager']}>
+                <RequireRole roles={['superadmin', 'admin']}>
                   <DoctorScheduleEditorPage />
                 </RequireRole>
               }
@@ -367,7 +395,7 @@ export default function App() {
             <Route
               path="appointments/book"
               element={
-                <RequireRole roles={['patient']}>
+                <RequireRole roles={['patient', ...APPOINTMENT_DESK_ROLES]}>
                   <BookAppointmentPage />
                 </RequireRole>
               }

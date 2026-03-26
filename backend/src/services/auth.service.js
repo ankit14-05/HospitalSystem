@@ -13,6 +13,9 @@ const crypto = require('crypto');
 const { query, sql } = require('../config/database');
 const AppError = require('../utils/AppError');
 const { sendOtpEmail, sendOtpSms, sendPasswordChangedEmail } = require('./emailService');
+const {
+  resolveActivePatientContext,
+} = require('./patientAccess.service');
 
 // ── JWT helpers ───────────────────────────────────────────────────────────────
 const signAccess = (payload) =>
@@ -96,6 +99,67 @@ const maskPhone = (phone) => {
   return `${clean.slice(0, 2)}${'*'.repeat(Math.max(clean.length - 4, 3))}${clean.slice(-2)}`;
 };
 
+const buildUserPayload = (user, patientContext = null) => {
+  const payload = {
+    id:           user.Id,
+    username:     user.Username,
+    email:        user.Email,
+    phone:        user.Phone,
+    role:         user.Role,
+    firstName:    user.FirstName,
+    lastName:     user.LastName,
+    hospitalId:   user.HospitalId,
+    hospitalName: user.HospitalName,
+    designation:  user.Designation,
+    departmentId: user.DepartmentId,
+    photoUrl:     user.ProfilePhotoUrl,
+    lastLoginAt:  user.LastLoginAt,
+  };
+
+  if (user.Role === 'patient') {
+    payload.familyAccessEnabled = Boolean(patientContext?.familyAccessEnabled);
+    payload.hasMultiplePatientProfiles = Boolean(patientContext?.hasMultipleProfiles);
+    payload.patientProfiles = patientContext?.profiles || [];
+    payload.activePatientProfile = patientContext?.activeProfile || null;
+    payload.activePatientId = patientContext?.activeProfile?.patientId || null;
+  }
+
+  return payload;
+};
+
+const getCurrentUserContext = async ({ userId, sessionId = null, activePatientId = null }) => {
+  const userResult = await query(
+    `SELECT u.Id, u.HospitalId, u.Username, u.Email, u.Phone, u.Role,
+            u.FirstName, u.LastName, u.Gender, u.DateOfBirth,
+            u.ProfilePhotoUrl, u.IsActive, u.Is2FaEnabled,
+            u.IsEmailVerified, u.IsPhoneVerified, u.LastLoginAt,
+            u.Designation, u.DepartmentId, d.Name AS DepartmentName,
+            h.Name AS HospitalName, h.LogoUrl AS HospitalLogo
+     FROM dbo.Users u
+     LEFT JOIN dbo.Departments d ON d.Id = u.DepartmentId
+     LEFT JOIN dbo.HospitalSetup h ON h.Id = u.HospitalId
+     WHERE u.Id = @id AND u.DeletedAt IS NULL`,
+    { id: { type: sql.BigInt, value: userId } }
+  );
+
+  const user = userResult.recordset[0];
+  if (!user) {
+    throw new AppError('User not found.', 404);
+  }
+
+  let patientContext = null;
+  if (user.Role === 'patient') {
+    patientContext = await resolveActivePatientContext({
+      userId,
+      hospitalId: user.HospitalId,
+      sessionId,
+      preferredPatientId: activePatientId,
+    });
+  }
+
+  return buildUserPayload(user, patientContext);
+};
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // LOGIN
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -166,8 +230,9 @@ const login = async ({ identifier, password, ipAddress, userAgent, deviceInfo })
   // Create AuthSessions row required by auth.middleware.js
   const tokenHash       = crypto.createHash('sha256').update(accessToken).digest('hex');
   const sessionExpiresAt = new Date(Date.now() + 8 * 60 * 60 * 1000);
-  await query(
+  const sessionResult = await query(
     `INSERT INTO dbo.AuthSessions (UserId, TokenHash, DeviceInfo, IpAddress, IsActive, ExpiresAt)
+     OUTPUT INSERTED.Id AS Id
      VALUES (@uid, @hash, @dev, @ip, 1, @exp)`,
     {
       uid:  { type: sql.BigInt,            value: user.Id },
@@ -178,31 +243,57 @@ const login = async ({ identifier, password, ipAddress, userAgent, deviceInfo })
     }
   );
 
+  const sessionId = sessionResult.recordset[0]?.Id || null;
+  let patientContext = null;
+  if (user.Role === 'patient') {
+    patientContext = await resolveActivePatientContext({
+      userId: user.Id,
+      hospitalId: user.HospitalId,
+      sessionId,
+      touchAccess: true,
+    });
+  }
+
   return {
     accessToken,
     refreshToken,
-    user: {
-      id:           user.Id,
-      username:     user.Username,
-      email:        user.Email,
-      phone:        user.Phone,
-      role:         user.Role,
-      firstName:    user.FirstName,
-      lastName:     user.LastName,
-      hospitalId:   user.HospitalId,
-      hospitalName: user.HospitalName,
-      designation:  user.Designation,
-      departmentId: user.DepartmentId,
-      photoUrl:     user.ProfilePhotoUrl,
-      lastLoginAt:  user.LastLoginAt,
-    },
+    user: buildUserPayload(user, patientContext),
   };
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // LOGOUT
 // ═══════════════════════════════════════════════════════════════════════════════
-const logout = async () => true; // JWT stateless; cookie cleared by controller
+const logout = async (userId, sessionId = null) => {
+  if (!userId) return true;
+
+  if (sessionId) {
+    await query(
+      `UPDATE dbo.AuthSessions
+       SET IsActive = 0,
+           RevokedAt = SYSUTCDATETIME(),
+           RevokedReason = 'logout'
+       WHERE Id = @sessionId AND UserId = @userId`,
+      {
+        sessionId: { type: sql.BigInt, value: sessionId },
+        userId: { type: sql.BigInt, value: userId },
+      }
+    );
+    return true;
+  }
+
+  await query(
+    `UPDATE dbo.AuthSessions
+     SET IsActive = 0,
+         RevokedAt = SYSUTCDATETIME(),
+         RevokedReason = 'logout'
+     WHERE UserId = @userId AND IsActive = 1`,
+    {
+      userId: { type: sql.BigInt, value: userId },
+    }
+  );
+  return true;
+};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // FORGOT PASSWORD
@@ -416,4 +507,4 @@ const resetPassword = async ({ identifier, otp, newPassword }) => {
   return true;
 };
 
-module.exports = { login, logout, forgotPassword, verifyOtp, resetPassword };
+module.exports = { login, logout, forgotPassword, verifyOtp, resetPassword, getCurrentUserContext };

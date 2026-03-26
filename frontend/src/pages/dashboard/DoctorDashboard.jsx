@@ -15,7 +15,7 @@ import api from '../../services/api';
 import toast from 'react-hot-toast';
 import {
   TEAL, BLUE, Sk, StatCard, StatusBadge, Empty,
-  SectionHeader, Card, Modal, fmtDate, fmtTime, initials, InfoBadge
+  SectionHeader, Card, Modal, fmtDate, fmtTime, fmtTimeRange, initials, InfoBadge
 } from '../../components/ui';
 import CompleteAppointmentModal from '../../components/appointments/CompleteAppointmentModal';
 import PrescriptionComposerModal from '../../components/prescriptions/PrescriptionComposerModal';
@@ -413,7 +413,11 @@ const PatientHistoryModal = ({ patientId, patientName, onClose, onRx }) => {
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="text-sm font-bold text-slate-700">{fmtDate(a.AppointmentDate)}</span>
-                              {a.AppointmentTime && <span className="text-xs text-slate-400">at {fmtTime(a.AppointmentTime)}</span>}
+                              {(a.AppointmentTime || a.EndTime) && (
+                                <span className="text-xs text-slate-400">
+                                  at {fmtTimeRange(a.AppointmentTime, a.EndTime)}
+                                </span>
+                              )}
                               <span className="text-[10px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full font-medium">{a.VisitType}</span>
                               {a.TokenNumber && <span className="text-[10px] text-teal-600 font-mono">Token #{a.TokenNumber}</span>}
                             </div>
@@ -922,7 +926,9 @@ const QueueTab = ({ queue, loading, onRefresh, onCallIn, onMarkDone, onRx, searc
                       <p className="text-sm text-slate-600">{(pt.Age||pt.age)?`${pt.Age||pt.age}yr`:'—'}</p>
                       <p className="text-xs text-slate-500 line-clamp-2">{pt.Reason||pt.reason||pt.VisitType||pt.Type||pt.type||'—'}</p>
                       <div>
-                        <p className="text-sm font-semibold text-slate-700">{fmtTime(String(pt.AppointmentTime||pt.StartTime||pt.time||'').slice(0,8))}</p>
+                        <p className="text-sm font-semibold text-slate-700">
+                          {fmtTimeRange(pt.AppointmentTime || pt.StartTime || pt.time, pt.EndTime || pt.endTime)}
+                        </p>
                         <span className={`inline-flex items-center gap-1 mt-1 px-2.5 py-0.5 rounded-full text-xs font-semibold ${tok.bg}`}>
                           <span className={`w-1.5 h-1.5 rounded-full ${tok.dot}`} />
                           {tok.label}
@@ -1018,7 +1024,9 @@ const RequestsTab = ({ requests, loading, onRefresh, onViewPatient }) => (
                       <span className="text-xs text-slate-400 capitalize">{req.VisitType||req.Type||req.type||'OPD'}</span>
                       <span className="text-xs text-slate-400">
                         {fmtDate((req.AppointmentDate||req.Date||req.date||'').toString().slice(0,10))}
-                        {(req.AppointmentTime||req.StartTime) && <> · {fmtTime(String(req.AppointmentTime||req.StartTime||'').slice(0,8))}</>}
+                        {(req.AppointmentTime || req.StartTime || req.EndTime) && (
+                          <> · {fmtTimeRange(req.AppointmentTime || req.StartTime, req.EndTime || req.endTime)}</>
+                        )}
                       </span>
                       {(req.UHID||req.uhid) && <span className="text-xs font-mono text-slate-400">{req.UHID||req.uhid}</span>}
                     </div>
@@ -1153,7 +1161,7 @@ const ScheduleTab = ({ profile, schedule, todaySlots, weeklyStats, loading, onEd
                       <div key={s.Id||s.id||idx}
                         className={`flex flex-col items-center py-2.5 px-2 rounded-xl border text-xs font-semibold ${booked?'bg-slate-100 border-slate-200 text-slate-400':'text-teal-700'}`}
                         style={!booked ? { background:`${TEAL}0c`, borderColor:`${TEAL}25` } : {}}>
-                        <span>{fmtTime(s.StartTime||s.time)}</span>
+                        <span>{fmtTimeRange(s.StartTime || s.time, s.EndTime || s.endTime)}</span>
                         <span className={`text-[10px] mt-0.5 ${booked?'text-slate-400':'text-teal-500'}`}>{booked?'Booked':'Open'}</span>
                       </div>
                     );

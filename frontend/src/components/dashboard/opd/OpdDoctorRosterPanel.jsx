@@ -1,5 +1,6 @@
 import React from 'react';
 import { Loader2, Mail, Stethoscope } from 'lucide-react';
+import { fmtTime, fmtTimeRange } from '../../ui';
 
 const initials = (name = '') =>
   name
@@ -9,6 +10,11 @@ const initials = (name = '') =>
     .join('')
     .slice(0, 2)
     .toUpperCase();
+
+const formatScheduleText = (value) => {
+  if (!value) return 'Not assigned';
+  return String(value).replace(/(\d{1,2}:\d{2})-(\d{1,2}:\d{2})/g, (_, start, end) => fmtTimeRange(start, end));
+};
 
 export default function OpdDoctorRosterPanel({
   doctors = [],
@@ -51,13 +57,17 @@ export default function OpdDoctorRosterPanel({
               <div className="mt-5 space-y-3">
                 <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
                   <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-400">Today schedule</p>
-                  <p className="mt-2 text-sm font-semibold text-slate-700">{doctor.TodaySchedule || 'Not assigned'}</p>
+                  <p className="mt-2 text-sm font-semibold text-slate-700">{formatScheduleText(doctor.TodaySchedule)}</p>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div className="rounded-2xl bg-white px-4 py-3 shadow-sm">
                     <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-400">Next patient</p>
-                    <p className="mt-2 text-base font-black text-slate-900">{doctor.NextAppointmentTime || 'Free'}</p>
+                    <p className="mt-2 text-base font-black text-slate-900">
+                      {doctor.NextAppointmentTime
+                        ? fmtTimeRange(doctor.NextAppointmentTime, doctor.NextAppointmentEndTime)
+                        : 'Free'}
+                    </p>
                   </div>
                   <div className="rounded-2xl bg-white px-4 py-3 shadow-sm">
                     <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-400">Completed</p>

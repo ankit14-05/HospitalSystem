@@ -1,5 +1,11 @@
 const { getPool, sql } = require('../config/database');
 const { ADMIN_ROLES, STAFF_PROFILE_ROLES, normalizeRole } = require('../constants/roles');
+const {
+  requireActivePatientProfile,
+  resolveActivePatientContext,
+  switchActivePatientProfile,
+  createFamilyMemberProfile,
+} = require('./patientAccess.service');
 
 const STAFF_ROLES = new Set(STAFF_PROFILE_ROLES.map(normalizeRole));
 const ADMIN_ROLE_SET = new Set(ADMIN_ROLES.map(normalizeRole));
@@ -165,8 +171,19 @@ const mapCommonFields = (user) => ({
 });
 
 const getPatientProfile = async (pool, user) => {
+  const activeProfile = await requireActivePatientProfile(
+    {
+      id: user.Id,
+      userId: user.Id,
+      hospitalId: user.HospitalId,
+      activePatientId: user.ActivePatientId || null,
+    },
+    user.SessionId || null,
+    pool
+  );
+
   const result = await pool.request()
-    .input('UserId', sql.BigInt, user.Id)
+    .input('PatientId', sql.BigInt, activeProfile.patientId)
     .query(`
       SELECT
         p.Id AS ProfileId,
@@ -194,7 +211,7 @@ const getPatientProfile = async (pool, user) => {
         p.CurrentMedications,
         p.UpdatedAt
       FROM dbo.PatientProfiles p
-      WHERE p.UserId = @UserId
+      WHERE p.Id = @PatientId
         AND p.DeletedAt IS NULL
     `);
 
@@ -229,6 +246,8 @@ const getPatientProfile = async (pool, user) => {
     chronicConditions: profile.ChronicConditions || null,
     currentMedications: profile.CurrentMedications || null,
     updatedAt: profile.UpdatedAt || null,
+    relationshipToUser: activeProfile.relationshipToUser || 'Self',
+    canUpdateProfile: activeProfile.canUpdateProfile,
   };
 };
 
@@ -409,9 +428,25 @@ const getMyProfile = async (authUser) => {
     throw Object.assign(new Error('User not found'), { statusCode: 404 });
   }
 
+  if (user.Role === 'patient') {
+    user.ActivePatientId = authUser.activePatientId || null;
+    user.SessionId = authUser.sessionId || authUser.SessionId || null;
+  }
+
   const profile = await fetchProfileByRole(pool, user);
   if (!profile) {
     throw Object.assign(new Error('Profile not found'), { statusCode: 404 });
+  }
+
+  let patientContext = null;
+  if (user.Role === 'patient') {
+    patientContext = await resolveActivePatientContext({
+      userId: authUser.id,
+      hospitalId: user.HospitalId,
+      sessionId: authUser.sessionId || null,
+      preferredPatientId: authUser.activePatientId || null,
+      poolArg: pool,
+    });
   }
 
   return {
@@ -419,6 +454,14 @@ const getMyProfile = async (authUser) => {
     profileType: profile.profileType,
     editableFields: buildEditableFields(user.Role),
     data: profile,
+    ...(patientContext
+      ? {
+          patientProfiles: patientContext.profiles,
+          activePatientProfile: patientContext.activeProfile,
+          familyAccessEnabled: patientContext.familyAccessEnabled,
+          hasMultiplePatientProfiles: patientContext.hasMultipleProfiles,
+        }
+      : {}),
   };
 };
 
@@ -497,8 +540,13 @@ const updateUserFields = async (pool, authUser, data) => {
 };
 
 const updatePatientProfile = async (pool, authUser, data) => {
+  const activeProfile = await requireActivePatientProfile(authUser, authUser.sessionId || null, pool);
+  if (!activeProfile.canUpdateProfile) {
+    throw Object.assign(new Error('You do not have permission to update this patient profile'), { statusCode: 403 });
+  }
+
   await pool.request()
-    .input('UserId', sql.BigInt, authUser.id)
+    .input('PatientId', sql.BigInt, activeProfile.patientId)
     .input('FirstName', sql.NVarChar(100), data.firstName)
     .input('LastName', sql.NVarChar(100), data.lastName)
     .input('Email', sql.NVarChar(255), data.email)
@@ -559,7 +607,7 @@ const updatePatientProfile = async (pool, authUser, data) => {
         CurrentMedications = @CurrentMedications,
         UpdatedBy = @UpdatedBy,
         UpdatedAt = SYSUTCDATETIME()
-      WHERE UserId = @UserId
+      WHERE Id = @PatientId
         AND DeletedAt IS NULL
     `);
 };
@@ -672,4 +720,50 @@ module.exports = {
   updateMyProfile,
   buildEditableFields,
   resolveProfileType,
+  getPatientProfiles: async (authUser) => {
+    const context = await resolveActivePatientContext({
+      userId: authUser.id,
+      hospitalId: authUser.hospitalId,
+      sessionId: authUser.sessionId || null,
+      preferredPatientId: authUser.activePatientId || null,
+    });
+
+    return {
+      profiles: context.profiles,
+      activePatientProfile: context.activeProfile,
+      familyAccessEnabled: context.familyAccessEnabled,
+      hasMultiplePatientProfiles: context.hasMultipleProfiles,
+    };
+  },
+  switchPatientProfile: async (authUser, patientId, requestMeta = {}) => {
+    const context = await switchActivePatientProfile({
+      authUser,
+      sessionId: authUser.sessionId || null,
+      patientId,
+      ipAddress: requestMeta.ipAddress || null,
+      userAgent: requestMeta.userAgent || null,
+      switchSource: requestMeta.switchSource || 'ui',
+    });
+
+    return {
+      profiles: context.profiles,
+      activePatientProfile: context.activeProfile,
+      familyAccessEnabled: context.familyAccessEnabled,
+      hasMultiplePatientProfiles: context.hasMultipleProfiles,
+    };
+  },
+  addFamilyMember: async (authUser, payload) => {
+    const context = await createFamilyMemberProfile({
+      authUser,
+      sessionId: authUser.sessionId || null,
+      payload,
+    });
+
+    return {
+      profiles: context.profiles,
+      activePatientProfile: context.activeProfile,
+      familyAccessEnabled: context.familyAccessEnabled,
+      hasMultiplePatientProfiles: context.hasMultipleProfiles,
+    };
+  },
 };

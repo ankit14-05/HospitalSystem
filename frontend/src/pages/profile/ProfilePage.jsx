@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Save, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../services/api';
@@ -321,6 +322,24 @@ export default function ProfilePage() {
           </button>
         </div>
       </div>
+
+      {profileType === 'patient' && payload?.activePatientProfile && (
+        <div className="rounded-2xl border border-indigo-100 bg-indigo-50/80 px-5 py-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-indigo-500">Active Patient Profile</p>
+            <h2 className="text-lg font-bold text-slate-900 mt-1">{payload.activePatientProfile.fullName}</h2>
+            <p className="text-sm text-slate-500">
+              {payload.activePatientProfile.relationshipToUser || 'Self'} · {payload.activePatientProfile.uhid || 'UHID pending'}
+            </p>
+          </div>
+          <Link
+            to="/patient/profiles"
+            className="px-4 py-2.5 rounded-xl bg-white border border-indigo-200 text-sm font-semibold text-indigo-700 hover:bg-indigo-50"
+          >
+            Switch Patient Profile
+          </Link>
+        </div>
+      )}
 
       {loading && !payload ? (
         <div className="space-y-4">
