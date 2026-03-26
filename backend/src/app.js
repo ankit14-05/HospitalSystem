@@ -1,5 +1,7 @@
 // src/app.js
 require('dotenv').config();
+const fs           = require('fs');
+const path         = require('path');
 const express      = require('express');
 const helmet       = require('helmet');
 const cors         = require('cors');
@@ -29,6 +31,9 @@ const profileRoutes      = require('./routes/profile.routes');
 const rolesRoutes        = require('./routes/roles.routes');
 
 const app = express();
+const frontendDistPath = path.resolve(__dirname, '../../frontend/dist');
+const frontendIndexPath = path.join(frontendDistPath, 'index.html');
+const hasBuiltFrontend = fs.existsSync(frontendIndexPath);
 const isRateLimitEnabled = (value, defaultValue = true) => {
   if (value == null || value === '') return defaultValue;
   return !['false', '0', 'off', 'no'].includes(String(value).trim().toLowerCase());
@@ -109,6 +114,15 @@ app.use(`${prefix}/scheduling`,    schedulingRoutes);               // ← NEW
 app.use(`${prefix}/dashboard`,     dashboardRoutes);
 app.use(`${prefix}/profile`,       profileRoutes);
 app.use(`${prefix}/roles`,         rolesRoutes);
+
+if (hasBuiltFrontend) {
+  app.use(express.static(frontendDistPath));
+
+  // In production-style deployments, serve the built SPA for non-API routes.
+  app.get(/^\/(?!api(?:\/|$)|health$).*/, (req, res) => {
+    res.sendFile(frontendIndexPath);
+  });
+}
 
 // ── 404 handler ───────────────────────────────────────────────────────────────
 app.use((req, res) => {
