@@ -91,7 +91,8 @@ const NAV = {
   patient: [
     { path:'/dashboard/patient',      label:'Dashboard',          icon: LayoutDashboard },
     { path:'/appointments/book',      label:'Book Appointment',   icon: Calendar        },
-    { path:'/appointments',           label:'My Appointments',    icon: ClipboardList   },
+    // Exact match so `/appointments/book` doesn't also activate this item.
+    { path:'/appointments',           label:'My Appointments',    icon: ClipboardList, exact: true },
     { path:'/patient/profiles',       label:'Patient Profiles',   icon: Users           },
     { path:'/patient/profile',        label:'My Profile',         icon: UserCircle      },
   ],
@@ -151,7 +152,13 @@ export default function DashboardLayout() {
     await logout();
     navigate('/login', { replace: true });
   };
-  const isActive = (path) => location.pathname === path || location.pathname.startsWith(path + '/');
+  const isActive = (item) => {
+    const path = item?.path;
+    if (!path) return false;
+    if (location.pathname === path) return true;
+    if (item.exact) return false;
+    return location.pathname.startsWith(path + '/');
+  };
 
   const SW = sidebarOpen ? 240 : 60;
 
@@ -252,7 +259,7 @@ export default function DashboardLayout() {
             )}
             {navItems.map(item => {
               const Icon   = item.icon;
-              const active = isActive(item.path);
+              const active = isActive(item);
               return (
                 <Link key={item.path} to={item.path}
                   className={`dl-nav-item flex items-center gap-3 rounded-xl mb-0.5
@@ -321,7 +328,7 @@ export default function DashboardLayout() {
             {/* Page title */}
             <div>
               <h2 className="text-[15px] font-bold text-slate-800 leading-tight">
-                {navItems.find(n => isActive(n.path))?.label || 'Dashboard'}
+                {navItems.find(n => isActive(n))?.label || 'Dashboard'}
               </h2>
               <p className="text-[11px] text-slate-400 mt-0.5">
                 {new Date().toLocaleDateString('en-IN', { weekday:'short', month:'long', day:'numeric', year:'numeric' })}
@@ -461,7 +468,7 @@ export default function DashboardLayout() {
             <span className="capitalize text-slate-400">{ROLE_LABELS[role] || 'Staff'}</span>
             <span className="text-slate-300">/</span>
             <span className="font-semibold" style={{ color: primary }}>
-              {navItems.find(n => isActive(n.path))?.label || 'Dashboard'}
+              {navItems.find(n => isActive(n))?.label || 'Dashboard'}
             </span>
           </div>
 

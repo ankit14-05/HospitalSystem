@@ -37,6 +37,8 @@ const generateOtp = () => {
 };
 
 const OTP_EXPIRES_MINUTES = () => parseInt(process.env.OTP_EXPIRES_MINUTES) || 10;
+// Unlimited OTP attempts (no 429 throttling) per project requirement.
+// We still record Attempts for auditing/analytics, but we don't block on MaxAttempts.
 const OTP_MAX_ATTEMPTS    = parseInt(process.env.OTP_MAX_ATTEMPTS) || 5;
 
 // ── OTP row deletions ─────────────────────────────────────────────────────────
@@ -401,20 +403,9 @@ const verifyOtp = async ({ contact, otp, purpose = 'forgot_password' }) => {
 
   if (rec.IsVerified) return { verified: true };
 
-  if (rec.Attempts >= rec.MaxAttempts) {
-    await deleteOtpById(rec.Id);
-    throw new AppError('Too many incorrect attempts. Please request a new OTP.', 429);
-  }
-
   const valid = await bcrypt.compare(otp.trim(), rec.OtpHash);
   if (!valid) {
     const newAttempts = rec.Attempts + 1;
-    const remaining   = rec.MaxAttempts - newAttempts;
-
-    if (remaining <= 0) {
-      await deleteOtpById(rec.Id);
-      throw new AppError('Too many incorrect attempts. Please request a new OTP.', 429);
-    }
 
     await query(
       `UPDATE dbo.OtpTokens SET Attempts = @a WHERE Id = @id`,
@@ -423,7 +414,7 @@ const verifyOtp = async ({ contact, otp, purpose = 'forgot_password' }) => {
         id: { type: sql.BigInt,   value: rec.Id },
       }
     );
-    throw new AppError(`Incorrect OTP. ${remaining} attempt(s) remaining.`, 400);
+    throw new AppError('Incorrect OTP.', 400);
   }
 
   await query(
@@ -465,12 +456,6 @@ const resetPassword = async ({ identifier, otp, newPassword }) => {
   const valid = await bcrypt.compare(otp.trim(), rec.OtpHash);
   if (!valid) {
     const newAttempts = rec.Attempts + 1;
-    const remaining   = rec.MaxAttempts - newAttempts;
-
-    if (remaining <= 0) {
-      await deleteOtpById(rec.Id);
-      throw new AppError('Too many incorrect attempts. Please request a new OTP.', 429);
-    }
 
     await query(
       `UPDATE dbo.OtpTokens SET Attempts = @a WHERE Id = @id`,
@@ -479,7 +464,7 @@ const resetPassword = async ({ identifier, otp, newPassword }) => {
         id: { type: sql.BigInt,   value: rec.Id },
       }
     );
-    throw new AppError(`Incorrect OTP. ${remaining} attempt(s) remaining.`, 400);
+    throw new AppError('Incorrect OTP.', 400);
   }
 
   const hash = await bcrypt.hash(newPassword, parseInt(process.env.BCRYPT_ROUNDS) || 10);

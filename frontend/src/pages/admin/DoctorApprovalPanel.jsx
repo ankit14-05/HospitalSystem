@@ -456,9 +456,10 @@ export default function DoctorApprovalPanel() {
   const loadDoctors = useCallback(async () => {
     setLoading(true);
     try {
+      // `api` returns the JSON body directly (see `frontend/src/services/api.js`)
       const r = await api.get('/register/pending-doctors?status=all');
-      const list = Array.isArray(r.data?.data) ? r.data.data
-        : Array.isArray(r.data) ? r.data : [];
+      const list = Array.isArray(r?.data) ? r.data
+        : Array.isArray(r) ? r : [];
       setDoctors(list);
     } catch {
       toast.error('Failed to load doctor registrations');
@@ -496,7 +497,7 @@ export default function DoctorApprovalPanel() {
 
       if (newStatus !== 'deferred') setTimeout(() => setSelected(null), 500);
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Action failed');
+      toast.error(err?.message || 'Action failed');
     } finally {
       setActioning(null);
     }

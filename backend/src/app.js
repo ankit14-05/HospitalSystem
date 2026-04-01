@@ -34,7 +34,8 @@ const app = express();
 const frontendDistPath = path.resolve(__dirname, '../../frontend/dist');
 const frontendIndexPath = path.join(frontendDistPath, 'index.html');
 const hasBuiltFrontend = fs.existsSync(frontendIndexPath);
-const isRateLimitEnabled = (value, defaultValue = true) => {
+// Rate limiting is disabled by default (no request cap) per project requirement.
+const isRateLimitEnabled = (value, defaultValue = false) => {
   if (value == null || value === '') return defaultValue;
   return !['false', '0', 'off', 'no'].includes(String(value).trim().toLowerCase());
 };
@@ -85,7 +86,7 @@ app.use(
 );
 
 // ── Global rate limiter ───────────────────────────────────────────────────────
-if (isRateLimitEnabled(process.env.ENABLE_GLOBAL_RATE_LIMIT, true)) {
+if (isRateLimitEnabled(process.env.ENABLE_GLOBAL_RATE_LIMIT, false)) {
   app.use(
     rateLimit({
       windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,

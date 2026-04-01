@@ -11,7 +11,8 @@ const {
   verifyOtpValidator,
 } = require('../validators/auth.validator');
 
-const isRateLimitEnabled = (value, defaultValue = true) => {
+// Auth rate limiting is disabled by default (no request cap) per project requirement.
+const isRateLimitEnabled = (value, defaultValue = false) => {
   if (value == null || value === '') return defaultValue;
   return !['false', '0', 'off', 'no'].includes(String(value).trim().toLowerCase());
 };
@@ -43,7 +44,7 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-const authRateLimitChain = isRateLimitEnabled(process.env.ENABLE_AUTH_RATE_LIMIT, true)
+const authRateLimitChain = isRateLimitEnabled(process.env.ENABLE_AUTH_RATE_LIMIT, false)
   ? [authLimiter]
   : [];
 
