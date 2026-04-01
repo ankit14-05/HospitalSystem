@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect, useRef } from 'react';
+import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -22,10 +22,16 @@ import useHospitalBranding from '../../hooks/useHospitalBranding';
 
 const REGISTRATION_FEE = 200;
 
+// Keep in sync with backend `RELATIONSHIP_VALUES` (patientRegistration.service.js)
 const RELATION_OPTIONS = ['Spouse', 'Child', 'Parent', 'Sibling', 'Grandparent', 'Grandchild', 'InLaw', 'Other'];
-const GENDER_OPTIONS = ['Male', 'Female', 'Other', 'PreferNot'];
 
-const IDENTITY_OPTIONS = ['Aadhar Card', 'PAN Card', 'Passport', 'Voter ID'];
+// Align with patient registration UI.
+const GENDER_OPTIONS = [
+  'Male','Female','Non-binary','Transgender Male','Transgender Female',
+  'Genderqueer','Genderfluid','Agender','Intersex','Two-Spirit','Prefer not to say'
+];
+
+const IDENTITY_OPTIONS = ['Aadhar Card', 'PAN Card', 'Passport', 'Voter ID', 'Driving License'];
 const PAYMENT_METHODS = [
   { id: 'card', label: 'Card Payment', icon: CreditCard },
   { id: 'upi', label: 'UPI', icon: Smartphone },
@@ -38,12 +44,17 @@ const TAB_META = [
   { id: 3, label: 'Payment', icon: CreditCard },
 ];
 
-// Input classes for compact UI
-const inputBase = 'w-full rounded-lg border px-3 py-2 text-[13px] text-slate-800 outline-none transition-colors placeholder:text-slate-400';
-const inputNorm = 'border-slate-200 hover:border-indigo-300 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100';
-const inputErr = 'border-rose-400 bg-rose-50 focus:border-rose-400 focus:ring-2 focus:ring-rose-100';
+// Input styles (match patient registration look/feel)
+const inputBase = `w-full px-3.5 py-2 rounded-lg border text-[14px] text-slate-800 bg-white placeholder:text-slate-400 outline-none transition-all`;
+const inputNorm = `border-slate-200 hover:border-purple-300 focus:border-purple-500 focus:ring-2 focus:ring-purple-100`;
+const inputErr  = `border-red-400 bg-red-50 focus:border-red-400 focus:ring-2 focus:ring-red-100`;
+const inputOk   = `border-emerald-400 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100`;
 
 const labelClass = 'text-[11px] font-bold text-slate-600 uppercase tracking-wider block mb-1';
+
+const todayStr = new Date().toISOString().split('T')[0];
+const minDOB = (() => { const d = new Date(); d.setFullYear(d.getFullYear() - 150); return d.toISOString().split('T')[0]; })();
+const minArrival = (() => { const d = new Date(); d.setFullYear(d.getFullYear() - 3); return d.toISOString().split('T')[0]; })();
 
 const INITIAL_FORM = {
   relationshipToUser: 'Child',
@@ -85,6 +96,72 @@ function Field({ label, hint, children }) {
     </div>
   );
 }
+
+const FI = ({ err, ok, className = '', ...p }) => (
+  <input className={`${inputBase} ${err ? inputErr : ok ? inputOk : inputNorm} ${className}`} {...p} />
+);
+
+const SelectField = ({ children, err = false, className = '', ...p }) => (
+  <div className="relative">
+    <select
+      className={`${inputBase} ${err ? inputErr : inputNorm} ${className} appearance-none cursor-pointer pr-9`}
+      {...p}
+    >
+      {children}
+    </select>
+    <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400" />
+  </div>
+);
+
+const PhoneField = ({ code, onCode, val, onChange, err, maxLen = 10 }) => (
+  <div className={`flex rounded-lg border overflow-hidden transition-all focus-within:ring-2
+    ${err
+      ? 'border-red-400 focus-within:border-red-400 focus-within:ring-red-100 bg-red-50'
+      : 'border-slate-200 hover:border-purple-300 focus-within:border-purple-500 focus-within:ring-purple-100'}`}>
+    <select
+      value={code}
+      onChange={(e) => onCode(e.target.value)}
+      className="bg-slate-50 border-r border-slate-200 text-[13px] text-slate-700 outline-none cursor-pointer py-2.5 px-2.5 min-w-[70px]"
+    >
+      {['+91', '+1', '+44', '+971', '+61', '+65', '+81', '+49'].map((c) => <option key={c}>{c}</option>)}
+    </select>
+    <input
+      value={val}
+      onChange={(e) => {
+        let v = e.target.value.replace(/\\D/g, '');
+        if (v.startsWith('0')) v = v.replace(/^0+/, '');
+        onChange(v.slice(0, maxLen));
+      }}
+      placeholder={maxLen === 10 ? '9876543210' : 'Phone'}
+      inputMode="numeric"
+      maxLength={maxLen}
+      className="flex-1 px-3 py-2.5 text-[14px] text-slate-800 outline-none bg-white placeholder:text-slate-400 min-w-0"
+    />
+  </div>
+);
+
+const sanitizeIdNumber = (val, idType) => {
+  let v = String(val || '').toUpperCase();
+  switch (idType) {
+    case 'Aadhar Card':  return v.replace(/\\D/g, '').slice(0, 12);
+    case 'PAN Card':     return v.replace(/[^A-Z0-9]/g, '').slice(0, 10);
+    case 'Passport':     return v.replace(/[^A-Z0-9]/g, '').slice(0, 30);
+    case 'Voter ID':     return v.replace(/[^A-Z0-9]/g, '').slice(0, 30);
+    case 'Driving License': return v.replace(/[^A-Z0-9-]/g, '').slice(0, 16);
+    default: return v.slice(0, 30);
+  }
+};
+
+const idPlaceholder = (idType) => {
+  switch (idType) {
+    case 'Aadhar Card': return '12-digit number';
+    case 'PAN Card': return 'ABCDE1234F';
+    case 'Passport': return 'A1234567';
+    case 'Voter ID': return 'ABC1234567';
+    case 'Driving License': return 'MH01-20110012345';
+    default: return 'Identity number';
+  }
+};
 
 // ── GeoSelect Component ────────────────────────────────────────────────────────
 function GeoSelect({ value, onChange, items, placeholder, loading=false, disabled=false, err=false, onAddManually, addLabel='Add manually' }) {
@@ -339,10 +416,10 @@ export default function AddFamilyMemberPage() {
     return age >= 0 ? `${age} years` : 'Pending';
   }, [form.dateOfBirth]);
 
-  const updateField = (key, value) => {
+  const updateField = useCallback((key, value) => {
     setForm((current) => ({ ...current, [key]: value }));
     setErrors((current) => ({ ...current, [key]: '' }));
-  };
+  }, []);
 
   const validateStep = (currentStep) => {
     const nextErrors = {};
@@ -353,11 +430,12 @@ export default function AddFamilyMemberPage() {
       if (!form.lastName.trim()) nextErrors.lastName = 'Required';
       if (!form.gender) nextErrors.gender = 'Required';
       if (!form.dateOfBirth) nextErrors.dateOfBirth = 'Required';
-      if (!form.phone.trim()) nextErrors.phone = 'Required';
-      if (!form.city.trim()) nextErrors.city = 'Required';
-      if (!form.pincodeText.trim()) nextErrors.pincodeText = 'Required';
-      if (!form.emergencyName.trim()) nextErrors.emergencyName = 'Required';
-      if (!form.emergencyPhone.trim()) nextErrors.emergencyPhone = 'Required';
+
+      // Optional fields: validate format only if provided (backend does not require them).
+      if (form.phone && form.phone.length !== 10) nextErrors.phone = 'Must be 10 digits';
+      if (form.email && !/\S+@\S+\.\S+/.test(form.email)) nextErrors.email = 'Invalid email';
+      if (form.pincodeText && !/^\d{6}$/.test(form.pincodeText)) nextErrors.pincodeText = '6 digits';
+      if (form.emergencyPhone && form.emergencyPhone.length !== 10) nextErrors.emergencyPhone = 'Must be 10 digits';
     }
 
     if (currentStep === 2) {
@@ -393,15 +471,22 @@ export default function AddFamilyMemberPage() {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
-    Object.keys(INITIAL_FORM).forEach(k => validateStep(1)); // Fast way to trigger highlights
     if (!validateStep(1) || !validateStep(2) || !validateStep(3)) {
-       toast.error("Please fill all required fields in all tabs.");
-       return;
+      toast.error('Please fix the highlighted fields.');
+      return;
     }
 
     setSaving(true);
     try {
-      await addFamilyMember({ ...form, registrationFee: REGISTRATION_FEE, payMethod, payLater, card, upiId, bank });
+      await addFamilyMember({
+        ...form,
+        registrationFee: REGISTRATION_FEE,
+        payMethod,
+        payLater,
+        card,
+        upiId,
+        bank,
+      });
       navigate('/patient/profiles', { replace: true });
     } catch (error) {
       toast.error(error.message || 'Failed to add patient profile.');
@@ -411,10 +496,13 @@ export default function AddFamilyMemberPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 font-sans flex flex-col">
+    <div
+      className="min-h-screen font-sans flex flex-col"
+      style={{ background: 'linear-gradient(135deg,#f5f3ff 0%,#ede9fe 100%)' }}
+    >
        
       {/* ── Top Header ─────────────────────────────────────────── */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-40 shadow-sm">
+      <header className="bg-white/85 backdrop-blur-sm border-b border-purple-100/60 sticky top-0 z-40 shadow-sm">
         <div className="max-w-4xl mx-auto px-6 h-14 flex items-center justify-between">
           <div className="flex items-center gap-3">
              <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white" style={{ background: primary }}>
@@ -435,7 +523,8 @@ export default function AddFamilyMemberPage() {
         
         {/* Compact Title Header */}
         <div className="mb-4">
-          <h1 className="text-[24px] font-black text-slate-900 tracking-tight mb-1">Register Family Member</h1>
+          <h1 className="text-[22px] sm:text-[24px] font-black text-slate-900 tracking-tight mb-1">Register Family Member</h1>
+          <p className="text-[12px] text-slate-500">Add an additional patient profile under your login.</p>
         </div>
 
         {/* ── Tab Navigation (Free Clicking allowed) ── */}
@@ -445,39 +534,76 @@ export default function AddFamilyMemberPage() {
         }} primary={primary} />
         
         {/* ── Form Section ── */}
-        <form onSubmit={handleSubmit} className="bg-white rounded-[20px] p-5 sm:p-6 border border-slate-200 shadow-sm">
+        <form onSubmit={handleSubmit} className="bg-white rounded-2xl p-5 sm:p-6 border border-slate-200 shadow-sm">
           <div className="min-h-[300px]">
           
             {step === 1 && (
               <div className="space-y-4 animate-in fade-in duration-300">
                 <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2">
                   <Field label="Relationship" hint={errors.relationshipToUser}>
-                    <select value={form.relationshipToUser} onChange={(e) => updateField('relationshipToUser', e.target.value)} className={`${inputBase} ${errors.relationshipToUser?inputErr:inputNorm}`}>
-                      {RELATION_OPTIONS.map((opt) => <option key={opt}>{opt}</option>)}
-                    </select>
+                    <SelectField
+                      err={!!errors.relationshipToUser}
+                      value={form.relationshipToUser}
+                      onChange={(e) => updateField('relationshipToUser', e.target.value)}
+                    >
+                      {RELATION_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                    </SelectField>
                   </Field>
-                  <Field label="Date of Arrival">
-                    <input type="date" value={form.dateOfArrival} onChange={(e) => updateField('dateOfArrival', e.target.value)} className={`${inputBase} ${inputNorm}`} />
+                  <Field label="Date of Arrival" hint="(Optional, up to 3 yrs)">
+                    <FI
+                      type="date"
+                      value={form.dateOfArrival}
+                      min={minArrival}
+                      max={todayStr}
+                      onChange={(e) => updateField('dateOfArrival', e.target.value)}
+                    />
                   </Field>
                 </div>
                 
                 <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2">
                   <Field label="First Name" hint={errors.firstName}>
-                    <input value={form.firstName} onChange={(e) => updateField('firstName', e.target.value)} className={`${inputBase} ${errors.firstName?inputErr:inputNorm}`} placeholder="e.g. John" />
+                    <FI
+                      err={!!errors.firstName}
+                      value={form.firstName}
+                      onChange={(e) => updateField('firstName', e.target.value.replace(/[^A-Za-z\\s]/g, '').slice(0, 100))}
+                      placeholder="e.g. John"
+                      maxLength={100}
+                    />
                   </Field>
                   <Field label="Last Name" hint={errors.lastName}>
-                    <input value={form.lastName} onChange={(e) => updateField('lastName', e.target.value)} className={`${inputBase} ${errors.lastName?inputErr:inputNorm}`} placeholder="e.g. Doe" />
+                    <FI
+                      err={!!errors.lastName}
+                      value={form.lastName}
+                      onChange={(e) => updateField('lastName', e.target.value.replace(/[^A-Za-z\\s]/g, '').slice(0, 100))}
+                      placeholder="e.g. Doe"
+                      maxLength={100}
+                    />
                   </Field>
                 </div>
 
                 <div className="grid gap-x-4 gap-y-3 sm:grid-cols-3 bg-slate-50 p-3 rounded-xl border border-slate-100 mt-2">
                   <Field label="Gender" hint={errors.gender}>
-                    <select value={form.gender} onChange={(e) => updateField('gender', e.target.value)} className={`${inputBase} ${errors.gender?inputErr:inputNorm}`}>
-                      {GENDER_OPTIONS.map((opt) => <option key={opt}>{opt}</option>)}
-                    </select>
+                    <SelectField
+                      err={!!errors.gender}
+                      value={form.gender}
+                      onChange={(e) => updateField('gender', e.target.value)}
+                    >
+                      <option value="">— Select —</option>
+                      {GENDER_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                    </SelectField>
                   </Field>
                   <Field label="Date of Birth" hint={errors.dateOfBirth}>
-                    <input type="date" value={form.dateOfBirth} onChange={(e) => updateField('dateOfBirth', e.target.value)} className={`${inputBase} ${errors.dateOfBirth?inputErr:inputNorm}`} />
+                    <FI
+                      type="date"
+                      err={!!errors.dateOfBirth}
+                      value={form.dateOfBirth}
+                      min={minDOB}
+                      max={todayStr}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (!v || v <= todayStr) updateField('dateOfBirth', v);
+                      }}
+                    />
                   </Field>
                   <Field label="Calculated Age">
                     <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] font-bold text-slate-500">{ageText}</div>
@@ -486,13 +612,24 @@ export default function AddFamilyMemberPage() {
 
                 <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2">
                    <Field label="Mobile Phone" hint={errors.phone}>
-                      <div className="flex gap-2">
-                        <input value={form.phoneCountryCode} onChange={(e) => updateField('phoneCountryCode', e.target.value)} className={`${inputBase} ${inputNorm} w-[65px] text-center font-medium`} />
-                        <input value={form.phone} onChange={(e) => updateField('phone', e.target.value.replace(/\D/g, '').slice(0, 10))} className={`${inputBase} ${errors.phone?inputErr:inputNorm} flex-1 font-medium`} placeholder="9876543210" />
-                      </div>
+                      <PhoneField
+                        code={form.phoneCountryCode}
+                        onCode={(v) => updateField('phoneCountryCode', v)}
+                        val={form.phone}
+                        onChange={(v) => updateField('phone', v)}
+                        err={!!errors.phone}
+                      />
                    </Field>
-                   <Field label="Email Address">
-                      <input value={form.email} onChange={(e) => updateField('email', e.target.value)} className={`${inputBase} ${inputNorm}`} placeholder="support@medicore.com" />
+                   <Field label="Email Address" hint={errors.email}>
+                      <FI
+                        type="email"
+                        err={!!errors.email}
+                        value={form.email}
+                        onChange={(e) => updateField('email', e.target.value.trim())}
+                        className="lowercase"
+                        placeholder="support@medicore.com"
+                        maxLength={255}
+                      />
                    </Field>
                 </div>
 
@@ -508,24 +645,68 @@ export default function AddFamilyMemberPage() {
                 </div>
 
                 <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2">
-                  <Field label="Address Line 1"><input value={form.street1} onChange={(e) => updateField('street1', e.target.value)} className={`${inputBase} ${inputNorm}`} /></Field>
-                  <Field label="Address Line 2"><input value={form.street2} onChange={(e) => updateField('street2', e.target.value)} className={`${inputBase} ${inputNorm}`} /></Field>
+                  <Field label="Address Line 1">
+                    <FI value={form.street1} onChange={(e) => updateField('street1', e.target.value.slice(0, 255))} maxLength={255} />
+                  </Field>
+                  <Field label="Address Line 2">
+                    <FI value={form.street2} onChange={(e) => updateField('street2', e.target.value.slice(0, 255))} maxLength={255} />
+                  </Field>
                 </div>
 
                 <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2">
                   <Field label="Pincode" hint={errors.pincodeText}>
                     <div className="relative">
-                      <input value={form.pincodeText} onChange={(e) => updateField('pincodeText', e.target.value.replace(/\D/g, '').slice(0, 6))} className={`${inputBase} ${errors.pincodeText?inputErr:inputNorm}`} />
+                      <FI
+                        value={form.pincodeText}
+                        err={!!errors.pincodeText}
+                        onChange={(e) => updateField('pincodeText', e.target.value.replace(/\\D/g, '').slice(0, 6))}
+                        inputMode="numeric"
+                        maxLength={6}
+                        className="font-mono tracking-wider text-center pr-8"
+                        placeholder="400001"
+                      />
                       {pincodeLoading && <div className="absolute right-3 top-2.5 w-4 h-4 rounded-full border-2 border-slate-200 border-t-indigo-500 animate-spin" />}
                     </div>
                   </Field>
-                  <Field label="City" hint={errors.city}><input value={form.city} onChange={(e) => updateField('city', e.target.value)} className={`${inputBase} ${errors.city?inputErr:inputNorm}`} /></Field>
+                  <Field label="City" hint={errors.city}>
+                    <FI
+                      value={form.city}
+                      err={!!errors.city}
+                      onChange={(e) => updateField('city', e.target.value.replace(/[^A-Za-z\\s]/g, '').slice(0, 100))}
+                      maxLength={100}
+                      placeholder="Mumbai"
+                    />
+                  </Field>
                 </div>
 
                 <div className="grid gap-x-4 gap-y-3 sm:grid-cols-3 pt-2 border-t border-slate-100 bg-rose-50/50 p-3 rounded-xl border border-rose-100">
-                  <Field label="Emergency Contact" hint={errors.emergencyName}><input value={form.emergencyName} onChange={(e) => updateField('emergencyName', e.target.value)} className={`${inputBase} ${errors.emergencyName?inputErr:inputNorm}`} placeholder="Name" /></Field>
-                  <Field label="Relation"><input value={form.emergencyRelation} onChange={(e) => updateField('emergencyRelation', e.target.value)} className={`${inputBase} ${inputNorm}`} placeholder="e.g. Spouse" /></Field>
-                  <Field label="Emergency Phone" hint={errors.emergencyPhone}><input value={form.emergencyPhone} onChange={(e) => updateField('emergencyPhone', e.target.value.replace(/\D/g, '').slice(0, 10))} className={`${inputBase} ${errors.emergencyPhone?inputErr:inputNorm}`} placeholder="9876543210" /></Field>
+                  <Field label="Emergency Contact" hint={errors.emergencyName}>
+                    <FI
+                      value={form.emergencyName}
+                      err={!!errors.emergencyName}
+                      onChange={(e) => updateField('emergencyName', e.target.value.replace(/[^A-Za-z\\s]/g, '').slice(0, 200))}
+                      maxLength={200}
+                      placeholder="Name"
+                    />
+                  </Field>
+                  <Field label="Relation">
+                    <FI
+                      value={form.emergencyRelation}
+                      onChange={(e) => updateField('emergencyRelation', e.target.value.replace(/[^A-Za-z\\s]/g, '').slice(0, 80))}
+                      maxLength={80}
+                      placeholder="e.g. Spouse"
+                    />
+                  </Field>
+                  <Field label="Emergency Phone" hint={errors.emergencyPhone}>
+                    <FI
+                      value={form.emergencyPhone}
+                      err={!!errors.emergencyPhone}
+                      onChange={(e) => updateField('emergencyPhone', e.target.value.replace(/\\D/g, '').replace(/^0+/, '').slice(0, 10))}
+                      inputMode="numeric"
+                      maxLength={10}
+                      placeholder="9876543210"
+                    />
+                  </Field>
                 </div>
               </div>
             )}
@@ -533,20 +714,32 @@ export default function AddFamilyMemberPage() {
             {step === 2 && (
               <div className="space-y-4 animate-in fade-in duration-300">
                 <div className="grid gap-x-4 gap-y-3 sm:grid-cols-3">
-                  <Field label="Insurance Provider"><input value={form.insuranceProvider} onChange={(e) => updateField('insuranceProvider', e.target.value)} className={`${inputBase} ${inputNorm}`} placeholder="E.g. Star Health" /></Field>
-                  <Field label="Policy No"><input value={form.insurancePolicyNo} onChange={(e) => updateField('insurancePolicyNo', e.target.value)} className={`${inputBase} ${inputNorm}`} /></Field>
-                  <Field label="Valid Until"><input type="date" value={form.insuranceValidUntil} onChange={(e) => updateField('insuranceValidUntil', e.target.value)} className={`${inputBase} ${inputNorm}`} /></Field>
+                  <Field label="Insurance Provider">
+                    <FI value={form.insuranceProvider} onChange={(e) => updateField('insuranceProvider', e.target.value.slice(0, 200))} maxLength={200} placeholder="E.g. Star Health" />
+                  </Field>
+                  <Field label="Policy No">
+                    <FI value={form.insurancePolicyNo} onChange={(e) => updateField('insurancePolicyNo', e.target.value.slice(0, 100))} maxLength={100} />
+                  </Field>
+                  <Field label="Valid Until">
+                    <FI type="date" value={form.insuranceValidUntil} onChange={(e) => updateField('insuranceValidUntil', e.target.value)} min={todayStr} />
+                  </Field>
                 </div>
 
                 <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2 pt-2 border-t border-slate-100">
                   <Field label="Identity Type">
-                    <select value={form.idType} onChange={(e) => updateField('idType', e.target.value)} className={`${inputBase} ${inputNorm}`}>
+                    <SelectField value={form.idType} onChange={(e) => updateField('idType', e.target.value)}>
                       <option value="">Select ID Type</option>
-                      {IDENTITY_OPTIONS.map((opt) => <option key={opt}>{opt}</option>)}
-                    </select>
+                      {IDENTITY_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                    </SelectField>
                   </Field>
                   <Field label="Identity Number" hint={errors.idNumber}>
-                     <input value={form.idNumber} onChange={(e) => updateField('idNumber', e.target.value)} className={`${inputBase} ${errors.idNumber?inputErr:inputNorm}`} />
+                    <FI
+                      value={form.idNumber}
+                      err={!!errors.idNumber}
+                      onChange={(e) => updateField('idNumber', sanitizeIdNumber(e.target.value, form.idType))}
+                      placeholder={idPlaceholder(form.idType)}
+                      className="font-mono tracking-wider uppercase"
+                    />
                   </Field>
                 </div>
 
@@ -561,13 +754,19 @@ export default function AddFamilyMemberPage() {
 
                 <div className="grid gap-x-4 gap-y-3 sm:grid-cols-[180px_minmax(0,1fr)]">
                   <Field label="Past Surgery">
-                    <select value={form.pastSurgery} onChange={(e) => updateField('pastSurgery', e.target.value)} className={`${inputBase} ${inputNorm}`}>
+                    <SelectField value={form.pastSurgery} onChange={(e) => updateField('pastSurgery', e.target.value)}>
                       <option value="no">No History</option>
                       <option value="yes">Yes, Previously</option>
-                    </select>
+                    </SelectField>
                   </Field>
                   <Field label="Surgery Details" hint={errors.pastSurgeryDetails}>
-                    <input value={form.pastSurgeryDetails} onChange={(e) => updateField('pastSurgeryDetails', e.target.value)} className={`${inputBase} ${errors.pastSurgeryDetails?inputErr:inputNorm}`} disabled={form.pastSurgery !== 'yes'} placeholder="If yes, specify..." />
+                    <FI
+                      value={form.pastSurgeryDetails}
+                      err={!!errors.pastSurgeryDetails}
+                      onChange={(e) => updateField('pastSurgeryDetails', e.target.value)}
+                      disabled={form.pastSurgery !== 'yes'}
+                      placeholder="If yes, specify..."
+                    />
                   </Field>
                 </div>
               </div>
