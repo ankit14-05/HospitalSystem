@@ -26,11 +26,18 @@ const DEFAULT_ROLES = [
   { value:'receptionist',   label:'Receptionist',        desc:'Front desk & scheduling',             color:'#8b5cf6' },
   { value:'pharmacist',     label:'Pharmacist',          desc:'Dispensing & inventory',              color:'#10b981' },
   { value:'lab_technician', label:'Lab Technician',      desc:'Sample collection & processing',      color:'#f59e0b' },
+  { value:'lab_incharge',   label:'Lab Incharge',        desc:'Lab approvals, supervision & review', color:'#14b8a6' },
   { value:'ward_boy',       label:'Ward Boy / Attender', desc:'Ward assistance & patient transport', color:'#6366f1' },
   { value:'housekeeping',   label:'Housekeeping',        desc:'Sanitation & cleanliness',            color:'#ec4899' },
   { value:'security',       label:'Security',            desc:'Hospital premises security',          color:'#64748b' },
   { value:'admin_staff',    label:'Admin Staff',         desc:'Administrative & clerical work',      color:'#f97316' },
 ];
+
+const normalizeRoleValue = (roleName = '') => {
+  const normalized = roleName.toLowerCase().trim().replace(/\s+/g, '_');
+  if (normalized === 'lab_head' || normalized === 'labhead') return 'lab_incharge';
+  return normalized;
+};
 
 // Step definitions (3 main steps)
 const MAIN_STEPS = [
@@ -490,12 +497,23 @@ export default function StaffRegisterPage() {
       .then(r => {
         if (r.roles && r.roles.length > 0) {
           const fetchedRoles = r.roles.map((roleName, idx) => ({
-            value: roleName.toLowerCase().replace(/\s+/g, '_'),
+            value: normalizeRoleValue(roleName),
             label: roleName,
             desc: `${roleName} Role`,
             color: ROLE_COLORS[idx % ROLE_COLORS.length]
           }));
-          setRoles(fetchedRoles);
+          const mergedRoles = [...DEFAULT_ROLES];
+          fetchedRoles.forEach((role) => {
+            const existingIndex = mergedRoles.findIndex(
+              (item) => item.value === role.value || item.label.toLowerCase() === role.label.toLowerCase()
+            );
+            if (existingIndex >= 0) {
+              mergedRoles[existingIndex] = { ...mergedRoles[existingIndex], ...role };
+            } else {
+              mergedRoles.push(role);
+            }
+          });
+          setRoles(mergedRoles);
         }
       })
       .catch(() => {});

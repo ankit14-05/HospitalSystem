@@ -3,6 +3,7 @@ const router       = require('express').Router();
 const ctrl         = require('../controllers/appointment.controller');
 const v            = require('../validators/appointment.validator');
 const { authenticate: protect, authorize } = require('../middleware/auth.middleware');
+const LAB_APPOINTMENT_VIEW_ROLES = ['labtech', 'lab_technician', 'lab_incharge', 'labincharge', 'Lab Incharge'];
 
 // All routes require authentication
 router.use(protect);
@@ -14,13 +15,13 @@ router.patch ('/notifications/:id/read', ctrl.markOneRead);
 
 // ── Appointment stats ─────────────────────────────────────────────────────────
 router.get('/stats',
-  authorize('admin', 'superadmin', 'doctor', 'receptionist', 'opdmanager', 'opd_manager'),
+  authorize('admin', 'superadmin', 'doctor', 'receptionist', 'opdmanager', 'opd_manager', ...LAB_APPOINTMENT_VIEW_ROLES),
   ctrl.stats
 );
 
 // ── My appointments (patient / doctor view) ───────────────────────────────────
 router.get('/filters',
-  authorize('admin', 'superadmin', 'doctor', 'receptionist', 'nurse', 'opdmanager', 'opd_manager'),
+  authorize('admin', 'superadmin', 'doctor', 'receptionist', 'nurse', 'opdmanager', 'opd_manager', ...LAB_APPOINTMENT_VIEW_ROLES),
   ctrl.filters
 );
 
@@ -59,13 +60,13 @@ router.post('/',
 
 // ── List (admin / receptionist / doctor / opdmanager) ────────────────────────
 router.get('/',
-  authorize('admin', 'superadmin', 'receptionist', 'doctor', 'nurse', 'opdmanager', 'opd_manager'),
+  authorize('admin', 'superadmin', 'receptionist', 'doctor', 'nurse', 'opdmanager', 'opd_manager', ...LAB_APPOINTMENT_VIEW_ROLES),
   ctrl.list
 );
 
 // ── Get one — MUST be after all named routes to avoid swallowing them ─────────
 router.get('/:id',
-  authorize('admin', 'superadmin', 'receptionist', 'doctor', 'nurse', 'patient', 'opdmanager', 'opd_manager'),
+  authorize('admin', 'superadmin', 'receptionist', 'doctor', 'nurse', 'patient', 'opdmanager', 'opd_manager', ...LAB_APPOINTMENT_VIEW_ROLES),
   ctrl.getOne
 );
 

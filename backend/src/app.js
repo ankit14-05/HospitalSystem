@@ -24,6 +24,8 @@ const departmentRoutes   = require('./routes/department.routes');
 const doctorRoutes       = require('./routes/doctor.routes');
 const prescriptionRoutes = require('./routes/prescription.routes');
 const reportRoutes       = require('./routes/report.routes');
+const emrRoutes          = require('./routes/emr.routes');
+const labRoutes          = require('./routes/lab.routes');
 const billRoutes         = require('./routes/bill.routes');
 const schedulingRoutes   = require('./routes/scheduling.routes');   // ← NEW
 const dashboardRoutes    = require('./routes/dashboard.routes');
@@ -33,6 +35,7 @@ const rolesRoutes        = require('./routes/roles.routes');
 const app = express();
 const frontendDistPath = path.resolve(__dirname, '../../frontend/dist');
 const frontendIndexPath = path.join(frontendDistPath, 'index.html');
+const uploadsPath = path.resolve(__dirname, '../uploads');
 const hasBuiltFrontend = fs.existsSync(frontendIndexPath);
 // Rate limiting is disabled by default (no request cap) per project requirement.
 const isRateLimitEnabled = (value, defaultValue = false) => {
@@ -76,6 +79,7 @@ app.use(compression());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
+app.use('/uploads', express.static(uploadsPath));
 
 // ── HTTP logging ──────────────────────────────────────────────────────────────
 app.use(
@@ -118,6 +122,8 @@ app.use(`${prefix}/departments`,   departmentRoutes);
 app.use(`${prefix}/doctors`,       doctorRoutes);
 app.use(`${prefix}/prescriptions`, prescriptionRoutes);
 app.use(`${prefix}/reports`,       reportRoutes);
+app.use(`${prefix}/emr`,           emrRoutes);
+app.use(`${prefix}/lab`,           labRoutes);
 app.use(`${prefix}/bills`,         billRoutes);
 app.use(`${prefix}/scheduling`,    schedulingRoutes);               // ← NEW
 app.use(`${prefix}/dashboard`,     dashboardRoutes);

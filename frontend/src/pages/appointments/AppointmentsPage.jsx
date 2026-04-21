@@ -14,7 +14,6 @@ import { useAuth } from '../../context/AuthContext';
 import AppointmentDetailModal from './AppointmentDetailModal';
 import { APPOINTMENT_DESK_ROLES } from '../../config/roles';
 import { getPageData, getPayload } from '../../utils/apiPayload';
-import CompleteAppointmentModal from '../../components/appointments/CompleteAppointmentModal';
 
 // ── Status config ─────────────────────────────────────────────────────────────
 const STATUS_CONFIG = {
@@ -313,7 +312,6 @@ export default function AppointmentsPage() {
   const [cancelAppt,     setCancelAppt]   = useState(null);
   const [reschedAppt,    setReschedAppt]  = useState(null);
   const [detailAppt,     setDetailAppt]   = useState(null);
-  const [completeAppt,   setCompleteAppt] = useState(null);
   const [actionLoading,  setActionLoading]= useState(null);
 
   const isPatientView = user?.role === 'patient';
@@ -663,9 +661,9 @@ export default function AppointmentsPage() {
 
                             {/* Complete */}
                             {canComplete && ['Scheduled', 'Confirmed', 'Rescheduled'].includes(a.Status) && (
-                              <button onClick={() => setCompleteAppt(a)}
+                              <button onClick={() => navigate(`/dashboard/doctor/consult/${a.Id}`)}
                                 disabled={isActioning}
-                                className="p-1.5 rounded-lg hover:bg-purple-50 text-slate-400 hover:text-purple-600 transition-colors disabled:opacity-40" title="Mark Complete">
+                                className="p-1.5 rounded-lg hover:bg-purple-50 text-slate-400 hover:text-purple-600 transition-colors disabled:opacity-40" title="Consult Patient">
                                 <Check size={13} />
                               </button>
                             )}
@@ -743,17 +741,7 @@ export default function AppointmentsPage() {
           appt={detailAppt}
           onClose={() => setDetailAppt(null)}
           onAction={load}
-          onCompleteAppointment={canComplete ? setCompleteAppt : null}
-        />
-      )}
-      {completeAppt && (
-        <CompleteAppointmentModal
-          appointment={completeAppt}
-          onClose={() => setCompleteAppt(null)}
-          onCompleted={() => {
-            setCompleteAppt(null);
-            load();
-          }}
+          onCompleteAppointment={canComplete ? (appt) => navigate(`/dashboard/doctor/consult/${appt.Id}`) : null}
         />
       )}
     </div>

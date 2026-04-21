@@ -15,6 +15,8 @@ import {
   Building2,
   LayoutDashboard,
   Activity,
+  FlaskConical,
+  Microscope,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../services/api';
@@ -260,11 +262,13 @@ export default function AdminDashboard() {
             <p className="text-xs text-slate-500 mt-1">Jump directly into dedicated management portals.</p>
           </div>
         </div>
-        <div className="card-body grid grid-cols-1 sm:grid-cols-3 gap-4 bg-slate-50/50">
+        <div className="card-body grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4 bg-slate-50/50">
           {[
             { label: 'Directory', desc: 'Manage all internal users', path: '/admin/people', icon: Users },
             { label: 'Schedules', desc: 'Map out doctor availability', path: '/admin/schedule-manager', icon: ClipboardList },
             { label: 'Appointments', desc: 'Oversee daily bookings', path: '/admin/appointments', icon: CalendarRange },
+            { label: 'Lab Approvals', desc: 'Approve technician transfers', path: '/admin/lab-approvals', icon: FlaskConical },
+            { label: 'Lab Management', desc: 'Configure rooms, rules, and tests', path: '/admin/lab-management', icon: Microscope },
           ].map((action) => {
             const Icon = action.icon;
             return (

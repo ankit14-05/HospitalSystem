@@ -8,7 +8,7 @@ const { body } = require('express-validator');
 const { validationResult } = require('express-validator');
 const { success, created, paginated } = require('../utils/apiResponse');
 const AppError = require('../utils/AppError');
-const { DB_ALLOWED_ROLES, normalizeRole } = require('../constants/roles');
+const { DB_ALLOWED_ROLES, STAFF_PROFILE_ROLES, normalizeRole } = require('../constants/roles');
 
 const handleV = (req) => {
   const e = validationResult(req);
@@ -29,6 +29,8 @@ const createUserValidators = [
   body('lastName').trim().isLength({ min: 1, max: 100 }).withMessage('Last name required'),
   body('gender').optional().isIn(['Male','Female','Other','PreferNot']).withMessage('Invalid gender'),
 ];
+
+const STAFF_ROLE_SET = new Set(STAFF_PROFILE_ROLES.map(normalizeRole));
 
 // ── GET /users — list (admin+)
 router.get('/',
@@ -142,10 +144,70 @@ router.post('/',
           desig:  { type: sql.NVarChar(150),     value: designation || null },
           empid:  { type: sql.NVarChar(60),      value: employeeId || null },
           cb:     { type: sql.BigInt,            value: req.user.userId },
-        }
+         }
       );
 
-      created(res, result.recordset[0], 'User created successfully.');
+      const createdUser = result.recordset[0];
+      const normalizedRole = normalizeRole(role);
+
+      if (STAFF_ROLE_SET.has(normalizedRole)) {
+        await query(
+          `IF NOT EXISTS (SELECT 1 FROM dbo.StaffProfiles WHERE UserId = @uid)
+           BEGIN
+             INSERT INTO dbo.StaffProfiles (
+               UserId, HospitalId, DepartmentId, EmployeeId, Designation, Role,
+               ApprovalStatus, ApprovedBy, ApprovedAt, CreatedAt, UpdatedAt, CreatedBy
+             )
+             VALUES (
+               @uid, @hid, @did, @empid, @desig, @role,
+               'approved', @approvedBy, SYSUTCDATETIME(), SYSUTCDATETIME(), SYSUTCDATETIME(), @approvedBy
+             )
+           END`,
+          {
+            uid:        { type: sql.BigInt,        value: createdUser.Id },
+            hid:        { type: sql.BigInt,        value: parseInt(hospitalId) },
+            did:        { type: sql.BigInt,        value: departmentId || null },
+            empid:      { type: sql.NVarChar(60),  value: employeeId || null },
+            desig:      { type: sql.NVarChar(150), value: designation || null },
+            role:       { type: sql.NVarChar(50),  value: normalizedRole },
+            approvedBy: { type: sql.BigInt,        value: req.user.userId },
+          }
+        );
+
+        if (normalizedRole === 'lab_incharge') {
+          await query(
+            `IF OBJECT_ID('dbo.LabInchargeProfiles', 'U') IS NOT NULL
+                 AND NOT EXISTS (SELECT 1 FROM dbo.LabInchargeProfiles WHERE UserId = @uid)
+             BEGIN
+               INSERT INTO dbo.LabInchargeProfiles
+                 (UserId, SignaturePreference, CreatedAt, UpdatedAt)
+               VALUES
+                 (@uid, 'NewPage', SYSUTCDATETIME(), SYSUTCDATETIME())
+             END`,
+            {
+              uid: { type: sql.BigInt, value: createdUser.Id },
+            }
+          );
+        }
+
+        if (normalizedRole === 'labtech') {
+          await query(
+            `IF OBJECT_ID('dbo.LabTechnicianProfiles', 'U') IS NOT NULL
+                 AND NOT EXISTS (SELECT 1 FROM dbo.LabTechnicianProfiles WHERE UserId = @uid)
+             BEGIN
+               INSERT INTO dbo.LabTechnicianProfiles
+                 (UserId, RoomId, CreatedAt, UpdatedAt)
+               VALUES
+                 (@uid, NULL, SYSUTCDATETIME(), SYSUTCDATETIME())
+             END`,
+            {
+              uid: { type: sql.BigInt, value: createdUser.Id },
+            }
+          );
+        }
+      }
+
+      created(res, createdUser, 'User created successfully.');
     } catch (err) { next(err); }
   }
 );

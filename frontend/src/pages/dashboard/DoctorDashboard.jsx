@@ -17,10 +17,11 @@ import {
   TEAL, BLUE, Sk, StatCard, StatusBadge, Empty,
   SectionHeader, Card, Modal, fmtDate, fmtTime, fmtTimeRange, initials, InfoBadge
 } from '../../components/ui';
-import CompleteAppointmentModal from '../../components/appointments/CompleteAppointmentModal';
 import PrescriptionComposerModal from '../../components/prescriptions/PrescriptionComposerModal';
 import DashboardTabs from '../../components/dashboard/DashboardTabs';
+import DoctorEmrLabWorkspace from '../../components/emr/DoctorEmrLabWorkspace';
 import { getList } from '../../utils/apiPayload';
+import { useNavigate } from 'react-router-dom';
 
 // ─── Token status config ──────────────────────────────────────────────────────
 const Q_STATUS = {
@@ -958,7 +959,7 @@ const QueueTab = ({ queue, loading, onRefresh, onCallIn, onMarkDone, onRx, searc
                             <button onClick={() => onComplete && onComplete(pt)}
                               className="flex items-center gap-1 px-3 py-1.5 rounded-xl text-white text-xs font-bold hover:opacity-90 transition-opacity"
                               style={{ background:'#059669' }}>
-                              <CheckCircle size={11} /> Complete
+                              <CheckCircle size={11} /> Consult
                             </button>
                           </>
                         )}
@@ -1184,6 +1185,7 @@ const ScheduleTab = ({ profile, schedule, todaySlots, weeklyStats, loading, onEd
 // ═════════════════════════════════════════════════════════════════════════════
 export default function DoctorDashboard() {
   const { user } = useAuth();
+  const navigate = useNavigate();
 
   const [profile,       setProfile]       = useState(null);
   const [queue,         setQueue]         = useState([]);
@@ -1366,6 +1368,7 @@ export default function DoctorDashboard() {
     { key:'queue',     label:"Today's Queue",  icon:Users,    badge:waiting.length  },
     { key:'requests',  label:'Upcoming',       icon:Calendar, badge:activeRequests.length },
     { key:'rx',        label:'Prescriptions',  icon:Pill                            },
+    { key:'emr',       label:'Lab Reports',    icon:FlaskConical                    },
     { key:'schedule',  label:'Schedule',       icon:Clock                           },
     { key:'analytics', label:'Analytics',      icon:BarChart2                       },
     { key:'profile',   label:'My Profile',     icon:Edit2                           },
@@ -1376,7 +1379,7 @@ export default function DoctorDashboard() {
     queue: (
       <QueueTab queue={queue} loading={loading.queue} onRefresh={fetchQueue}
         onViewPatient={(patientId, name) => setShowPatient({ patientId, patientName: name })}
-        onComplete={pt => setShowComplete(pt)}
+        onComplete={pt => navigate(`/dashboard/doctor/consult/${pt.Id||pt.id}`)}
         onCallIn={callPatient} onMarkDone={markDone} onRx={setShowRx}
         search={search} setSearch={setSearch} />
     ),
@@ -1394,6 +1397,14 @@ export default function DoctorDashboard() {
           }
           toast.error('Open a patient from the queue before writing a prescription');
         }} />
+    ),
+    emr: (
+      <DoctorEmrLabWorkspace
+        queue={queue}
+        requests={activeRequests}
+        doctorName={doctorName}
+        onViewPatient={(patientId, patientName) => setShowPatient({ patientId, patientName })}
+      />
     ),
     schedule: (
       <ScheduleTab profile={p} schedule={schedule} todaySlots={todaySlots} weeklyStats={weeklyStats}
@@ -1494,10 +1505,10 @@ export default function DoctorDashboard() {
                 style={{ color:TEAL, borderColor:`${TEAL}30`, background:`${TEAL}0c` }}>
                 <Pill size={13} /> Write Rx
               </button>
-              <button onClick={() => setShowComplete(current)}
+              <button onClick={() => navigate(`/dashboard/doctor/consult/${current.Id||current.id}`)}
                 className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-white text-sm font-semibold"
                 style={{ background:'#059669' }}>
-                <CheckCircle size={13} /> Mark Done
+                <CheckCircle size={13} /> Consult
               </button>
             </div>
           </div>
@@ -1512,19 +1523,6 @@ export default function DoctorDashboard() {
       </div>
 
       {/* ── Modals ── */}
-      {showComplete && (
-        <CompleteAppointmentModal
-          appointment={showComplete}
-          onClose={() => setShowComplete(null)}
-          onCompleted={() => {
-            setShowComplete(null);
-            fetchQueue();
-            fetchRequests();
-            fetchPrescriptions();
-            fetchSchedule();
-          }}
-        />
-      )}
       {showPatient && (
         <PatientHistoryModal
           patientId={showPatient.patientId}

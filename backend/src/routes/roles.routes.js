@@ -18,6 +18,7 @@ router.get('/', async (req, res) => {
           'Receptionist',
           'Pharmacist',
           'Lab Technician',
+          'Lab Incharge',
           'Ward Boy',
           'Housekeeping',
           'Security',

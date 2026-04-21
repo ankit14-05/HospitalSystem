@@ -7,6 +7,7 @@ import {
   Bed, TrendingUp, CheckCircle,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { getDashboardPath } from '../../config/roles';
 import useHospitalBranding from '../../hooks/useHospitalBranding';
 
 // ── Colour helpers ────────────────────────────────────────────────────────────
@@ -52,12 +53,6 @@ export default function LoginPage() {
   const deep    = shiftColor(primary, -65);
   const light   = shiftColor(primary, -20);
 
-  const ROLE_ROUTES = {
-    superadmin:'admin', admin:'admin', doctor:'doctor',
-    nurse:'staff', receptionist:'staff', pharmacist:'staff',
-    labtech:'staff', patient:'patient', auditor:'admin',
-  };
-
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!form.username || !form.password) { setError('Please enter your username and password.'); return; }
@@ -67,7 +62,7 @@ export default function LoginPage() {
       if (user.role === 'patient') {
         navigate('/patient/profiles', { replace: true });
       } else {
-        navigate(`/dashboard/${ROLE_ROUTES[user.role] || 'admin'}`, { replace: true });
+        navigate(getDashboardPath(user.role), { replace: true });
       }
     } catch (err) {
       setError(err.message || 'Invalid credentials. Please try again.');

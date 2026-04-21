@@ -1244,6 +1244,7 @@ const listAppointments = async ({
         pp.Id   AS PatientId,
         pp.UHID, pp.FirstName AS PatientFirstName, pp.LastName AS PatientLastName, pp.Phone AS PatientPhone,
         pp.UserId AS PatientUserId,
+        CONCAT(ud.FirstName, ' ', ud.LastName) AS DoctorName,
         ud.FirstName AS DoctorFirstName, ud.LastName AS DoctorLastName,
         ud.Id AS DoctorUserId,
         dp.Id   AS DoctorProfileId,

@@ -8,6 +8,11 @@ const emailService = require('../services/appointmentEmailservice');
 const AppError = require('../utils/AppError');
 const { APPOINTMENT_DESK_ROLES } = require('../constants/roles');
 const { requireActivePatientProfile } = require('../services/patientAccess.service');
+const {
+  upsertEncounterForAppointmentCompletion,
+  upsertEncounterPrimaryDiagnosis,
+  upsertEncounterNote,
+} = require('../services/emr.service');
 
 // ── Import apiResponse safely ─────────────────────────────────────────────────
 const apiResponse = require('../utils/apiResponse');
@@ -862,6 +867,51 @@ exports.completeAppointment = async (req, res) => {
               (@HospitalId, @AppointmentId, @PatientId, @DoctorId, @PrimaryDiagnosis, @ConsultationNotes, @FollowUpDate, @FollowUpNotes, @VitalsJson, SYSUTCDATETIME(), SYSUTCDATETIME(), SYSUTCDATETIME(), @UpdatedBy, @UpdatedBy)
           END
         `);
+    }
+
+    try {
+      const encounterId = await upsertEncounterForAppointmentCompletion({
+        pool,
+        hospitalId: appt.HospitalId,
+        appointmentId: appt.Id,
+        patientId: appt.PatientId,
+        doctorId: appt.DoctorId,
+        appointmentDate: appt.AppointmentDate,
+        reason: appointment.Reason || null,
+        diagnosis,
+        followUpNotes,
+        actorUserId: req.user.id,
+      });
+
+      if (encounterId) {
+        await upsertEncounterPrimaryDiagnosis({
+          pool,
+          encounterId,
+          patientId: appt.PatientId,
+          diagnosis,
+          actorUserId: req.user.id,
+        });
+
+        await upsertEncounterNote({
+          pool,
+          encounterId,
+          noteType: 'Clinical',
+          noteText: consultationNotes,
+          actorUserId: req.user.id,
+          isPatientVisible: false,
+        });
+
+        await upsertEncounterNote({
+          pool,
+          encounterId,
+          noteType: 'FollowUp',
+          noteText: followUpNotes,
+          actorUserId: req.user.id,
+          isPatientVisible: true,
+        });
+      }
+    } catch (_) {
+      // Keep appointment completion successful even if EMR sync hits a secondary issue.
     }
 
     await pool.request()

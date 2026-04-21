@@ -23,7 +23,12 @@ const resolvePatientName = (patient) =>
   'Patient';
 
 const resolveAppointmentId = (patient, appointmentId) =>
-  appointmentId || patient?.AppointmentId || patient?.appointmentId || patient?.Id || patient?.id || null;
+  appointmentId ||
+  patient?.LatestCompletedAppointmentId ||
+  patient?.latestCompletedAppointmentId ||
+  patient?.AppointmentId ||
+  patient?.appointmentId ||
+  null;
 
 const resolveLabOrderId = (patient, labOrderId) =>
   labOrderId || patient?.LatestLabOrderId || patient?.latestLabOrderId || null;
@@ -50,6 +55,7 @@ export default function LabOrderComposerModal({
   const patientName = resolvePatientName(patient);
   const linkedAppointmentId = resolveAppointmentId(patient, appointmentId);
   const existingLabOrderId = resolveLabOrderId(patient, labOrderId);
+  const canSubmitLabOrder = Boolean(patientId && linkedAppointmentId);
 
   const [search, setSearch] = useState('');
   const [catalog, setCatalog] = useState([]);
@@ -142,6 +148,11 @@ export default function LabOrderComposerModal({
       return;
     }
 
+    if (!linkedAppointmentId) {
+      toast.error('Complete the appointment / OPD session first before ordering lab tests');
+      return;
+    }
+
     if (!selectedTests.length) {
       toast.error('Select at least one test before saving');
       return;
@@ -186,6 +197,11 @@ export default function LabOrderComposerModal({
 
         <div className="grid flex-1 gap-0 overflow-hidden lg:grid-cols-[1.15fr_0.85fr]">
           <div className="space-y-5 overflow-y-auto border-r border-slate-100 px-7 py-6">
+            {!canSubmitLabOrder ? (
+              <div className="rounded-[28px] border border-amber-200 bg-amber-50 px-5 py-4 text-sm font-medium text-amber-800">
+                Complete the appointment / OPD session first to unlock lab ordering for this patient.
+              </div>
+            ) : null}
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
                 <label className="mb-1.5 block text-xs font-bold uppercase tracking-[0.22em] text-slate-500">
@@ -196,7 +212,7 @@ export default function LabOrderComposerModal({
                   onChange={(event) => setPriority(event.target.value)}
                   className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-cyan-300 focus:ring-2 focus:ring-cyan-200"
                 >
-                  {['Routine', 'Urgent', 'Stat'].map((option) => (
+                  {['Routine', 'Urgent', 'STAT'].map((option) => (
                     <option key={option} value={option}>{option}</option>
                   ))}
                 </select>
@@ -339,7 +355,7 @@ export default function LabOrderComposerModal({
           <button
             type="button"
             onClick={submit}
-            disabled={saving || loadingExisting}
+            disabled={saving || loadingExisting || !canSubmitLabOrder}
             className="inline-flex items-center gap-2 rounded-2xl bg-cyan-700 px-5 py-3 text-sm font-bold text-white transition-colors hover:bg-cyan-800 disabled:opacity-60"
           >
             {saving ? <Loader size={14} className="animate-spin" /> : <Check size={14} />}

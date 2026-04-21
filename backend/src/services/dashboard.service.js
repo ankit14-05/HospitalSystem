@@ -884,6 +884,8 @@ const getPeopleDirectory = async ({
         CASE LOWER(COALESCE(sp.Role, u.Role, 'staff'))
           WHEN 'labtech' THEN 'Lab Technician'
           WHEN 'lab_technician' THEN 'Lab Technician'
+          WHEN 'lab_incharge' THEN 'Lab Incharge'
+          WHEN 'labincharge' THEN 'Lab Incharge'
           WHEN 'ward_boy' THEN 'Ward Boy'
           WHEN 'admin_staff' THEN 'Admin Staff'
           WHEN 'opdmanager' THEN 'OPD Manager'

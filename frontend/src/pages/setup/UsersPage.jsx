@@ -18,6 +18,7 @@ const ROLES = [
   { value: 'receptionist',  label: 'Receptionist' },
   { value: 'pharmacist',    label: 'Pharmacist' },
   { value: 'labtech',       label: 'Lab Technician' },
+  { value: 'lab_incharge',  label: 'Lab Incharge' },
   { value: 'patient',       label: 'Patient' },
   { value: 'auditor',       label: 'Auditor' },
 ];
@@ -25,7 +26,7 @@ const ROLES = [
 const ROLE_COLORS = {
   superadmin: 'badge-purple', admin: 'badge-purple', doctor: 'badge-blue',
   nurse: 'badge-green', receptionist: 'badge-yellow', pharmacist: 'badge-blue',
-  labtech: 'badge-blue', patient: 'badge-gray', auditor: 'badge-gray',
+  labtech: 'badge-blue', lab_incharge: 'badge-blue', patient: 'badge-gray', auditor: 'badge-gray',
 };
 
 const schema = yup.object({
