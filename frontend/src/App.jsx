@@ -24,6 +24,7 @@ import NurseDashboard   from './pages/dashboard/NurseDashboard';
 import ReceptionistDashboard from './pages/dashboard/ReceptionistDashboard';
 import PharmacistDashboard   from './pages/dashboard/PharmacistDashboard';
 import LabTechnicianDashboard from './pages/dashboard/LabTechnicianDashboard';
+import LabInchargeDashboard from './pages/dashboard/LabInchargeDashboard';
 import WardBoyDashboard       from './pages/dashboard/WardBoyDashboard';
 import HousekeepingDashboard  from './pages/dashboard/HousekeepingDashboard';
 import SecurityDashboard      from './pages/dashboard/SecurityDashboard';
@@ -34,6 +35,8 @@ import OPDManagerDashboard from './pages/dashboard/OPDManagerDashboard';
 // Admin panels
 import DoctorApprovalPanel from './pages/admin/DoctorApprovalPanel';
 import StaffApprovalPanel  from './pages/admin/StaffApprovalPanel';
+import LabApprovalPanel    from './pages/admin/LabApprovalPanel';
+import LabManagementPanel  from './pages/admin/LabManagementPanel';
 import PeopleDirectoryPage from './pages/admin/PeopleDirectoryPage';
 import AdminDepartments    from './pages/dashboard/AdminDepartments';
 import AdminReports        from './pages/dashboard/AdminReports';
@@ -58,6 +61,11 @@ import BookAppointmentPage  from './pages/appointments/BookAppointmentPage';
 import ProfilePage from './pages/profile/ProfilePage';
 import PatientProfilesPage from './pages/profile/PatientProfilesPage';
 import AddFamilyMemberPage from './pages/profile/AddFamilyMemberPage';
+
+// Lab Module
+import LabBookingPage from './pages/doctor/LabBookingPage';
+import EMRPage from './pages/patient/EMRPage';
+
 import { APPOINTMENT_DESK_ROLES, STAFF_ROLES } from './config/roles';
 
 import SecuritySettings from './pages/dashboard/SecuritySettings';
@@ -72,12 +80,18 @@ const ROLE_ROUTES = {
   receptionist: 'receptionist',
   pharmacist:   'pharmacist',
   labtech:      'labtech',
+  lab_technician: 'labtech',
+  'Lab Technician': 'labtech',
+  'Lab Assistant': 'labtech',
   ward_boy:     'wardboy',
   housekeeping: 'housekeeping',
   security:     'security',
   admin_staff:  'adminstaff',
   opdmanager:   'opd',
   opd_manager:  'opd',
+  lab_incharge: 'labincharge',
+  labincharge:  'labincharge',
+  'Lab Incharge': 'labincharge',
   patient:      'patient',
 };
 
@@ -234,8 +248,24 @@ export default function App() {
             <Route
               path="dashboard/labtech"
               element={
-                <RequireRole roles={['labtech']}>
+                <RequireRole roles={['labtech', 'lab_technician', 'Lab Assistant', 'Lab Technician']}>
                   <LabTechnicianDashboard />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="dashboard/labincharge"
+              element={
+                <RequireRole roles={['lab_incharge', 'labincharge', 'Lab Incharge']}>
+                  <LabInchargeDashboard />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="lab/approvals"
+              element={
+                <RequireRole roles={['lab_incharge', 'labincharge', 'Lab Incharge']}>
+                  <LabInchargeDashboard />
                 </RequireRole>
               }
             />
@@ -280,6 +310,24 @@ export default function App() {
               }
             />
 
+            {/* ── Lab Module ── */}
+            <Route
+              path="doctor/lab-booking"
+              element={
+                <RequireRole roles={['doctor']}>
+                  <LabBookingPage />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="patient/emr/:patientId?"
+              element={
+                <RequireRole roles={['patient', 'doctor', 'admin', 'superadmin']}>
+                  <EMRPage />
+                </RequireRole>
+              }
+            />
+
 
             <Route
               path="dashboard/opd"
@@ -292,9 +340,9 @@ export default function App() {
 
             {/* ── Admin panels ── */}
             <Route
-              path="admin/people"
+              path="admin/people-directory"
               element={
-                <RequireRole roles={['superadmin', 'admin', 'auditor']}>
+                <RequireRole roles={['superadmin', 'admin', 'auditor', 'doctor']}>
                   <PeopleDirectoryPage />
                 </RequireRole>
               }
@@ -312,6 +360,22 @@ export default function App() {
               element={
                 <RequireRole roles={['superadmin', 'admin']}>
                   <StaffApprovalPanel />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="admin/lab-approvals"
+              element={
+                <RequireRole roles={['superadmin', 'admin']}>
+                  <LabApprovalPanel />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="admin/lab-management"
+              element={
+                <RequireRole roles={['superadmin', 'admin']}>
+                  <LabManagementPanel />
                 </RequireRole>
               }
             />

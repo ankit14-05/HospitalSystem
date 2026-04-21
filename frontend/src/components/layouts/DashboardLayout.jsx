@@ -18,7 +18,7 @@ import {
   Calendar, Pill, FileText, Receipt, Heart, BarChart2,
   Settings, LogOut, Bell, ChevronDown, PanelLeftClose,
   PanelLeftOpen, Clock, Bed, ClipboardList, Search,
-  UserCircle, Edit2, Shield, X,
+  UserCircle, Edit2, Shield, X, FlaskConical, Microscope
 } from 'lucide-react';
 import { useAuth } from "../../context/AuthContext";
 import useHospitalBranding from '../../hooks/useHospitalBranding';
@@ -52,6 +52,8 @@ const NAV = {
     { path:'/dashboard/admin',        label:'Dashboard',        icon: LayoutDashboard },
     { path:'/admin/doctor-approvals', label:'Doctor Approvals', icon: Stethoscope     },
     { path:'/admin/staff-approvals',  label:'Staff Approvals',  icon: Briefcase       },
+    { path:'/admin/lab-approvals',    label:'Lab Approvals',    icon: FlaskConical    },
+    { path:'/admin/lab-management',   label:'Lab Management',   icon: Microscope      },
     { path:'/admin/people',           label:'Directory',        icon: Users           },
     { path:'/admin/appointments',     label:'Appointments',     icon: Calendar        },
     { path:'/admin/schedule-manager', label:'Doctor Schedules', icon: Clock           },
@@ -63,6 +65,8 @@ const NAV = {
     { path:'/dashboard/admin',        label:'Dashboard',        icon: LayoutDashboard },
     { path:'/admin/doctor-approvals', label:'Doctor Approvals', icon: Stethoscope     },
     { path:'/admin/staff-approvals',  label:'Staff Approvals',  icon: Briefcase       },
+    { path:'/admin/lab-approvals',    label:'Lab Approvals',    icon: FlaskConical    },
+    { path:'/admin/lab-management',   label:'Lab Management',   icon: Microscope      },
     { path:'/admin/people',           label:'Directory',        icon: Users           },
     { path:'/admin/appointments',     label:'Appointments',     icon: Calendar        },
     { path:'/admin/schedule-manager', label:'Doctor Schedules', icon: Clock           },
@@ -73,6 +77,7 @@ const NAV = {
   doctor: [
     { path:'/dashboard/doctor',       label:'Dashboard',       icon: LayoutDashboard },
     { path:'/appointments',           label:'Appointments',    icon: Calendar        },
+    { path:'/doctor/lab-booking',     label:'Lab Booking',     icon: FlaskConical    },
     { path:'/doctor/schedule',        label:'Schedule',        icon: Clock           },
     { path:'/doctor/profile',         label:'My Profile',      icon: UserCircle      },
   ],
@@ -90,6 +95,7 @@ const NAV = {
   ],
   patient: [
     { path:'/dashboard/patient',      label:'Dashboard',          icon: LayoutDashboard },
+    { path:'/patient/emr',            label:'My EMR',             icon: FileText        },
     { path:'/appointments/book',      label:'Book Appointment',   icon: Calendar        },
     { path:'/appointments',           label:'My Appointments',    icon: ClipboardList   },
     { path:'/patient/profiles',       label:'Patient Profiles',   icon: Users           },
@@ -100,6 +106,23 @@ const NAV = {
   pharmacist:   staffNav('/dashboard/pharmacist'),
   labtech:      staffNav('/dashboard/labtech'),
   lab_technician: staffNav('/dashboard/labtech'),
+  'Lab Assistant': staffNav('/dashboard/labtech'),
+  'Lab Technician': staffNav('/dashboard/labtech'),
+  lab_incharge: [
+    { path:'/dashboard/labincharge',  label:'Dashboard',     icon: LayoutDashboard },
+    { path:'/lab/approvals',          label:'Lab Approvals', icon: FlaskConical    },
+    { path:'/staff/profile',          label:'My Profile',    icon: UserCircle      },
+  ],
+  labincharge: [
+    { path:'/dashboard/labincharge',  label:'Dashboard',     icon: LayoutDashboard },
+    { path:'/lab/approvals',          label:'Lab Approvals', icon: FlaskConical    },
+    { path:'/staff/profile',          label:'My Profile',    icon: UserCircle      },
+  ],
+  'Lab Incharge': [
+    { path:'/dashboard/labincharge',  label:'Dashboard',     icon: LayoutDashboard },
+    { path:'/lab/approvals',          label:'Lab Approvals', icon: FlaskConical    },
+    { path:'/staff/profile',          label:'My Profile',    icon: UserCircle      },
+  ],
   ward_boy:     staffNav('/dashboard/wardboy'),
   housekeeping: staffNav('/dashboard/housekeeping'),
   security:     staffNav('/dashboard/security'),

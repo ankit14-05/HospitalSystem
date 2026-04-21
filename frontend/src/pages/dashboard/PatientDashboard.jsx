@@ -1114,7 +1114,14 @@ export default function PatientDashboard() {
       <PrescriptionsTab prescriptions={prescriptions} loading={loading.prescriptions}
         onRefresh={refreshPrescriptions} />
     ),
-    emr: <Card className="p-8"><Empty icon={FileText} text="Electronic Medical Records coming soon" /></Card>,
+    emr: (() => {
+      const patId = p?.Id || p?.id || profile?.Id;
+      if (patId) {
+        navigate(`/patient/emr/${patId}`);
+        return <Card className="p-8"><Empty icon={FileText} text="Redirecting to your EMR…" /></Card>;
+      }
+      return <Card className="p-8"><Empty icon={FileText} text="Loading your EMR…" /></Card>;
+    })(),
     reports: (
       <ReportsTab reports={reports} loading={loading.reports}
         onRefresh={refreshReports} />

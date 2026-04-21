@@ -2,10 +2,11 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Users, Search, Filter, Mail, Phone, Building2, UserCircle2, Loader2, ArrowRight } from 'lucide-react';
 import toast from 'react-hot-toast';
-import api from '../../services/api';
+import { useNavigate } from 'react-router-dom';
 import _debounce from 'lodash/debounce';
 
 export default function PeopleDirectoryPage() {
+  const navigate = useNavigate();
   const [data, setData] = useState([]);
   const [totals, setTotals] = useState({ patients: 0, doctors: 0, staff: 0 });
   const [loading, setLoading] = useState(true);
@@ -96,7 +97,8 @@ export default function PeopleDirectoryPage() {
                 <th className="px-6 py-4 font-bold">User</th>
                 <th className="px-6 py-4 font-bold">Contact</th>
                 <th className="px-6 py-4 font-bold">Role / Dept</th>
-                <th className="px-6 py-4 font-bold text-right">Status</th>
+                <th className="px-6 py-4 font-bold">Status</th>
+                <th className="px-6 py-4 font-bold text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
@@ -132,8 +134,13 @@ export default function PeopleDirectoryPage() {
                         >
                           {(person.FirstName?.[0] || '?')}{(person.LastName?.[0] || '')}
                         </div>
-                        <div>
-                          <p className="text-sm font-bold text-slate-800">{person.FullName}</p>
+                        <div className="flex flex-col">
+                          <p 
+                            className={`text-sm font-bold text-slate-800 transition-colors ${person.Category === 'patient' ? 'cursor-pointer hover:text-indigo-600' : ''}`}
+                            onClick={() => person.Category === 'patient' && navigate(`/patient/emr/${person.ProfileId}`)}
+                          >
+                            {person.FullName}
+                          </p>
                           <p className="text-xs text-slate-400 font-mono mt-0.5">{person.Identifier}</p>
                         </div>
                       </div>
@@ -156,7 +163,7 @@ export default function PeopleDirectoryPage() {
                         <p className="text-xs text-slate-500 mt-0.5">{person.DepartmentName}</p>
                       )}
                     </td>
-                    <td className="px-6 py-4 text-right">
+                    <td className="px-6 py-4">
                       <div className="flex flex-col items-end gap-1">
                         <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider
                           ${person.IsActive ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
@@ -169,6 +176,16 @@ export default function PeopleDirectoryPage() {
                           </span>
                         )}
                       </div>
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      {person.Category === 'patient' && (
+                        <button
+                          onClick={() => navigate(`/patient/emr/${person.ProfileId}`)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-lg text-xs font-bold hover:bg-indigo-100 transition-colors border border-indigo-100"
+                        >
+                          View EMR <ArrowRight size={14} />
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))

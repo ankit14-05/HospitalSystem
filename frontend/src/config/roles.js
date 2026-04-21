@@ -15,6 +15,8 @@ export const ROLE_LABELS = {
   admin_staff: 'Admin Staff',
   opdmanager: 'OPD Manager',
   opd_manager: 'OPD Manager',
+  lab_incharge: 'Lab Incharge',
+  labincharge: 'Lab Incharge',
 };
 
 export const STAFF_ROLES = [
@@ -23,6 +25,7 @@ export const STAFF_ROLES = [
   'pharmacist',
   'labtech',
   'lab_technician',
+  'lab_incharge',
   'ward_boy',
   'housekeeping',
   'security',

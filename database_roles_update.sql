@@ -1,4 +1,4 @@
-USE [Hospital_Database]
+USE [HospitalDB]
 GO
 
 IF OBJECT_ID(N'[dbo].[Roles]', N'U') IS NULL
