@@ -358,7 +358,7 @@ export default function LabManagementPanel() {
                   <label style={{ display: 'block', marginBottom: 6, fontSize: 13, color: '#3a4a3a', fontWeight: 500 }}>Target Room</label>
                   <select style={{ width: '100%' }} required value={ruleForm.roomId} onChange={e => setRuleForm({ ...ruleForm, roomId: e.target.value })}>
                     <option value="">Select Room...</option>
-                    {rooms.filter(r => r.Status !== 'Alloted').map(r => (
+                    {rooms.map(r => (
                       <option key={r.Id} value={r.Id}>{r.RoomNo}</option>
                     ))}
                   </select>

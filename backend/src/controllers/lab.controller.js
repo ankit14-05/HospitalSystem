@@ -203,6 +203,15 @@ exports.getPatientLabResults = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// GET /api/v1/lab/orders/:orderId/attachments
+exports.getOrderAttachments = async (req, res, next) => {
+  try {
+    const orderId = Number(req.params.orderId);
+    const attachments = await labService.getLabAttachments(orderId);
+    res.json({ success: true, data: attachments });
+  } catch (err) { next(err); }
+};
+
 // POST /api/v1/lab/orders/:orderId/attachments
 exports.uploadAttachments = async (req, res, next) => {
   try {
@@ -417,6 +426,14 @@ exports.deleteLabTest = async (req, res, next) => {
 exports.getPendingApprovals = async (req, res, next) => {
   try {
     const orders = await labService.getPendingApprovalOrders(req.user.hospitalId);
+    res.json({ success: true, orders });
+  } catch (err) { next(err); }
+};
+
+// Lab Incharge: GET /api/v1/lab/completed-orders
+exports.getCompletedOrders = async (req, res, next) => {
+  try {
+    const orders = await labService.getCompletedApprovalOrders(req.user.hospitalId);
     res.json({ success: true, orders });
   } catch (err) { next(err); }
 };

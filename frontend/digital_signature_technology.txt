@@ -1,0 +1,36 @@
+MediCore HMS - Digital Signature Technology Overview
+===================================================
+
+This document explains the programmatic techniques and technologies used by the backend of the MediCore Hospital Management System to apply digital signatures to Laboratory test results, regardless of the uploaded format.
+
+## Primary Library: `pdf-lib`
+
+The core technology powering this feature is an open-source library named **`pdf-lib`**. 
+Unlike many other PDF libraries that just generate new documents from HTML, `pdf-lib` is capable of **opening, reading, and directly modifying existing PDF buffers** down to their raw bytes. 
+
+When a Lab Incharge clicks "Approve Result", here is exactly what our Node.js `/backend` server does automatically behind the scenes:
+
+### Step 1: Format Parsing & Standardization
+When the lab technician uploads a report, it can be a `.pdf`, `.jpg`, or `.png`.
+
+- **If the file is a PDF:** The backend dynamically accesses the file bytes on disk using Node's `fs` (File System) module and loads the document layout directly into `pdf-lib` using `PDFDocument.load()`.
+- **If the file is an Image (JPEG/PNG):** Because signatures can usually only be certified on PDFs, our system generates a brand new, empty, A4-sized PDF inside the server memory. It then evaluates the uploaded image, scales it uniformly using an aspect-ratio preserving algorithm (`scaleToFit`), and seamlessly embeds the image onto the center of the blank PDF page.
+
+### Step 2: Signature Geometry & Positioning
+The backend queries the `HospitalDB` SQL database to check the Lab Incharge's "Signature Preference" (Corner Stamp vs. New Dedicated Page).
+
+- **For New Pages:** A fresh page is appended to the document object. Custom `StandardFonts.Helvetica` text is rendered using exact X and Y geometric coordinates indicating the hospital's name, Patient info, and Approval timestamp.
+- **For Corner Stamps:** The system scans the document array, pulls the *last existing page*, and draws a structured colored rectangular perimeter in the bottom-right corner spanning roughly 300x70 points. It uses `rgb` geometric coloring (`0.059, 0.580, 0.533` - which maps to our MediCore Teal branding).
+
+### Step 3: Signature Image Embedding
+Finally, to apply the visual handwritten signature:
+1. The backend locates the image asset that the doctor previously uploaded to `/uploads/lab/signatures`. 
+2. It detects the mime-type dynamically.
+3. It converts the image into an embedded layout object (`pdfDoc.embedPng()` or `pdfDoc.embedJpg()`).
+4. It dynamically shrinks the image down to `12%` scale (for stamps) or `40%` scale (for dedicated pages) so it perfectly fits inside the bounds of the signature box alongside the textual verification timestamp.
+
+### Step 4: Overwriting & Saving
+Once the final internal layout is compiled in server RAM, the `pdfDoc.save()` function is triggered, compiling the visual layers into a raw Uint8Array byte sequence. 
+The system writes this modified stream directly over the original file (or outputs a newly named PDF file if the original was an image), and finally signs off the `LabOrders` status table as `'Completed'` synchronously using an MSSQL Transaction.
+
+The result is a securely layered PDF that retains all original data but bears an undeniable, hard-coded timestamp and geometric picture-signature from the authorized physician.

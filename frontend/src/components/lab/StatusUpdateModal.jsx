@@ -1,4 +1,4 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { Icon } from "../emr/shared";
 import api from "../../services/api";
 
@@ -24,12 +24,26 @@ export default function StatusUpdateModal({ isOpen, onClose, currentStatus, next
 
   const handleFileChange = (e) => {
     const files = Array.from(e.target.files);
-    setSelectedFiles(prev => [...prev, ...files]);
+    setSelectedFiles(prev => {
+      // Prevent duplicate files from accumulating in the UI list
+      const newFiles = files.filter(f => !prev.some(p => p.name === f.name && p.size === f.size));
+      return [...prev, ...newFiles];
+    });
+    // Reset input value so the same file can be selected again if removed
+    if (e.target) e.target.value = "";
   };
 
   const removeFile = (index) => {
     setSelectedFiles(prev => prev.filter((_, i) => i !== index));
   };
+
+  // Clear modal state safely whenever it closes
+  useEffect(() => {
+    if (!isOpen) {
+      setSelectedFiles([]);
+      setUploading(false);
+    }
+  }, [isOpen]);
 
   const handleSubmit = async () => {
     if (isUpload && selectedFiles.length === 0) {

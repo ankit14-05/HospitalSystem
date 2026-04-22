@@ -2,7 +2,7 @@ const { query, withTransaction, sql } = require('../config/database');
 const notifService = require('./notificationService');
 const path = require('path');
 const fs = require('fs');
-const { PDFDocument, rgb, StandardFonts, PageSizes } = require('pdf-lib');
+const { PDFDocument, rgb, StandardFonts, PageSizes, degrees } = require('pdf-lib');
 
 // ─────────────────────────────────────────────────────────────
 // Helper – generate a unique order number: LAB-YYYYMMDD-XXXXXX
@@ -344,6 +344,35 @@ async function getPendingApprovalOrders(hospitalId) {
   return res.recordset;
 }
 
+async function getCompletedApprovalOrders(hospitalId) {
+  const res = await query(`
+    SELECT TOP 100
+      lo.Id, lo.OrderNumber, lo.Status, lo.Priority, lo.RejectionReason,
+      lo.OrderDate, lo.ReportedAt, lo.VerifiedAt, lo.SampleId,
+      pp.FirstName + ' ' + pp.LastName AS PatientName,
+      pp.UHID,
+      u_ver.FirstName + ' ' + u_ver.LastName AS VerifiedByName,
+      lo.VerifiedBy AS VerifiedById,
+      STRING_AGG(lt.Name, ', ') AS TestNames
+    FROM dbo.LabOrders lo
+    LEFT JOIN dbo.PatientProfiles pp ON pp.Id = lo.PatientId
+    LEFT JOIN dbo.Users u_ver ON u_ver.Id = lo.VerifiedBy
+    LEFT JOIN dbo.LabOrderItems li ON li.LabOrderId = lo.Id
+    LEFT JOIN dbo.LabTests lt ON lt.Id = li.TestId
+    WHERE lo.Status IN ('Completed', 'Rejected')
+      AND lo.HospitalId = @hospitalId
+    GROUP BY
+      lo.Id, lo.OrderNumber, lo.Status, lo.Priority, lo.RejectionReason,
+      lo.OrderDate, lo.ReportedAt, lo.VerifiedAt, lo.SampleId,
+      pp.FirstName, pp.LastName, pp.UHID,
+      u_ver.FirstName, u_ver.LastName, lo.VerifiedBy
+    ORDER BY lo.VerifiedAt DESC
+  `, {
+    hospitalId: { type: sql.BigInt, value: hospitalId }
+  });
+  return res.recordset;
+}
+
 // ─────────────────────────────────────────────────────────────
 // REJECT LAB TEST — move back to Processing + add reason
 // ─────────────────────────────────────────────────────────────
@@ -405,7 +434,7 @@ async function approveLabTest(orderId, approvedByUserId, approvedByName, hospita
 
   // 2. Fetch the latest PDF attachment for this order
   const attachRes = await query(`
-    SELECT TOP 1 Id, FilePath, FileName, FileType
+    SELECT Id, FilePath, FileName, FileType
     FROM dbo.LabOrderAttachments
     WHERE LabOrderId = @orderId
     ORDER BY UploadedAt DESC
@@ -414,14 +443,15 @@ async function approveLabTest(orderId, approvedByUserId, approvedByName, hospita
   let stampedFilePath = null;
 
   if (attachRes.recordset.length > 0) {
-    const attachment = attachRes.recordset[0];
-    const isPdf = attachment.FileName.toLowerCase().endsWith('.pdf') || attachment.FileType === 'application/pdf';
-    const isImage = /\.(jpg|jpeg|png)$/i.test(attachment.FileName);
+    for (const attachment of attachRes.recordset) {
+      const isPdf = attachment.FileName.toLowerCase().endsWith('.pdf') || attachment.FileType === 'application/pdf';
+      const isImage = /\.(jpg|jpeg|png)$/i.test(attachment.FileName);
 
     if (isPdf || isImage) {
       try {
         const backendRoot = path.resolve(__dirname, '../..'); // Points to 'backend' folder
-        const absPath = path.join(backendRoot, attachment.FilePath);
+        const safeAttachmentPath = attachment.FilePath.replace(/^\//, '');
+        const absPath = path.join(backendRoot, safeAttachmentPath);
 
         if (fs.existsSync(absPath)) {
           let pdfDoc;
@@ -523,8 +553,10 @@ async function approveLabTest(orderId, approvedByUserId, approvedByName, hospita
             // Handle Signature Image if it exists
             if (sigImgPath) {
               try {
-                const backendRoot = path.resolve(__dirname, '../../..');
-                const imgAbsPath = path.join(backendRoot, sigImgPath);
+                const backendRoot = path.resolve(__dirname, '../..');
+                const safeSigPath = sigImgPath.replace(/^\//, ''); // Strip leading slash so path.join works
+                const imgAbsPath = path.join(backendRoot, safeSigPath);
+                
                 if (fs.existsSync(imgAbsPath)) {
                   const imgBytes = fs.readFileSync(imgAbsPath);
                   let embeddedImg;
@@ -541,9 +573,20 @@ async function approveLabTest(orderId, approvedByUserId, approvedByName, hospita
                     width: dims.width,
                     height: dims.height
                   });
+                } else {
+                  console.warn(`[approveLabTest] Signature image not found at ${imgAbsPath}, falling back to text.`);
+                  throw new Error("File not found");
                 }
               } catch (imgErr) {
                 console.error('[approveLabTest] Error embedding signature image:', imgErr.message);
+                // Fallback to text name signature
+                newPage.drawText(approvedByName, {
+                  x: boxX + (boxW - (approvedByName.length * 7)) / 2,
+                  y: boxY + 80,
+                  size: 16,
+                  font,
+                  color: rgb(0,0,0)
+                });
               }
             } else {
               // Fallback to text name signature
@@ -573,34 +616,117 @@ async function approveLabTest(orderId, approvedByUserId, approvedByName, hospita
             });
 
           } else {
-            // Original Choice: Corner Stamp on existing last page
-            const boxX = width - 310;
-            const boxY = 30;
+            // Original Choice: Corner Stamp on existing last page (Rotation Agnostic)
+            let angleVal = lastPage.getRotation().angle || 0;
+            let angle = ((angleVal % 360) + 360) % 360; 
+
+            const vPageW = (angle === 90 || angle === 270) ? height : width;
+            const vPageH = (angle === 90 || angle === 270) ? width : height;
+
+            const toPhysical = (vx, vy) => {
+              if (angle === 0) return [vx, vy];
+              if (angle === 90) return [width - vy, vx];
+              if (angle === 180) return [width - vx, height - vy];
+              if (angle === 270) return [vy, height - vx];
+            };
+
             const boxW = 290;
             const boxH = 65;
+            const padR = 20;
+            const padB = 30;
+
+            const vx = vPageW - padR - boxW;
+            const vy = padB;
+            const [unrotX, unrotY] = toPhysical(vx, vy);
+            const stampRotation = degrees(angle);
 
             lastPage.drawRectangle({
-              x: boxX, y: boxY, width: boxW, height: boxH,
+              x: unrotX, y: unrotY, width: boxW, height: boxH,
+              rotate: stampRotation,
               borderColor: rgb(0.059, 0.580, 0.533),
               borderWidth: 1.5,
               color: rgb(0.937, 0.988, 0.984),
               opacity: 0.95
             });
+            
+            // Render Signature Image if exists
+            let imageDrawn = false;
+            let dims = { width: 0, height: 0 };
+            
+            if (sigImgPath) {
+              try {
+                const backendRoot = path.resolve(__dirname, '../..');
+                const safeSigPath = sigImgPath.replace(/^\//, ''); 
+                const imgAbsPath = path.join(backendRoot, safeSigPath);
+                
+                if (fs.existsSync(imgAbsPath)) {
+                  const imgBytes = fs.readFileSync(imgAbsPath);
+                  let embeddedImg;
+                  if (imgAbsPath.toLowerCase().endsWith('.png')) {
+                    embeddedImg = await pdfDoc.embedPng(imgBytes);
+                  } else {
+                    embeddedImg = await pdfDoc.embedJpg(imgBytes);
+                  }
+                  
+                  // Corner stamp image scaled very small
+                  dims = embeddedImg.scale(0.12);
+                  const imgVx = vx + 10;
+                  const imgVy = vy + 36;
+                  const [imgUx, imgUy] = toPhysical(imgVx, imgVy);
+                  
+                  lastPage.drawImage(embeddedImg, {
+                    x: imgUx, y: imgUy,
+                    width: dims.width, height: dims.height,
+                    rotate: stampRotation
+                  });
+                  imageDrawn = true;
+                  
+                  // Shift the "Digitally Approved by" text to the right of the image
+                  const txtVx = vx + 20 + dims.width;
+                  const txtVy = vy + 44;
+                  const [txtUx, txtUy] = toPhysical(txtVx, txtVy);
+                  
+                  lastPage.drawText(`Approved by: ${approvedByName}`, {
+                    x: txtUx, y: txtUy,
+                    size: 9, font, color: rgb(0.059, 0.435, 0.400),
+                    rotate: stampRotation
+                  });
+                }
+              } catch (err) {
+                 console.error('[approveLabTest Corner] Error embedding signature image:', err.message);
+              }
+            }
+            
+            if (!imageDrawn) {
+              const txtVx = vx + 10;
+              const txtVy = vy + 44;
+              const [txtUx, txtUy] = toPhysical(txtVx, txtVy);
+              
+              lastPage.drawText(`Digitally Approved by: ${approvedByName}`, {
+                x: txtUx, y: txtUy,
+                size: 10, font, color: rgb(0.059, 0.435, 0.400),
+                rotate: stampRotation
+              });
+            }
 
-            lastPage.drawText(`Digitally Approved by: ${approvedByName}`, {
-              x: boxX + 10, y: boxY + 44,
-              size: 10, font,
-              color: rgb(0.059, 0.435, 0.400)
-            });
+            const dtVx = vx + 10;
+            const dtVy = vy + 20;
+            const [dtUx, dtUy] = toPhysical(dtVx, dtVy);
+            
             lastPage.drawText(`Order: ${order.OrderNumber}  |  Approved On: ${new Date().toLocaleString()}`, {
-              x: boxX + 10, y: boxY + 29,
-              size: 7.5, font,
-              color: rgb(0.37, 0.37, 0.37)
+              x: dtUx, y: dtUy,
+              size: 7.5, font, color: rgb(0.37, 0.37, 0.37),
+              rotate: stampRotation
             });
+            
+            const hlVx = vx + 10;
+            const hlVy = vy + 8;
+            const [hlUx, hlUy] = toPhysical(hlVx, hlVy);
+
             lastPage.drawText('MediCore HMS — Verified Result', {
-              x: boxX + 10, y: boxY + 14,
-              size: 7.5, font,
-              color: rgb(0.059, 0.580, 0.533)
+              x: hlUx, y: hlUy,
+              size: 7.5, font, color: rgb(0.059, 0.580, 0.533),
+              rotate: stampRotation
             });
           }
 
@@ -631,6 +757,7 @@ async function approveLabTest(orderId, approvedByUserId, approvedByName, hospita
         console.error('[approveLabTest] PDF processing failed:', pdfErr.message);
         throw new Error('Digital signature processing failed: ' + pdfErr.message);
       }
+    }
     }
   }
 
@@ -706,7 +833,7 @@ async function getPatientLabResults(patientId, hospitalId, { page = 1, limit = 2
   const offset = (page - 1) * limit;
   const q = `
     SELECT
-      lo.Id AS OrderId, lo.OrderNumber, lo.OrderDate, lo.Priority, lo.Status,
+      lo.Id AS OrderId, lo.OrderNumber, lo.OrderDate, lo.Priority, lo.Status, lo.VerifiedAt AS CompletedAt,
       li.LabType AS PlaceType, rm.RoomNo, li.ExternalLabName, lo.SampleId,
       pp.FirstName + ' ' + pp.LastName AS PatientName, pp.UHID AS PatientUHID,
       u.FirstName + ' ' + u.LastName AS DoctorName,
@@ -719,13 +846,14 @@ async function getPatientLabResults(patientId, hospitalId, { page = 1, limit = 2
     LEFT JOIN dbo.Users u         ON u.Id = lo.OrderedBy
     LEFT JOIN dbo.PatientProfiles pp ON pp.Id = lo.PatientId
     LEFT JOIN dbo.LabRooms rm     ON rm.Id = li.RoomId
-    WHERE lo.PatientId = @patientId AND lo.HospitalId = @hospitalId
+    WHERE lo.PatientId = @patientId
+      AND (@hospitalId IS NULL OR lo.HospitalId = @hospitalId)
     ORDER BY lo.OrderDate DESC, lt.Category, lt.Name
     OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY
   `;
   const result = await query(q, {
     patientId:  { type: sql.BigInt, value: patientId },
-    hospitalId: { type: sql.BigInt, value: hospitalId },
+    hospitalId: { type: sql.BigInt, value: hospitalId || null },
     offset:     { type: sql.Int,    value: offset },
     limit:      { type: sql.Int,    value: limit },
   });
@@ -977,16 +1105,7 @@ async function getLabAutofillRules() {
 }
 
 async function addLabAutofillRule({ testCategory, place, roomId, labId, createdBy }) {
-  // If Indoor and roomId provided, Ensure room is not already alloted to OTHER category
-  if (place === 'Indoor' && roomId) {
-    const doubleAllotCheck = await query(`
-      SELECT Id FROM dbo.LabAutofillRules 
-      WHERE RoomId = @roomId AND TestCategory != @testCategory AND IsActive = 1
-    `, { roomId: { type: sql.BigInt, value: roomId }, testCategory: { type: sql.NVarChar(100), value: testCategory } });
-    if (doubleAllotCheck.recordset.length > 0) {
-      throw new Error(`Room is already alloted to another test category.`);
-    }
-  }
+  // Multiple tests can now map to the same room
 
   const check = await query(`SELECT Id FROM dbo.LabAutofillRules WHERE TestCategory = @testCategory`, {
     testCategory: { type: sql.NVarChar(100), value: testCategory }
@@ -1121,6 +1240,7 @@ module.exports = {
   addLabTest,
   removeLabTest,
   getPendingApprovalOrders,
+  getCompletedApprovalOrders,
   approveLabTest,
   rejectLabTest,
   getSignatureSettings,

@@ -16,6 +16,7 @@ const ROWS_PER_PAGE = 8;
 export default function LabInchargeDashboard() {
   const { user } = useAuth();
   const [pendingOrders, setPendingOrders] = useState([]);
+  const [completedOrders, setCompletedOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
@@ -39,9 +40,28 @@ export default function LabInchargeDashboard() {
     }
   }, []);
 
+  const fetchCompletedOrders = useCallback(async () => {
+    try {
+      setLoading(true);
+      const res = await api.get("/lab/completed-orders");
+      if (res.success) {
+        setCompletedOrders(res.orders || []);
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to load completed orders");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    fetchPendingApprovals();
-  }, [fetchPendingApprovals]);
+    if (activeTab === "approvals") {
+      fetchPendingApprovals();
+    } else if (activeTab === "completed") {
+      fetchCompletedOrders();
+    }
+  }, [activeTab, fetchPendingApprovals, fetchCompletedOrders]);
 
   const handleReject = async (orderId) => {
     const reason = window.prompt("Please enter the reason for rejection:");
@@ -106,13 +126,20 @@ export default function LabInchargeDashboard() {
     }
   };
 
-  const filteredData = pendingOrders.filter(order => {
+  const datasets = {
+    approvals: pendingOrders,
+    completed: completedOrders
+  };
+
+  const currentDataset = datasets[activeTab] || [];
+
+  const filteredData = currentDataset.filter(order => {
     const q = searchQuery.toLowerCase();
     return (
-      order.OrderNumber.toLowerCase().includes(q) ||
-      order.PatientName.toLowerCase().includes(q) ||
-      order.UHID.toLowerCase().includes(q) ||
-      order.TestNames.toLowerCase().includes(q)
+      (order.OrderNumber || "").toLowerCase().includes(q) ||
+      (order.PatientName || "").toLowerCase().includes(q) ||
+      (order.UHID || "").toLowerCase().includes(q) ||
+      (order.TestNames || "").toLowerCase().includes(q)
     );
   });
 
@@ -159,6 +186,19 @@ export default function LabInchargeDashboard() {
           Pending Approvals
         </button>
         <button
+          onClick={() => setActiveTab("completed")}
+          className={`
+            px-6 py-2.5 rounded-2xl text-sm font-bold transition-all flex items-center gap-2
+            ${activeTab === "completed" 
+              ? "bg-white text-slate-900 shadow-sm" 
+              : "text-slate-500 hover:text-slate-700 hover:bg-white/50"
+            }
+          `}
+        >
+          <CheckCircle2 size={18} />
+          Completed
+        </button>
+        <button
           onClick={() => setActiveTab("settings")}
           className={`
             px-6 py-2.5 rounded-2xl text-sm font-bold transition-all flex items-center gap-2
@@ -173,7 +213,7 @@ export default function LabInchargeDashboard() {
         </button>
       </div>
 
-      {activeTab === "approvals" ? (
+      {activeTab === "approvals" || activeTab === "completed" ? (
         <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
 
         <div className="p-4 border-b border-slate-100 bg-white flex flex-col sm:flex-row items-center gap-4">
@@ -188,7 +228,7 @@ export default function LabInchargeDashboard() {
             />
           </div>
           <button 
-            onClick={fetchPendingApprovals}
+            onClick={activeTab === "approvals" ? fetchPendingApprovals : fetchCompletedOrders}
             className="px-5 py-2.5 text-sm font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-50 rounded-2xl transition-all border border-slate-200 flex items-center gap-2"
           >
             Refresh
@@ -202,7 +242,7 @@ export default function LabInchargeDashboard() {
                 <th className="px-6 py-4 text-[11px] font-bold text-slate-500 uppercase tracking-widest">Order Details</th>
                 <th className="px-6 py-4 text-[11px] font-bold text-slate-500 uppercase tracking-widest">Patient</th>
                 <th className="px-6 py-4 text-[11px] font-bold text-slate-500 uppercase tracking-widest">Tests</th>
-                <th className="px-6 py-4 text-[11px] font-bold text-slate-500 uppercase tracking-widest">Uploaded On</th>
+                <th className="px-6 py-4 text-[11px] font-bold text-slate-500 uppercase tracking-widest">{activeTab === "approvals" ? "Uploaded On" : "Status / Verified On"}</th>
                 <th className="px-6 py-4 text-[11px] font-bold text-slate-500 uppercase tracking-widest text-center">Actions</th>
               </tr>
             </thead>
@@ -212,7 +252,7 @@ export default function LabInchargeDashboard() {
                   <td colSpan="5" className="px-6 py-12 text-center">
                     <div className="flex flex-col items-center gap-3">
                       <div className="w-8 h-8 border-2 border-teal-500 border-t-transparent rounded-full animate-spin"></div>
-                      <p className="text-sm text-slate-400 font-medium">Loading pending approvals...</p>
+                      <p className="text-sm text-slate-400 font-medium">Loading {activeTab}...</p>
                     </div>
                   </td>
                 </tr>
@@ -221,7 +261,7 @@ export default function LabInchargeDashboard() {
                   <td colSpan="5" className="px-6 py-12 text-center text-slate-400">
                     <div className="flex flex-col items-center gap-3 opacity-60">
                       <FileCheck size={48} className="text-slate-200" />
-                      <p className="text-sm font-medium">All clear! No results pending approval.</p>
+                      <p className="text-sm font-medium">All clear! No results in {activeTab}.</p>
                     </div>
                   </td>
                 </tr>
@@ -243,12 +283,27 @@ export default function LabInchargeDashboard() {
                       <div className="text-sm text-slate-600 line-clamp-2 max-w-[250px] font-medium">{order.TestNames}</div>
                     </td>
                     <td className="px-6 py-5">
-                      <div className="text-sm text-slate-700 font-bold">
-                        {new Date(order.ReportedAt).toLocaleDateString()}
-                      </div>
-                      <div className="text-[11px] text-slate-400 mt-0.5 font-medium">
-                        {new Date(order.ReportedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </div>
+                      {activeTab === "approvals" ? (
+                        <>
+                          <div className="text-sm text-slate-700 font-bold">
+                            {new Date(order.ReportedAt).toLocaleDateString()}
+                          </div>
+                          <div className="text-[11px] text-slate-400 mt-0.5 font-medium">
+                            {new Date(order.ReportedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className={`text-[11px] font-bold uppercase tracking-wider mb-1 ${order.Status === 'Completed' ? 'text-teal-600' : 'text-red-600'}`}>
+                            {order.Status}
+                          </div>
+                          {order.VerifiedAt && (
+                            <div className="text-[11px] text-slate-500">
+                              {new Date(order.VerifiedAt).toLocaleDateString()} at {new Date(order.VerifiedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </div>
+                          )}
+                        </>
+                      )}
                     </td>
                     <td className="px-6 py-5">
                       <div className="flex items-center justify-center gap-2">
@@ -259,28 +314,33 @@ export default function LabInchargeDashboard() {
                         >
                           <Eye size={18} />
                         </button>
-                        <button 
-                          onClick={() => handleApprove(order.Id)}
-                          disabled={processingId === order.Id}
-                          className={`
-                            flex items-center gap-2 px-5 py-2.5 rounded-xl text-[13px] font-bold transition-all
-                            ${processingId === order.Id 
-                              ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                              : 'bg-teal-600 text-white hover:bg-teal-700 shadow-md shadow-teal-900/10'
-                            }
-                          `}
-                        >
-                          <CheckCircle2 size={16} />
-                          Approve Result
-                        </button>
-                        <button 
-                          onClick={() => handleReject(order.Id)}
-                          disabled={processingId === order.Id}
-                          className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-[13px] font-bold transition-all border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50"
-                        >
-                          <AlertCircle size={16} />
-                          Reject
-                        </button>
+                        
+                        {activeTab === "approvals" && (
+                          <>
+                            <button 
+                              onClick={() => handleApprove(order.Id)}
+                              disabled={processingId === order.Id}
+                              className={`
+                                flex items-center gap-2 px-5 py-2.5 rounded-xl text-[13px] font-bold transition-all
+                                ${processingId === order.Id 
+                                  ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                                  : 'bg-teal-600 text-white hover:bg-teal-700 shadow-md shadow-teal-900/10'
+                                }
+                              `}
+                            >
+                              <CheckCircle2 size={16} />
+                              Approve Result
+                            </button>
+                            <button 
+                              onClick={() => handleReject(order.Id)}
+                              disabled={processingId === order.Id}
+                              className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-[13px] font-bold transition-all border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50"
+                            >
+                              <AlertCircle size={16} />
+                              Reject
+                            </button>
+                          </>
+                        )}
                       </div>
                     </td>
                   </tr>

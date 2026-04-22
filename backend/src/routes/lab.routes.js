@@ -131,6 +131,12 @@ router.get('/results/:patientId',
 // ─────────────────────────────────────────────────────────────────────────────
 // Attachments
 // ─────────────────────────────────────────────────────────────────────────────
+// GET /api/v1/lab/orders/:orderId/attachments
+router.get('/orders/:orderId/attachments',
+  authorize(...PATIENT_ACCESS),
+  ctrl.getOrderAttachments,
+);
+
 router.post('/orders/:orderId/attachments',
   authorize(...LAB_TECH_ROLES),
   upload.array('files', 10),
@@ -216,6 +222,11 @@ router.delete('/autofill-rules/:id',
 router.get('/pending-approvals',
   authorize(...LAB_INCHARGE_ROLES),
   ctrl.getPendingApprovals,
+);
+
+router.get('/completed-orders',
+  authorize(...LAB_INCHARGE_ROLES),
+  ctrl.getCompletedOrders,
 );
 
 router.post('/orders/:id/approve',

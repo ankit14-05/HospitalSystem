@@ -12,6 +12,8 @@ const IconDownload = () => <svg viewBox="0 0 24 24" width="13" height="13" fill=
 const IconSearch   = () => <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>;
 const IconPrev     = () => <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>;
 const IconNext     = () => <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>;
+const IconX        = () => <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>;
+const IconFile     = () => <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>;
 
 /* ─── Constants ───────────────────────────────────────────────────────────── */
 const PER_PAGE = 5;
@@ -72,6 +74,135 @@ function StatCard({ Icon, iconBg, label, value }) {
   );
 }
 
+/* ─── View Modal ─────────────────────────────────────────────────────────── */
+function ViewModal({ order, allRows, onClose }) {
+  const [attachments, setAttachments] = useState([]);
+  const [loadingAttach, setLoadingAttach] = useState(true);
+  const [downloading, setDownloading] = useState(null);
+
+  // Get all items for this order
+  const items = allRows.filter(r => r.OrderId === order.OrderId);
+
+  useEffect(() => {
+    api.get(`/lab/orders/${order.OrderId}/attachments`)
+      .then(res => setAttachments(res?.data || []))
+      .catch(() => setAttachments([]))
+      .finally(() => setLoadingAttach(false));
+  }, [order.OrderId]);
+
+  const handleDownload = async (att) => {
+    try {
+      setDownloading(att.Id);
+      const url = att.FilePath; // Now proxied by Vite
+      const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${localStorage.getItem('accessToken')}` }
+      });
+      if (!response.ok) throw new Error('Download failed');
+      const blob = await response.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = att.FileName || 'lab_result';
+      document.body.appendChild(a); a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); document.body.removeChild(a); }, 1000);
+    } catch (e) {
+      toast.error('Download failed. Please try again.');
+    } finally {
+      setDownloading(null);
+    }
+  };
+
+  const PRIO = {
+    Normal: { bg: "#dcfce7", color: "#16a34a" },
+    Urgent: { bg: "#fee2e2", color: "#dc2626" },
+    STAT:   { bg: "#fef3c7", color: "#d97706" },
+  };
+  const pColor = PRIO[order.Priority] || PRIO.Normal;
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+      onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={{ background: "#fff", borderRadius: 16, width: "100%", maxWidth: 680, maxHeight: "85vh", overflowY: "auto", boxShadow: "0 25px 50px rgba(0,0,0,0.25)" }}>
+        {/* Header */}
+        <div style={{ padding: "20px 24px", borderBottom: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", alignItems: "flex-start", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>Lab Order Details</h2>
+            <p style={{ margin: "4px 0 0", fontSize: 13, color: "#6b7280" }}>{order.OrderNumber}</p>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "#6b7280", padding: 4 }}><IconX /></button>
+        </div>
+
+        <div style={{ padding: "20px 24px" }}>
+          {/* Meta info */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20 }}>
+            {[{ label: "Ordered By", value: order.DoctorName || "—" },
+              { label: "Status", value: order.Status },
+              { label: "Priority", value: <span style={{ display: "inline-block", padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, background: pColor.bg, color: pColor.color }}>{order.Priority}</span> },
+              { label: "Ordered At", value: fmtDate(order.OrderDate) },
+              { label: "Completed At", value: fmtDate(order.CompletedAt) },
+              { label: "Sample ID", value: order.SampleId || "—" },
+            ].map(({ label, value }) => (
+              <div key={label} style={{ background: "#f9fafb", borderRadius: 10, padding: "10px 14px" }}>
+                <p style={{ margin: 0, fontSize: 11, color: "#9ca3af", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</p>
+                <p style={{ margin: "4px 0 0", fontSize: 13, fontWeight: 600, color: "#111827" }}>{value}</p>
+              </div>
+            ))}
+          </div>
+
+          {/* Tests */}
+          <h3 style={{ fontSize: 14, fontWeight: 700, margin: "0 0 10px" }}>Tests Ordered</h3>
+          <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, overflow: "hidden", marginBottom: 20 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead style={{ background: "#f9fafb" }}>
+                <tr>{["Test Name","Category","Result","Unit","Normal Range","Status"].map(h => (
+                  <th key={h} style={{ padding: "10px 12px", fontSize: 11, fontWeight: 700, color: "#9ca3af", textAlign: "left", whiteSpace: "nowrap" }}>{h}</th>
+                ))}</tr>
+              </thead>
+              <tbody>
+                {items.map((item, i) => (
+                  <tr key={item.ItemId} style={{ borderTop: i > 0 ? "1px solid #f3f4f6" : "none", background: item.IsAbnormal ? "#fef2f2" : "transparent" }}>
+                    <td style={{ padding: "10px 12px", fontSize: 13, fontWeight: 600 }}>{item.TestName}</td>
+                    <td style={{ padding: "10px 12px", fontSize: 12, color: "#6b7280" }}>{item.Category || "—"}</td>
+                    <td style={{ padding: "10px 12px", fontSize: 13, color: item.IsAbnormal ? "#dc2626" : "#111827", fontWeight: item.IsAbnormal ? 700 : 400 }}>{item.ResultValue || "—"}</td>
+                    <td style={{ padding: "10px 12px", fontSize: 12, color: "#6b7280" }}>{item.ResultUnit || "—"}</td>
+                    <td style={{ padding: "10px 12px", fontSize: 12, color: "#6b7280" }}>{item.NormalRange || "—"}</td>
+                    <td style={{ padding: "10px 12px" }}><span style={{ fontSize: 11, fontWeight: 600, color: item.ItemStatus === 'Completed' ? "#16a34a" : "#d97706" }}>{item.ItemStatus || "—"}</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Attachments */}
+          <h3 style={{ fontSize: 14, fontWeight: 700, margin: "0 0 10px" }}>Result Files</h3>
+          {loadingAttach ? <p style={{ color: "#9ca3af", fontSize: 13 }}>Loading attachments...</p>
+          : attachments.length === 0 ? <p style={{ color: "#9ca3af", fontSize: 13, background: "#f9fafb", padding: 14, borderRadius: 8, textAlign: "center" }}>No files uploaded for this order.</p>
+          : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {attachments.map(att => (
+                <div key={att.Id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", border: "1px solid #e5e7eb", borderRadius: 10, background: "#fafafa" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span style={{ color: "#6366f1" }}><IconFile /></span>
+                    <div>
+                      <p style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>{att.FileName}</p>
+                      <p style={{ margin: 0, fontSize: 11, color: "#9ca3af" }}>{att.FileType} · {att.FileSize ? Math.round(att.FileSize / 1024) + ' KB' : ''}</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleDownload(att)}
+                    disabled={downloading === att.Id}
+                    style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 14px", borderRadius: 7, border: "1px solid #6366f1", background: downloading === att.Id ? "#e0e7ff" : "#fff", color: "#6366f1", fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                    <IconDownload /> {downloading === att.Id ? 'Downloading...' : 'Download'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════ */
 export default function LabReports({ patientId }) {
   const [rows, setRows]           = useState([]);
@@ -80,6 +211,7 @@ export default function LabReports({ patientId }) {
   const [search, setSearch]       = useState("");
   const [page, setPage]           = useState(1);
   const [fetchError, setFetchError] = useState(null);
+  const [viewOrder, setViewOrder]   = useState(null);
 
   useEffect(() => {
     if (!patientId) return;
@@ -88,7 +220,7 @@ export default function LabReports({ patientId }) {
 
     api.get(`/emr/${patientId}/lab-reports`, { params: { page: 1, limit: 1000 } })
       .then(res => {
-        const data = res.data?.results || res.data?.data || (Array.isArray(res.data) ? res.data : []);
+        const data = res?.results || res?.data?.results || res?.data || (Array.isArray(res) ? res : []);
         setRows(data);
       })
       .catch(err => {
@@ -149,7 +281,7 @@ export default function LabReports({ patientId }) {
       list = list.filter(o =>
         (o.OrderNumber || "").toLowerCase().includes(q) ||
         (o.tests || []).some(t => t.toLowerCase().includes(q)) ||
-        (o.PatientName || "").toLowerCase().includes(q)
+        (o.DoctorName || "").toLowerCase().includes(q)
       );
     }
     
@@ -223,11 +355,10 @@ export default function LabReports({ patientId }) {
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 600 }}>
             <thead style={{ background: "#f9fafb" }}>
               <tr>
-                {["TEST ID", "PATIENT", "TEST NAME", 
-                  activeTab === "Completed" ? "SAMPLE ID" : "PRIORITY",
-                  activeTab === "Completed" ? "COMPLETED AT" : "ORDERED AT", 
-                  "ACTIONS"
-                ].map(h => (
+                {(activeTab === "Completed" 
+                  ? ["TEST ID", "ORDERED BY", "TEST NAME", "PRIORITY", "ORDERED AT", "COMPLETED AT", "ACTIONS"]
+                  : ["TEST ID", "ORDERED BY", "TEST NAME", "PRIORITY", "ORDERED AT", "ACTIONS"]
+                ).map(h => (
                   <th key={h} style={{ padding: "12px 16px", fontSize: 11, fontWeight: 700, color: "#9ca3af", textAlign: "left", letterSpacing: "0.05em" }}>{h}</th>
                 ))}
               </tr>
@@ -235,7 +366,7 @@ export default function LabReports({ patientId }) {
             <tbody>
               {fetchError ? (
                 <tr>
-                  <td colSpan={6} style={{ padding: "60px 20px", textAlign: "center", color: "#dc2626" }}>
+                  <td colSpan={7} style={{ padding: "60px 20px", textAlign: "center", color: "#dc2626" }}>
                     <div style={{ fontSize: 28, marginBottom: 8 }}>⚠️</div>
                     <p style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>{fetchError}</p>
                     <button onClick={() => window.location.reload()} style={{ marginTop: 12, padding: "6px 16px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, color: "#dc2626", cursor: "pointer", fontSize: 12 }}>Retry Connection</button>
@@ -243,7 +374,7 @@ export default function LabReports({ patientId }) {
                 </tr>
               ) : pageItems.length === 0 ? (
                 <tr>
-                  <td colSpan={6} style={{ padding: "60px 20px", textAlign: "center", color: "#9ca3af" }}>
+                  <td colSpan={7} style={{ padding: "60px 20px", textAlign: "center", color: "#9ca3af" }}>
                     <div style={{ fontSize: 28, marginBottom: 8 }}>📋</div>
                     <p style={{ margin: 0, fontSize: 14 }}>No lab records found for this patient.</p>
                   </td>
@@ -252,7 +383,7 @@ export default function LabReports({ patientId }) {
                 const prio = o.Priority || "Normal";
                 const pColor = PRIORITY_BADGE[prio] || PRIORITY_BADGE.Normal;
                 const isComp = (o.Status || "").toLowerCase() === "completed";
-                const pName = o.PatientName || "Unknown Patient";
+                const docName = o.DoctorName || "Unknown Doctor";
 
                 return (
                   <tr key={o.OrderId || idx} style={{ borderBottom: "1px solid #f3f4f6", transition: "background 0.1s" }}
@@ -264,10 +395,10 @@ export default function LabReports({ patientId }) {
                     </td>
                     <td style={{ padding: "14px 16px" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-                        <Avatar name={pName} />
+                        <Avatar name={docName} />
                         <div>
-                          <p style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>{pName}</p>
-                          <p style={{ margin: 0, fontSize: 11, color: "#9ca3af" }}>{o.PatientUHID || ""}</p>
+                          <p style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>{docName}</p>
+                          <p style={{ margin: 0, fontSize: 11, color: "#9ca3af" }}>{docName === "Unknown Doctor" ? "" : "Physician"}</p>
                         </div>
                       </div>
                     </td>
@@ -276,19 +407,28 @@ export default function LabReports({ patientId }) {
                       {(o.tests || []).length > 2 ? <span style={{ color: "#9ca3af", fontSize: 11 }}> +{o.tests.length - 2}</span> : ""}
                     </td>
                     <td style={{ padding: "14px 16px" }}>
-                      {isComp 
-                        ? <span style={{ fontFamily: "monospace", fontSize: 12 }}>{o.SampleId || "—"}</span>
-                        : <span style={{ display: "inline-block", padding: "3px 12px", borderRadius: 20, fontSize: 11, fontWeight: 600, background: pColor.bg, color: pColor.color }}>{prio}</span>
-                      }
+                      <span style={{ display: "inline-block", padding: "3px 12px", borderRadius: 20, fontSize: 11, fontWeight: 600, background: pColor.bg, color: pColor.color }}>{prio}</span>
                     </td>
                     <td style={{ padding: "14px 16px", fontSize: 13, color: "#374151", whiteSpace: "nowrap" }}>
                       {fmtDate(o.OrderDate)}
                     </td>
+                    {activeTab === "Completed" && (
+                      <td style={{ padding: "14px 16px", fontSize: 13, color: "#000", fontWeight: 600, whiteSpace: "nowrap" }}>
+                        {fmtDate(o.CompletedAt)}
+                      </td>
+                    )}
                     <td style={{ padding: "14px 16px" }}>
                       <div style={{ display: "flex", gap: 7, alignItems: "center" }}>
-                        <button title="View Details" style={{ background: "none", border: "1px solid #e5e7eb", borderRadius: 6, padding: "5px 7px", cursor: "pointer", color: "#6b7280" }}><IconEye /></button>
+                        <button
+                          title="View Details"
+                          onClick={() => setViewOrder(o)}
+                          style={{ background: "none", border: "1px solid #e5e7eb", borderRadius: 6, padding: "5px 7px", cursor: "pointer", color: "#6b7280" }}>
+                          <IconEye />
+                        </button>
                         {isComp && (
-                          <button style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 10px", borderRadius: 6, border: "1px solid #e5e7eb", background: "#f9fafb", fontSize: 12, fontWeight: 500, cursor: "pointer" }}>
+                          <button
+                            onClick={() => setViewOrder(o)}
+                            style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 10px", borderRadius: 6, border: "1px solid #e5e7eb", background: "#f9fafb", fontSize: 12, fontWeight: 500, cursor: "pointer" }}>
                             <IconDownload /> Result
                           </button>
                         )}
@@ -313,6 +453,13 @@ export default function LabReports({ patientId }) {
           </div>
         </div>
       </div>
+      {viewOrder && (
+        <ViewModal
+          order={viewOrder}
+          allRows={rows}
+          onClose={() => setViewOrder(null)}
+        />
+      )}
     </div>
   );
 }

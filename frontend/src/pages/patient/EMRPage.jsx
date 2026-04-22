@@ -32,8 +32,10 @@ const EMRPage = () => {
       setResolvedPatId(Number(urlPatientId));
       return;
     }
-    if (activePatientProfile?.Id) {
-      setResolvedPatId(activePatientProfile.Id);
+    // activePatientProfile uses 'patientId' key (from patientAccess.service.js)
+    const profileId = activePatientProfile?.patientId || activePatientProfile?.Id || activePatientProfile?.id;
+    if (profileId) {
+      setResolvedPatId(Number(profileId));
       return;
     }
     // For logged-in patients with no URL param, fetch their own profile

@@ -60,6 +60,48 @@ export default function TestDetailsModal({ test, onClose, onApprove, onReject })
             </div>
           </div>
           
+          {/* Structured Lab Results */}
+          {test.items && test.items.length > 0 && (
+            <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, overflow: "hidden", marginBottom: 20 }}>
+              <div style={{ background: "#f8fafc", padding: "10px 16px", borderBottom: "1px solid #e2e8f0", fontSize: 13, fontWeight: 600, color: "#334155", display: "flex", alignItems: "center", gap: 6 }}>
+                <Icon.FileText /> Structured Lab Results
+              </div>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ background: "#f1f5f9", color: "#64748b", borderBottom: "1px solid #e2e8f0" }}>
+                      <th style={{ padding: "12px 16px", fontWeight: 600 }}>Test Parameter</th>
+                      <th style={{ padding: "12px 16px", fontWeight: 600 }}>Result Value</th>
+                      <th style={{ padding: "12px 16px", fontWeight: 600 }}>Normal Range</th>
+                      <th style={{ padding: "12px 16px", fontWeight: 600 }}>Remarks</th>
+                    </tr>
+                  </thead>
+                  <tbody style={{ color: "#334155" }}>
+                    {test.items.map((item, index) => (
+                      <tr key={item.Id || index} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                        <td style={{ padding: "12px 16px", fontWeight: 500, color: "#0f172a" }}>
+                          {item.TestName}
+                          {item.IsAbnormal && (
+                            <span style={{ marginLeft: 8, padding: "2px 6px", background: "#fee2e2", color: "#ef4444", fontSize: 10, fontWeight: 700, borderRadius: 4, uppercase: "uppercase" }}>High / Abnormal</span>
+                          )}
+                        </td>
+                        <td style={{ padding: "12px 16px", fontWeight: item.IsAbnormal ? 700 : 500, color: item.IsAbnormal ? "#ef4444" : "#0f172a" }}>
+                          {item.ResultValue || "--"} <span style={{ fontSize: 11, color: "#64748b", fontWeight: 400 }}>{item.ResultUnit || item.Unit || ""}</span>
+                        </td>
+                        <td style={{ padding: "12px 16px", color: "#64748b", fontSize: 12 }}>
+                          {item.NormalRange || "--"}
+                        </td>
+                        <td style={{ padding: "12px 16px", color: "#64748b", fontStyle: item.Remarks ? "normal" : "italic" }}>
+                          {item.Remarks || "None"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
           {/* Laboratory Results & Attachments */}
           {(test.Status === "Completed" || test.Status === "Pending Approval" || test.Status === "Processing") && (
             <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, overflow: "hidden", marginBottom: 20 }}>

@@ -142,9 +142,11 @@ const labService = require('../services/lab.service');
 router.get('/:patientId/lab-reports', authorize(...ALL_ROLES), async (req, res, next) => {
   try {
     const { page = 1, limit = 20 } = req.query;
+    // hospitalId may be null for patient accounts — pass whatever we have
+    const hospitalId = req.user.hospitalId || null;
     const result = await labService.getPatientLabResults(
       Number(req.params.patientId),
-      req.user.hospitalId,
+      hospitalId,
       { page: Number(page), limit: Number(limit) },
     );
     res.json({ success: true, ...result });
