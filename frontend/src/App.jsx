@@ -20,7 +20,6 @@ import StaffRegisterPage   from './pages/register/StaffRegisterPage';
 // Dashboards
 import AdminDashboard   from './pages/dashboard/AdminDashboard';
 import DoctorDashboard  from './pages/dashboard/DoctorDashboard';
-import ConsultationPage from './pages/dashboard/ConsultationPage';
 import NurseDashboard   from './pages/dashboard/NurseDashboard';
 import ReceptionistDashboard from './pages/dashboard/ReceptionistDashboard';
 import PharmacistDashboard   from './pages/dashboard/PharmacistDashboard';
@@ -62,11 +61,45 @@ import BookAppointmentPage  from './pages/appointments/BookAppointmentPage';
 import ProfilePage from './pages/profile/ProfilePage';
 import PatientProfilesPage from './pages/profile/PatientProfilesPage';
 import AddFamilyMemberPage from './pages/profile/AddFamilyMemberPage';
-import { APPOINTMENT_DESK_ROLES, STAFF_ROLES, getDashboardPath } from './config/roles';
+
+// Lab Module
 import LabBookingPage from './pages/doctor/LabBookingPage';
 import EMRPage from './pages/patient/EMRPage';
 
+import { APPOINTMENT_DESK_ROLES, STAFF_ROLES } from './config/roles';
+
 import SecuritySettings from './pages/dashboard/SecuritySettings';
+
+// ── Shared role map ───────────────────────────────────────────────────────────
+const ROLE_ROUTES = {
+  superadmin:   'admin',
+  admin:        'admin',
+  auditor:      'admin',
+  doctor:       'doctor',
+  nurse:        'nurse',
+  receptionist: 'receptionist',
+  pharmacist:   'pharmacist',
+  labtech:      'labtech',
+  lab_technician: 'labtech',
+  'Lab Technician': 'labtech',
+  'Lab Assistant': 'labtech',
+  ward_boy:     'wardboy',
+  housekeeping: 'housekeeping',
+  security:     'security',
+  admin_staff:  'adminstaff',
+  opdmanager:   'opd',
+  opd_manager:  'opd',
+  lab_incharge: 'labincharge',
+  labincharge:  'labincharge',
+  'Lab Incharge': 'labincharge',
+  patient:      'patient',
+};
+
+
+const getDashboard = (role) => {
+  if (role === 'patient') return '/patient/profiles';
+  return `/dashboard/${ROLE_ROUTES[role] || 'admin'}`;
+};
 
 // ── Guards ────────────────────────────────────────────────────────────────────
 
@@ -89,7 +122,7 @@ function RequireAuth({ children }) {
 function RequireRole({ children, roles }) {
   const { user } = useAuth();
   if (!roles.includes(user?.role)) {
-    return <Navigate to={getDashboardPath(user?.role)} replace />;
+    return <Navigate to={getDashboard(user?.role)} replace />;
   }
   return children;
 }
@@ -102,7 +135,7 @@ function RedirectIfAuth({ children }) {
   const { isAuthenticated, user, loading } = useAuth();
   if (loading) return null;
   if (!isAuthenticated) return children;
-  return <Navigate to={getDashboardPath(user?.role)} replace />;
+  return <Navigate to={getDashboard(user?.role)} replace />;
 }
 
 /**
@@ -111,12 +144,7 @@ function RedirectIfAuth({ children }) {
  */
 function RootRedirect() {
   const { user } = useAuth();
-  return <Navigate to={getDashboardPath(user?.role)} replace />;
-}
-
-function LegacyStaffDashboardRedirect() {
-  const { user } = useAuth();
-  return <Navigate to={getDashboardPath(user?.role)} replace />;
+  return <Navigate to={getDashboard(user?.role)} replace />;
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────
@@ -194,14 +222,6 @@ export default function App() {
               }
             />
             <Route
-              path="dashboard/doctor/consult/:appointmentId"
-              element={
-                <RequireRole roles={['doctor']}>
-                  <ConsultationPage />
-                </RequireRole>
-              }
-            />
-            <Route
               path="dashboard/nurse"
               element={
                 <RequireRole roles={['nurse']}>
@@ -228,7 +248,7 @@ export default function App() {
             <Route
               path="dashboard/labtech"
               element={
-                <RequireRole roles={['labtech', 'lab_technician']}>
+                <RequireRole roles={['labtech', 'lab_technician', 'Lab Assistant', 'Lab Technician']}>
                   <LabTechnicianDashboard />
                 </RequireRole>
               }
@@ -242,10 +262,10 @@ export default function App() {
               }
             />
             <Route
-              path="dashboard/staff"
+              path="lab/approvals"
               element={
-                <RequireRole roles={STAFF_ROLES}>
-                  <LegacyStaffDashboardRedirect />
+                <RequireRole roles={['lab_incharge', 'labincharge', 'Lab Incharge']}>
+                  <LabInchargeDashboard />
                 </RequireRole>
               }
             />
@@ -289,6 +309,8 @@ export default function App() {
                 </RequireRole>
               }
             />
+
+            {/* ── Lab Module ── */}
             <Route
               path="doctor/lab-booking"
               element={
@@ -305,14 +327,6 @@ export default function App() {
                 </RequireRole>
               }
             />
-            <Route
-              path="lab/approvals"
-              element={
-                <RequireRole roles={['lab_incharge', 'labincharge', 'Lab Incharge']}>
-                  <LabInchargeDashboard />
-                </RequireRole>
-              }
-            />
 
 
             <Route
@@ -326,9 +340,9 @@ export default function App() {
 
             {/* ── Admin panels ── */}
             <Route
-              path="admin/people"
+              path="admin/people-directory"
               element={
-                <RequireRole roles={['superadmin', 'admin', 'auditor']}>
+                <RequireRole roles={['superadmin', 'admin', 'auditor', 'doctor']}>
                   <PeopleDirectoryPage />
                 </RequireRole>
               }
@@ -437,7 +451,7 @@ export default function App() {
             <Route
               path="appointments"
               element={
-                <RequireRole roles={['superadmin', 'admin', 'doctor', 'nurse', 'receptionist', 'pharmacist', 'labtech', 'lab_technician', 'lab_incharge', 'labincharge', 'Lab Incharge', 'patient', 'auditor', 'opdmanager', 'opd_manager']}>
+                <RequireRole roles={['superadmin', 'admin', 'doctor', 'nurse', 'receptionist', 'pharmacist', 'labtech', 'patient', 'auditor', 'opdmanager', 'opd_manager']}>
                   <AppointmentsPage />
                 </RequireRole>
               }

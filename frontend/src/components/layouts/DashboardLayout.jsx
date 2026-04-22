@@ -18,7 +18,7 @@ import {
   Calendar, Pill, FileText, Receipt, Heart, BarChart2,
   Settings, LogOut, Bell, ChevronDown, PanelLeftClose,
   PanelLeftOpen, Clock, Bed, ClipboardList, Search,
-  UserCircle, Edit2, Shield, X, FlaskConical, Microscope,
+  UserCircle, Edit2, Shield, X, FlaskConical, Microscope
 } from 'lucide-react';
 import { useAuth } from "../../context/AuthContext";
 import useHospitalBranding from '../../hooks/useHospitalBranding';
@@ -52,6 +52,8 @@ const NAV = {
     { path:'/dashboard/admin',        label:'Dashboard',        icon: LayoutDashboard },
     { path:'/admin/doctor-approvals', label:'Doctor Approvals', icon: Stethoscope     },
     { path:'/admin/staff-approvals',  label:'Staff Approvals',  icon: Briefcase       },
+    { path:'/admin/lab-approvals',    label:'Lab Approvals',    icon: FlaskConical    },
+    { path:'/admin/lab-management',   label:'Lab Management',   icon: Microscope      },
     { path:'/admin/people',           label:'Directory',        icon: Users           },
     { path:'/admin/appointments',     label:'Appointments',     icon: Calendar        },
     { path:'/admin/schedule-manager', label:'Doctor Schedules', icon: Clock           },
@@ -95,8 +97,7 @@ const NAV = {
     { path:'/dashboard/patient',      label:'Dashboard',          icon: LayoutDashboard },
     { path:'/patient/emr',            label:'My EMR',             icon: FileText        },
     { path:'/appointments/book',      label:'Book Appointment',   icon: Calendar        },
-    // Exact match so `/appointments/book` doesn't also activate this item.
-    { path:'/appointments',           label:'My Appointments',    icon: ClipboardList, exact: true },
+    { path:'/appointments',           label:'My Appointments',    icon: ClipboardList   },
     { path:'/patient/profiles',       label:'Patient Profiles',   icon: Users           },
     { path:'/patient/profile',        label:'My Profile',         icon: UserCircle      },
   ],
@@ -105,6 +106,8 @@ const NAV = {
   pharmacist:   staffNav('/dashboard/pharmacist'),
   labtech:      staffNav('/dashboard/labtech'),
   lab_technician: staffNav('/dashboard/labtech'),
+  'Lab Assistant': staffNav('/dashboard/labtech'),
+  'Lab Technician': staffNav('/dashboard/labtech'),
   lab_incharge: [
     { path:'/dashboard/labincharge',  label:'Dashboard',     icon: LayoutDashboard },
     { path:'/lab/approvals',          label:'Lab Approvals', icon: FlaskConical    },
@@ -171,13 +174,7 @@ export default function DashboardLayout() {
     await logout();
     navigate('/login', { replace: true });
   };
-  const isActive = (item) => {
-    const path = item?.path;
-    if (!path) return false;
-    if (location.pathname === path) return true;
-    if (item.exact) return false;
-    return location.pathname.startsWith(path + '/');
-  };
+  const isActive = (path) => location.pathname === path || location.pathname.startsWith(path + '/');
 
   const SW = sidebarOpen ? 240 : 60;
 
@@ -278,7 +275,7 @@ export default function DashboardLayout() {
             )}
             {navItems.map(item => {
               const Icon   = item.icon;
-              const active = isActive(item);
+              const active = isActive(item.path);
               return (
                 <Link key={item.path} to={item.path}
                   className={`dl-nav-item flex items-center gap-3 rounded-xl mb-0.5
@@ -347,7 +344,7 @@ export default function DashboardLayout() {
             {/* Page title */}
             <div>
               <h2 className="text-[15px] font-bold text-slate-800 leading-tight">
-                {navItems.find(n => isActive(n))?.label || 'Dashboard'}
+                {navItems.find(n => isActive(n.path))?.label || 'Dashboard'}
               </h2>
               <p className="text-[11px] text-slate-400 mt-0.5">
                 {new Date().toLocaleDateString('en-IN', { weekday:'short', month:'long', day:'numeric', year:'numeric' })}
@@ -487,7 +484,7 @@ export default function DashboardLayout() {
             <span className="capitalize text-slate-400">{ROLE_LABELS[role] || 'Staff'}</span>
             <span className="text-slate-300">/</span>
             <span className="font-semibold" style={{ color: primary }}>
-              {navItems.find(n => isActive(n))?.label || 'Dashboard'}
+              {navItems.find(n => isActive(n.path))?.label || 'Dashboard'}
             </span>
           </div>
 

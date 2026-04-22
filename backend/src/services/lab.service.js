@@ -1,1331 +1,1226 @@
-const fs = require('fs');
-const path = require('path');
 const { query, withTransaction, sql } = require('../config/database');
+const notifService = require('./notificationService');
+const path = require('path');
+const fs = require('fs');
+const { PDFDocument, rgb, StandardFonts, PageSizes, degrees } = require('pdf-lib');
 
-const DEFAULT_EXTERNAL_LABS = [
-  { Id: 1, Name: 'Apollo Diagnostics', Type: 'External' },
-  { Id: 2, Name: 'SRL Diagnostics', Type: 'External' },
-  { Id: 3, Name: 'Dr Lal PathLabs', Type: 'External' },
-  { Id: 4, Name: 'Metropolis', Type: 'External' },
-  { Id: 5, Name: 'Thyrocare', Type: 'External' },
-];
-
-const MANAGEMENT_INSTALL_MESSAGE = 'Lab management tables are not installed yet. Run backend/sql/hms_main_lab_extension.sql first.';
-
-const nullableSelection = (enabled, expression, alias, sqlType = 'NVARCHAR(500)') => (
-  enabled ? `${expression} AS ${alias}` : `CAST(NULL AS ${sqlType}) AS ${alias}`
-);
-
-const buildIdClause = (ids, prefix, params, type = sql.BigInt) => ids.map((id, index) => {
-  const key = `${prefix}${index}`;
-  params[key] = { type, value: id };
-  return `@${key}`;
-}).join(', ');
-
-const generateOrderNumber = () => {
+// ─────────────────────────────────────────────────────────────
+// Helper – generate a unique order number: LAB-YYYYMMDD-XXXXXX
+// ─────────────────────────────────────────────────────────────
+function generateOrderNumber() {
   const now = new Date();
   const datePart = now.toISOString().slice(0, 10).replace(/-/g, '');
   const rand = Math.floor(100000 + Math.random() * 900000);
   return `LAB-${datePart}-${rand}`;
-};
+}
 
-const toPriority = (tests = []) => {
-  const values = tests.map((item) => String(item?.priority || item?.Priority || 'Routine').toUpperCase());
-  if (values.includes('STAT')) return 'STAT';
-  if (values.includes('URGENT')) return 'Urgent';
-  return 'Routine';
-};
+// ─────────────────────────────────────────────────────────────
+// Helper – generate sequential sample ID: #smp-dd/mm/yyyy-XXX
+// ─────────────────────────────────────────────────────────────
+async function generateSampleId() {
+  const today = new Date();
+  const day = String(today.getDate()).padStart(2, '0');
+  const month = String(today.getMonth() + 1).padStart(2, '0');
+  const year = today.getFullYear();
+  const datePart = `${day}/${month}/${year}`;
+  const prefix = `#smp-${datePart}-`;
 
-const getLabSchema = async () => {
-  const result = await query(`
-    SELECT
-      CASE WHEN OBJECT_ID('dbo.Labs', 'U') IS NULL THEN 0 ELSE 1 END AS HasLabs,
-      CASE WHEN OBJECT_ID('dbo.LabRooms', 'U') IS NULL THEN 0 ELSE 1 END AS HasLabRooms,
-      CASE WHEN OBJECT_ID('dbo.LabAutofillRules', 'U') IS NULL THEN 0 ELSE 1 END AS HasLabAutofillRules,
-      CASE WHEN OBJECT_ID('dbo.LabTechnicianProfiles', 'U') IS NULL THEN 0 ELSE 1 END AS HasLabTechnicianProfiles,
-      CASE WHEN OBJECT_ID('dbo.LabTechnicianRoomAssignments', 'U') IS NULL THEN 0 ELSE 1 END AS HasLabTechnicianRoomAssignments,
-      CASE WHEN OBJECT_ID('dbo.LabInchargeProfiles', 'U') IS NULL THEN 0 ELSE 1 END AS HasLabInchargeProfiles,
-      CASE WHEN OBJECT_ID('dbo.LabResultAttachments', 'U') IS NULL THEN 0 ELSE 1 END AS HasLabResultAttachments,
-      CASE WHEN COL_LENGTH('dbo.LabOrders', 'WorkflowStage') IS NULL THEN 0 ELSE 1 END AS HasWorkflowStage,
-      CASE WHEN COL_LENGTH('dbo.LabOrders', 'SampleId') IS NULL THEN 0 ELSE 1 END AS HasSampleId,
-      CASE WHEN COL_LENGTH('dbo.LabOrders', 'RejectionReason') IS NULL THEN 0 ELSE 1 END AS HasRejectionReason,
-      CASE WHEN COL_LENGTH('dbo.LabOrderItems', 'CriteriaText') IS NULL THEN 0 ELSE 1 END AS HasCriteriaText,
-      CASE WHEN COL_LENGTH('dbo.LabOrderItems', 'AdditionalDetails') IS NULL THEN 0 ELSE 1 END AS HasAdditionalDetails,
-      CASE WHEN COL_LENGTH('dbo.LabOrderItems', 'RoomId') IS NULL THEN 0 ELSE 1 END AS HasRoomId,
-      CASE WHEN COL_LENGTH('dbo.LabOrderItems', 'LabId') IS NULL THEN 0 ELSE 1 END AS HasLabId,
-      CASE WHEN COL_LENGTH('dbo.LabOrderItems', 'LabType') IS NULL THEN 0 ELSE 1 END AS HasLabType
-  `);
-
-  const row = result.recordset?.[0] || {};
-  return {
-    hasLabs: Boolean(row.HasLabs),
-    hasLabRooms: Boolean(row.HasLabRooms),
-    hasLabAutofillRules: Boolean(row.HasLabAutofillRules),
-    hasLabTechnicianProfiles: Boolean(row.HasLabTechnicianProfiles),
-    hasLabTechnicianRoomAssignments: Boolean(row.HasLabTechnicianRoomAssignments),
-    hasLabInchargeProfiles: Boolean(row.HasLabInchargeProfiles),
-    hasLabResultAttachments: Boolean(row.HasLabResultAttachments),
-    hasWorkflowStage: Boolean(row.HasWorkflowStage),
-    hasSampleId: Boolean(row.HasSampleId),
-    hasRejectionReason: Boolean(row.HasRejectionReason),
-    hasCriteriaText: Boolean(row.HasCriteriaText),
-    hasAdditionalDetails: Boolean(row.HasAdditionalDetails),
-    hasRoomId: Boolean(row.HasRoomId),
-    hasLabId: Boolean(row.HasLabId),
-    hasLabType: Boolean(row.HasLabType),
-  };
-};
-
-const requireManagementTable = (enabled) => {
-  if (!enabled) {
-    const error = new Error(MANAGEMENT_INSTALL_MESSAGE);
-    error.statusCode = 400;
-    throw error;
-  }
-};
-
-const attachTestNames = async (orders = []) => {
-  if (!orders.length) return orders;
-
-  const ids = orders.map((order) => Number(order.Id || order.id)).filter(Number.isFinite);
-  if (!ids.length) return orders;
-
-  const params = {};
-  const inClause = buildIdClause(ids, 'OrderId', params);
-  const result = await query(`
-    SELECT li.LabOrderId, lt.Name AS TestName
-    FROM dbo.LabOrderItems li
-    JOIN dbo.LabTests lt ON lt.Id = li.TestId
-    WHERE li.LabOrderId IN (${inClause})
-    ORDER BY li.LabOrderId, lt.Name
-  `, params);
-
-  const testMap = result.recordset.reduce((acc, row) => {
-    if (!acc.has(row.LabOrderId)) acc.set(row.LabOrderId, []);
-    acc.get(row.LabOrderId).push(row.TestName);
-    return acc;
-  }, new Map());
-
-  return orders.map((order) => {
-    const tests = testMap.get(order.Id || order.id) || [];
-    return {
-      ...order,
-      TestNames: tests.join(', '),
-      tests: tests.map((name) => ({ TestName: name, Name: name })),
-    };
-  });
-};
-
-const ensureDefaultLab = async (hospitalId) => {
-  const schema = await getLabSchema();
-  requireManagementTable(schema.hasLabs);
-
-  const existing = await query(`
-    SELECT TOP 1 Id
-    FROM dbo.Labs
-    WHERE IsActive = 1
-      AND (@HospitalId IS NULL OR HospitalId = @HospitalId OR HospitalId IS NULL)
-    ORDER BY Id
+  const res = await query(`
+    SELECT COUNT(*) as count 
+    FROM dbo.LabOrders 
+    WHERE SampleId LIKE @prefix + '%'
   `, {
-    HospitalId: { type: sql.BigInt, value: hospitalId || null },
+    prefix: { type: sql.NVarChar(30), value: prefix }
   });
 
-  if (existing.recordset[0]?.Id) {
-    return existing.recordset[0].Id;
-  }
+  const nextSeq = (res.recordset[0].count + 1).toString().padStart(3, '0');
+  return `${prefix}${nextSeq}`;
+}
 
-  const inserted = await query(`
-    INSERT INTO dbo.Labs (HospitalId, Name, Type, IsActive, CreatedAt, UpdatedAt)
-    OUTPUT INSERTED.Id
-    VALUES (@HospitalId, @Name, @Type, 1, SYSUTCDATETIME(), SYSUTCDATETIME())
-  `, {
-    HospitalId: { type: sql.BigInt, value: hospitalId || null },
-    Name: { type: sql.NVarChar(200), value: 'Central Diagnostics' },
-    Type: { type: sql.NVarChar(50), value: 'Internal' },
-  });
-
-  return inserted.recordset[0]?.Id || null;
-};
-
-const ensureTechnicianProfile = async (userId) => {
-  const schema = await getLabSchema();
-  requireManagementTable(schema.hasLabTechnicianProfiles);
-
-  const existing = await query(`
-    SELECT TOP 1 Id, RoomId
-    FROM dbo.LabTechnicianProfiles
-    WHERE UserId = @UserId
-  `, {
-    UserId: { type: sql.BigInt, value: userId },
-  });
-
-  if (existing.recordset[0]) {
-    return existing.recordset[0];
-  }
-
-  const inserted = await query(`
-    INSERT INTO dbo.LabTechnicianProfiles (UserId, RoomId, CreatedAt, UpdatedAt)
-    OUTPUT INSERTED.Id, INSERTED.RoomId
-    VALUES (@UserId, NULL, SYSUTCDATETIME(), SYSUTCDATETIME())
-  `, {
-    UserId: { type: sql.BigInt, value: userId },
-  });
-
-  return inserted.recordset[0];
-};
-
+// ─────────────────────────────────────────────────────────────
+// TESTS CATALOGUE
+// ─────────────────────────────────────────────────────────────
 async function getLabTests({ search, category, active = true } = {}) {
-  let sqlText = `
-    SELECT Id, Name, ShortName, Category, Unit, Price, TurnaroundHrs, RequiresFasting, SampleType, Instructions, IsActive
+  let q = `
+    SELECT Id, Name, ShortName, Category, Unit,
+           NormalRangeMale, NormalRangeFemale, NormalRangeChild,
+           Price, TurnaroundHrs, RequiresFasting, SampleType,
+           Instructions, IsActive
     FROM dbo.LabTests
-    WHERE 1 = 1
+    WHERE 1=1
   `;
   const params = {};
 
   if (active !== undefined) {
-    sqlText += ' AND IsActive = @IsActive';
-    params.IsActive = { type: sql.Bit, value: active ? 1 : 0 };
+    q += ` AND IsActive = @active`;
+    params.active = { type: sql.Bit, value: active ? 1 : 0 };
   }
   if (category) {
-    sqlText += ' AND Category = @Category';
-    params.Category = { type: sql.NVarChar(100), value: category };
+    q += ` AND Category = @category`;
+    params.category = { type: sql.NVarChar(100), value: category };
   }
   if (search) {
-    sqlText += ' AND (Name LIKE @Search OR ShortName LIKE @Search OR Category LIKE @Search)';
-    params.Search = { type: sql.NVarChar(255), value: `%${search}%` };
+    q += ` AND (Name LIKE @search OR ShortName LIKE @search OR Category LIKE @search)`;
+    params.search = { type: sql.NVarChar(200), value: `%${search}%` };
   }
 
-  sqlText += ' ORDER BY Category, Name';
-  const result = await query(sqlText, params);
+  q += ` ORDER BY Category, Name`;
+  const result = await query(q, params);
   return result.recordset;
 }
 
-async function addLabTest({ name, createdBy }) {
-  const result = await query(`
-    INSERT INTO dbo.LabTests (Name, Category, RequiresFasting, IsActive, CreatedAt, UpdatedAt, CreatedBy)
-    VALUES (@Name, @Category, 0, 1, SYSUTCDATETIME(), SYSUTCDATETIME(), @CreatedBy)
-  `, {
-    Name: { type: sql.NVarChar(200), value: name },
-    Category: { type: sql.NVarChar(100), value: name },
-    CreatedBy: { type: sql.BigInt, value: createdBy || null },
+// ─────────────────────────────────────────────────────────────
+// CREATE LAB ORDER
+// ─────────────────────────────────────────────────────────────
+async function createLabOrder({
+  hospitalId,
+  patientId,
+  orderedBy,       // userId of the ordering doctor
+  appointmentId,
+  notes,
+  tests = [],      // [{ testId, priority, placeType, roomNo, externalLabName, criteria, additionalDetails }]
+}) {
+  const result = await withTransaction(async (transaction) => {
+    const orderNumber = generateOrderNumber();
+
+    // The new schema requires Priority on the Order as well, we'll use highest or first
+    const globalPriority = tests.length > 0 && tests.some(t => t.priority === 'STAT') ? 'STAT' 
+                         : tests.some(t => t.priority === 'Urgent') ? 'Urgent' 
+                         : 'Routine';
+
+    // 1. Insert ONE Parent Order
+    const orderQ = `
+      INSERT INTO dbo.LabOrders
+        (HospitalId, PatientId, OrderedBy, AppointmentId, OrderNumber, OrderDate,
+         Status, Priority, Notes, CreatedAt, UpdatedAt, CreatedBy)
+      OUTPUT INSERTED.Id
+      VALUES
+        (@hospitalId, @patientId, @orderedBy, @appointmentId, @orderNumber, GETUTCDATE(),
+         'Pending', @priority, @notes, GETUTCDATE(), GETUTCDATE(), @orderedBy)
+    `;
+
+    const txRequest = transaction.request();
+    txRequest.input('hospitalId',        sql.BigInt,         hospitalId);
+    txRequest.input('patientId',         sql.BigInt,         patientId);
+    txRequest.input('orderedBy',         sql.BigInt,         orderedBy || null);
+    txRequest.input('appointmentId',     sql.BigInt,         appointmentId || null);
+    txRequest.input('orderNumber',       sql.NVarChar(30),   orderNumber);
+    txRequest.input('priority',          sql.NVarChar(20),   globalPriority);
+    txRequest.input('notes',             sql.NVarChar(sql.MAX), notes || null);
+
+    const orderResult = await txRequest.query(orderQ);
+    const labOrderId = orderResult.recordset[0].Id;
+
+    // 2. Insert mapped Order Items
+    for (const t of tests) {
+      let resolvedLabId = null;
+      let resolvedRoomId = null;
+      let resolvedLabType = t.placeType || 'Indoor'; // 'Indoor' or 'Outside'
+
+      // Resolve String RoomNo to LabId and RoomId
+      if (resolvedLabType === 'Indoor' && t.roomNo) {
+        const roomReq = transaction.request();
+        roomReq.input('roomNo', sql.NVarChar(30), t.roomNo);
+        const rmRes = await roomReq.query('SELECT Id, LabId FROM dbo.LabRooms WHERE RoomNo = @roomNo');
+        if (rmRes.recordset.length > 0) {
+           resolvedRoomId = rmRes.recordset[0].Id;
+           resolvedLabId = rmRes.recordset[0].LabId;
+        }
+      }
+
+      const itemQ = `
+        INSERT INTO dbo.LabOrderItems
+          (LabOrderId, TestId, Priority, LabId, LabType, RoomId, ExternalLabName, Criteria, AdditionalDetails, Status)
+        VALUES (@labOrderId, @testId, @itemPriority, @labId, @labType, @roomId, @extLab, @criteria, @addDetails, 'Pending')
+      `;
+      const itemReq = transaction.request();
+      itemReq.input('labOrderId',  sql.BigInt, labOrderId);
+      itemReq.input('testId',      sql.BigInt, t.testId);
+      itemReq.input('itemPriority',sql.NVarChar(20), t.priority || 'Routine');
+      itemReq.input('labId',       sql.BigInt, resolvedLabId);
+      itemReq.input('labType',     sql.NVarChar(20), resolvedLabType);
+      itemReq.input('roomId',      sql.BigInt, resolvedRoomId);
+      itemReq.input('extLab',      sql.NVarChar(200), t.externalLabName || null);
+      itemReq.input('criteria',    sql.NVarChar(200), t.criteria || null);
+      itemReq.input('addDetails',  sql.NVarChar(sql.MAX), t.additionalDetails || null);
+      
+      await itemReq.query(itemQ);
+    }
+
+    return [{ labOrderId, orderNumber }];
   });
-  return result.rowsAffected[0] > 0;
+
+  return result;
 }
 
-async function removeLabTest(id) {
-  const result = await query(`
-    UPDATE dbo.LabTests
-    SET IsActive = 0, UpdatedAt = SYSUTCDATETIME()
-    WHERE Id = @Id
-  `, {
-    Id: { type: sql.BigInt, value: id },
-  });
-  return result.rowsAffected[0] > 0;
-}
+// ─────────────────────────────────────────────────────────────
+// GET ORDERS (list — role-filtered)
+// ─────────────────────────────────────────────────────────────
+async function getLabOrders({ hospitalId, patientId, orderedBy, status, priority, allowedRooms, date, page = 1, limit = 20 } = {}) {
+  const offset = (page - 1) * limit;
+  const params = {};
+  let where = `WHERE 1=1`;
+  
+  if (hospitalId) {
+    where += ` AND lo.HospitalId = @hospitalId`;
+    params.hospitalId = { type: sql.BigInt, value: hospitalId };
+  }
 
-async function getLabs(hospitalId = null) {
-  const schema = await getLabSchema();
-  if (!schema.hasLabs) return DEFAULT_EXTERNAL_LABS;
+  if (patientId) {
+    where += ` AND lo.PatientId = @patientId`;
+    params.patientId = { type: sql.BigInt, value: patientId };
+  }
+  if (orderedBy) {
+    where += ` AND lo.OrderedBy = @orderedBy`;
+    params.orderedBy = { type: sql.BigInt, value: orderedBy };
+  }
+  if (status) {
+    where += ` AND lo.Status = @status`;
+    params.status = { type: sql.NVarChar(20), value: status };
+  }
+  if (priority) {
+    where += ` AND lo.Priority = @priority`;
+    params.priority = { type: sql.NVarChar(20), value: priority };
+  }
+  if (date) {
+    where += ` AND CAST(lo.OrderDate AS DATE) = @date`;
+    params.date = { type: sql.Date, value: date };
+  }
+  if (allowedRooms !== undefined) {
+    if (allowedRooms.length === 0) {
+      where += ` AND 1=0`; // Assigned to no rooms, see nothing.
+    } else {
+      const roomParams = [];
+      allowedRooms.forEach((r, i) => {
+        const key = `room_${i}`;
+        roomParams.push(`@${key}`);
+        params[key] = { type: sql.BigInt, value: r };
+      });
+      where += ` AND EXISTS (SELECT 1 FROM dbo.LabOrderItems lit WHERE lit.LabOrderId = lo.Id AND lit.RoomId IN (${roomParams.join(',')}))`;
+    }
+  }
 
-  const result = await query(`
-    SELECT Id, Name, Type, Address, ContactPhone
-    FROM dbo.Labs
-    WHERE IsActive = 1
-      AND (@HospitalId IS NULL OR HospitalId = @HospitalId OR HospitalId IS NULL)
-    ORDER BY Name
-  `, {
-    HospitalId: { type: sql.BigInt, value: hospitalId || null },
-  });
+  params.limit  = { type: sql.Int, value: limit };
+  params.offset = { type: sql.Int, value: offset };
 
-  return result.recordset;
-}
-
-async function getAvailableLabRooms(hospitalId = null) {
-  const schema = await getLabSchema();
-  if (!schema.hasLabRooms) return [];
-
-  const roomTypeSelect = schema.hasLabs
-    ? "COALESCE(lr.RoomType, l.Name, 'Lab Room')"
-    : "COALESCE(lr.RoomType, 'Lab Room')";
-  const labJoin = schema.hasLabs ? 'LEFT JOIN dbo.Labs l ON l.Id = lr.LabId' : '';
-  const allotmentCheck = schema.hasLabAutofillRules
-    ? `CASE WHEN EXISTS(SELECT 1 FROM dbo.LabAutofillRules ar WHERE ar.RoomId = lr.Id AND ar.IsActive = 1) THEN 'Alloted' ELSE 'Not-Alloted' END`
-    : "'Not-Alloted'";
-
-  const result = await query(`
+  const q = `
     SELECT
-      lr.Id,
-      lr.RoomNo,
-      ${roomTypeSelect} AS RoomType,
-      ${allotmentCheck} AS Status
+      lo.Id, lo.OrderNumber, lo.OrderDate, lo.Status, lo.Priority, lo.SampleId,
+      li.LabType AS PlaceType, rm.RoomNo, li.ExternalLabName, li.Criteria, lt.Name AS TestName,
+      li.AdditionalDetails, lo.Notes, lo.CreatedAt, lo.ReportedAt,
+      p.UHID, p.FirstName + ' ' + p.LastName AS PatientName, p.Phone AS PatientPhone,
+      u.FirstName + ' ' + u.LastName AS DoctorName,
+      COUNT(*) OVER() AS TotalCount,
+      (SELECT COUNT(*) FROM dbo.LabOrderItems lit WHERE lit.LabOrderId = lo.Id) AS TestCount
+    FROM dbo.LabOrders lo
+    JOIN dbo.PatientProfiles p ON p.Id = lo.PatientId
+    LEFT JOIN dbo.Users u       ON u.Id = lo.OrderedBy
+    OUTER APPLY (
+        SELECT TOP 1 * FROM dbo.LabOrderItems l_item WHERE l_item.LabOrderId = lo.Id
+    ) li
+    LEFT JOIN dbo.LabRooms rm ON rm.Id = li.RoomId
+    LEFT JOIN dbo.LabTests lt ON lt.Id = li.TestId
+    ${where}
+    ORDER BY lo.OrderDate DESC
+    OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY
+  `;
+
+  const result = await query(q, params);
+  const total  = result.recordset[0]?.TotalCount ?? 0;
+  return { orders: result.recordset, total, page, limit };
+}
+
+// ─────────────────────────────────────────────────────────────
+// GET SINGLE ORDER WITH ITEMS
+// ─────────────────────────────────────────────────────────────
+async function getLabOrderById(orderId, hospitalId) {
+  const orderQ = `
+    SELECT
+      lo.*, lo.RejectionReason,
+      p.UHID, p.FirstName + ' ' + p.LastName AS PatientName,
+      p.DateOfBirth, p.Gender, p.Phone AS PatientPhone,
+      u.FirstName + ' ' + u.LastName AS DoctorName
+    FROM dbo.LabOrders lo
+    JOIN dbo.PatientProfiles p ON p.Id = lo.PatientId
+    LEFT JOIN dbo.Users u       ON u.Id = lo.OrderedBy
+    WHERE lo.Id = @orderId AND lo.HospitalId = @hospitalId
+  `;
+  const orderRes = await query(orderQ, {
+    orderId:    { type: sql.BigInt, value: orderId },
+    hospitalId: { type: sql.BigInt, value: hospitalId },
+  });
+  if (!orderRes.recordset.length) return null;
+
+  const itemsQ = `
+    SELECT
+      li.Id, li.TestId, li.Status,
+      li.ResultValue, li.ResultUnit, li.NormalRange,
+      li.IsAbnormal, li.Remarks,
+      lt.Name AS TestName, lt.ShortName, lt.Category,
+      lt.Unit, lt.SampleType, lt.TurnaroundHrs
+    FROM dbo.LabOrderItems li
+    JOIN dbo.LabTests lt ON lt.Id = li.TestId
+    WHERE li.LabOrderId = @orderId
+    ORDER BY lt.Category, lt.Name
+  `;
+  const itemsRes = await query(itemsQ, {
+    orderId: { type: sql.BigInt, value: orderId },
+  });
+
+  const attachments = await getLabAttachments(orderId);
+
+  return { ...orderRes.recordset[0], items: itemsRes.recordset, attachments };
+}
+
+// ─────────────────────────────────────────────────────────────
+// UPDATE ORDER STATUS
+// ─────────────────────────────────────────────────────────────
+async function updateOrderStatus(orderId, hospitalId, status, updatedBy, providedSampleId = null) {
+  const extraFields = {};
+  const params = {
+    status:     { type: sql.NVarChar(20), value: status },
+    orderId:    { type: sql.BigInt,       value: orderId },
+    hospitalId: { type: sql.BigInt,       value: hospitalId },
+    updatedBy:  { type: sql.BigInt,       value: updatedBy },
+  };
+
+  if (status === 'Processing' || status === 'Collecting') {
+    // Generate SampleId if not already present
+    const checkQ = `SELECT SampleId FROM dbo.LabOrders WHERE Id = @orderId`;
+    const checkRes = await query(checkQ, { orderId: { type: sql.BigInt, value: orderId } });
+    
+    if (!checkRes.recordset[0]?.SampleId) {
+       const finalSampleId = providedSampleId || await generateSampleId();
+       params.sampleId = { type: sql.NVarChar(50), value: finalSampleId };
+       extraFields.sampleId = `, SampleId = @sampleId, CollectedAt = GETUTCDATE(), CollectedBy = @updatedBy`;
+    }
+  } else if (status === 'Completed' || status === 'Pending Approval') {
+    // When lab tech "completes" an upload, it goes to Pending Approval first
+    extraFields.reportedAt = `, ReportedAt = GETUTCDATE(), ReportedBy = @updatedBy`;
+    // Override the status to 'Pending Approval'
+    params.status = { type: sql.NVarChar(20), value: 'Pending Approval' };
+  }
+
+  const setClauses = `Status = @status, UpdatedAt = GETUTCDATE()${extraFields.sampleId || ''}${extraFields.reportedAt || ''}`;
+
+  const q = `
+    UPDATE dbo.LabOrders
+    SET ${setClauses}
+    WHERE Id = @orderId AND HospitalId = @hospitalId
+  `;
+  const result = await query(q, params);
+  return result.rowsAffected[0] > 0;
+}
+
+// ─────────────────────────────────────────────────────────────
+// GET PENDING APPROVAL ORDERS (for Lab Incharge)
+// ─────────────────────────────────────────────────────────────
+async function getPendingApprovalOrders(hospitalId) {
+  const res = await query(`
+    SELECT
+      lo.Id, lo.OrderNumber, lo.Status, lo.Priority, lo.RejectionReason,
+      lo.OrderDate, lo.ReportedAt, lo.SampleId,
+      pp.FirstName + ' ' + pp.LastName AS PatientName,
+      pp.UHID,
+      u_tech.FirstName + ' ' + u_tech.LastName AS UploadedByName,
+      lo.ReportedBy AS UploadedById,
+      STRING_AGG(lt.Name, ', ') AS TestNames
+    FROM dbo.LabOrders lo
+    LEFT JOIN dbo.PatientProfiles pp ON pp.Id = lo.PatientId
+    LEFT JOIN dbo.Users u_tech ON u_tech.Id = lo.ReportedBy
+    LEFT JOIN dbo.LabOrderItems li ON li.LabOrderId = lo.Id
+    LEFT JOIN dbo.LabTests lt ON lt.Id = li.TestId
+    WHERE lo.Status = 'Pending Approval'
+      AND lo.HospitalId = @hospitalId
+    GROUP BY
+      lo.Id, lo.OrderNumber, lo.Status, lo.Priority, lo.RejectionReason,
+      lo.OrderDate, lo.ReportedAt, lo.SampleId,
+      pp.FirstName, pp.LastName, pp.UHID,
+      u_tech.FirstName, u_tech.LastName, lo.ReportedBy
+    ORDER BY lo.ReportedAt ASC
+  `, {
+    hospitalId: { type: sql.BigInt, value: hospitalId }
+  });
+  return res.recordset;
+}
+
+async function getCompletedApprovalOrders(hospitalId) {
+  const res = await query(`
+    SELECT TOP 100
+      lo.Id, lo.OrderNumber, lo.Status, lo.Priority, lo.RejectionReason,
+      lo.OrderDate, lo.ReportedAt, lo.VerifiedAt, lo.SampleId,
+      pp.FirstName + ' ' + pp.LastName AS PatientName,
+      pp.UHID,
+      u_ver.FirstName + ' ' + u_ver.LastName AS VerifiedByName,
+      lo.VerifiedBy AS VerifiedById,
+      STRING_AGG(lt.Name, ', ') AS TestNames
+    FROM dbo.LabOrders lo
+    LEFT JOIN dbo.PatientProfiles pp ON pp.Id = lo.PatientId
+    LEFT JOIN dbo.Users u_ver ON u_ver.Id = lo.VerifiedBy
+    LEFT JOIN dbo.LabOrderItems li ON li.LabOrderId = lo.Id
+    LEFT JOIN dbo.LabTests lt ON lt.Id = li.TestId
+    WHERE lo.Status IN ('Completed', 'Rejected')
+      AND lo.HospitalId = @hospitalId
+    GROUP BY
+      lo.Id, lo.OrderNumber, lo.Status, lo.Priority, lo.RejectionReason,
+      lo.OrderDate, lo.ReportedAt, lo.VerifiedAt, lo.SampleId,
+      pp.FirstName, pp.LastName, pp.UHID,
+      u_ver.FirstName, u_ver.LastName, lo.VerifiedBy
+    ORDER BY lo.VerifiedAt DESC
+  `, {
+    hospitalId: { type: sql.BigInt, value: hospitalId }
+  });
+  return res.recordset;
+}
+
+// ─────────────────────────────────────────────────────────────
+// REJECT LAB TEST — move back to Processing + add reason
+// ─────────────────────────────────────────────────────────────
+async function rejectLabTest(orderId, reason, rejectedByUserId, hospitalId) {
+  // 1. Verify the order exists and is in 'Pending Approval' state
+  const orderRes = await query(`
+    SELECT Id FROM dbo.LabOrders 
+    WHERE Id = @orderId AND Status = 'Pending Approval' 
+      AND HospitalId = @hospitalId
+  `, { 
+    orderId: { type: sql.BigInt, value: orderId },
+    hospitalId: { type: sql.BigInt, value: hospitalId }
+  });
+
+  if (!orderRes.recordset.length) {
+    throw new Error('Order not found or not in Pending Approval state.');
+  }
+
+  // 2. Update status back to Processing and set RejectionReason
+  await query(`
+    UPDATE dbo.LabOrders
+    SET Status = 'Processing',
+        RejectionReason = @reason,
+        UpdatedAt = GETDATE()
+    WHERE Id = @orderId
+  `, {
+    orderId: { type: sql.BigInt, value: orderId },
+    reason: { type: sql.NVarChar(sql.MAX), value: reason }
+  });
+
+  // We also update the items to Processing
+  await query(`
+    UPDATE dbo.LabOrderItems
+    SET Status = 'Processing', UpdatedAt = GETDATE()
+    WHERE LabOrderId = @orderId
+  `, { orderId: { type: sql.BigInt, value: orderId } });
+
+  return { success: true, message: 'Order rejected and sent back to technician.' };
+}
+
+// ─────────────────────────────────────────────────────────────
+// APPROVE LAB TEST — stamp PDF + mark Completed
+// ─────────────────────────────────────────────────────────────
+async function approveLabTest(orderId, approvedByUserId, approvedByName, hospitalId) {
+  // 1. Verify the order exists and is in 'Pending Approval' state
+  const orderRes = await query(`
+    SELECT lo.Id, lo.OrderNumber, lo.HospitalId,
+           pp.FirstName + ' ' + pp.LastName AS PatientName
+    FROM dbo.LabOrders lo
+    LEFT JOIN dbo.PatientProfiles pp ON pp.Id = lo.PatientId
+    WHERE lo.Id = @orderId AND lo.Status = 'Pending Approval'
+  `, { orderId: { type: sql.BigInt, value: orderId } });
+
+  if (!orderRes.recordset.length) {
+    throw new Error('Order not found or not in Pending Approval state.');
+  }
+
+  const order = orderRes.recordset[0];
+
+  // 2. Fetch the latest PDF attachment for this order
+  const attachRes = await query(`
+    SELECT Id, FilePath, FileName, FileType
+    FROM dbo.LabOrderAttachments
+    WHERE LabOrderId = @orderId
+    ORDER BY UploadedAt DESC
+  `, { orderId: { type: sql.BigInt, value: orderId } });
+
+  let stampedFilePath = null;
+
+  if (attachRes.recordset.length > 0) {
+    for (const attachment of attachRes.recordset) {
+      const isPdf = attachment.FileName.toLowerCase().endsWith('.pdf') || attachment.FileType === 'application/pdf';
+      const isImage = /\.(jpg|jpeg|png)$/i.test(attachment.FileName);
+
+    if (isPdf || isImage) {
+      try {
+        const backendRoot = path.resolve(__dirname, '../..'); // Points to 'backend' folder
+        const safeAttachmentPath = attachment.FilePath.replace(/^\//, '');
+        const absPath = path.join(backendRoot, safeAttachmentPath);
+
+        if (fs.existsSync(absPath)) {
+          let pdfDoc;
+          const fileBytes = fs.readFileSync(absPath);
+
+          if (isPdf) {
+            pdfDoc = await PDFDocument.load(fileBytes);
+          } else {
+            // It's an image, create a new PDF and embed the image
+            pdfDoc = await PDFDocument.create();
+            const page = pdfDoc.addPage(PageSizes.A4);
+            const { width, height } = page.getSize();
+            
+            let embeddedImg;
+            if (attachment.FileName.toLowerCase().endsWith('.png')) {
+              embeddedImg = await pdfDoc.embedPng(fileBytes);
+            } else {
+              embeddedImg = await pdfDoc.embedJpg(fileBytes);
+            }
+
+            // Scale to fit page while maintaining aspect ratio
+            const dims = embeddedImg.scaleToFit(width - 100, height - 200);
+            page.drawImage(embeddedImg, {
+              x: (width - dims.width) / 2,
+              y: height - dims.height - 50,
+              width: dims.width,
+              height: dims.height
+            });
+            
+            page.drawText('Original Lab Result (Image)', {
+              x: 50, y: height - 40, size: 10, color: rgb(0.5, 0.5, 0.5)
+            });
+          }
+
+          const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+          const pages = pdfDoc.getPages();
+          const lastPage = pages[pages.length -1];
+          const { width, height } = lastPage.getSize();
+
+          const now = new Date();
+          const approvedAt = now.toLocaleString('en-IN', { dateStyle: 'long', timeStyle: 'short', hour12: true });
+          const sigText1 = `Digitally Approved by: ${approvedByName}`;
+          const sigText2 = `Order: ${order.OrderNumber}  |  Approved On: ${approvedAt}`;
+          const sigText3 = 'MediCore HMS — Verified Result';
+
+          // Draw a signature box at the bottom-right
+          // Fetch signature settings for this incharge
+          let sigPref = 'Corner';
+          let sigImgPath = null;
+          let sigDesignation = null;
+          
+          try {
+            const sigSettings = await getSignatureSettings(approvedByUserId);
+            sigPref = sigSettings.SignaturePreference || 'Corner';
+            sigImgPath = sigSettings.SignatureImagePath;
+            sigDesignation = sigSettings.SignatureText;
+          } catch (sigSetErr) {
+            console.warn('[approveLabTest] Could not fetch signature settings, defaulting to Corner Stamp.');
+          }
+
+          if (sigPref === 'NewPage') {
+            // Choice C: Dedicated Signature Page
+            const newPage = pdfDoc.addPage(PageSizes.A4);
+            const { width, height } = newPage.getSize();
+
+            // Draw Hospital Title/Header
+            newPage.drawText('OFFICIAL LABORATORY REPORT VERIFICATION', { 
+              x: 50, y: height - 80, size: 18, font, color: rgb(0.059, 0.580, 0.533) 
+            });
+            newPage.drawLine({
+              start: { x: 50, y: height - 90 },
+              end: { x: width - 50, y: height - 90 },
+              thickness: 1.5,
+              color: rgb(0.8, 0.8, 0.8)
+            });
+
+            // Summary info
+            newPage.drawText(`Lab Order ID: ${order.OrderNumber}`, { x: 50, y: height - 130, size: 12, font });
+            newPage.drawText(`Patient: ${order.PatientName}`, { x: 50, y: height - 150, size: 12, font });
+
+            // Signature area in the middle-bottom
+            const boxW = 350;
+            const boxH = 180;
+            const boxX = (width - boxW) / 2;
+            const boxY = height / 2 - 100;
+
+            newPage.drawRectangle({
+              x: boxX, y: boxY, width: boxW, height: boxH,
+              borderColor: rgb(0.059, 0.580, 0.533),
+              borderWidth: 1,
+              color: rgb(0.98, 0.98, 0.98)
+            });
+
+            // Verification text
+            newPage.drawText('DIGITALLY VERIFIED AND APPROVED', {
+              x: boxX + 60, y: boxY + 140, size: 14, font, color: rgb(0.059, 0.580, 0.533)
+            });
+
+            // Handle Signature Image if it exists
+            if (sigImgPath) {
+              try {
+                const backendRoot = path.resolve(__dirname, '../..');
+                const safeSigPath = sigImgPath.replace(/^\//, ''); // Strip leading slash so path.join works
+                const imgAbsPath = path.join(backendRoot, safeSigPath);
+                
+                if (fs.existsSync(imgAbsPath)) {
+                  const imgBytes = fs.readFileSync(imgAbsPath);
+                  let embeddedImg;
+                  if (imgAbsPath.toLowerCase().endsWith('.png')) {
+                    embeddedImg = await pdfDoc.embedPng(imgBytes);
+                  } else {
+                    embeddedImg = await pdfDoc.embedJpg(imgBytes);
+                  }
+                  
+                  const dims = embeddedImg.scale(0.4);
+                  newPage.drawImage(embeddedImg, {
+                    x: boxX + (boxW - dims.width) / 2,
+                    y: boxY + 50,
+                    width: dims.width,
+                    height: dims.height
+                  });
+                } else {
+                  console.warn(`[approveLabTest] Signature image not found at ${imgAbsPath}, falling back to text.`);
+                  throw new Error("File not found");
+                }
+              } catch (imgErr) {
+                console.error('[approveLabTest] Error embedding signature image:', imgErr.message);
+                // Fallback to text name signature
+                newPage.drawText(approvedByName, {
+                  x: boxX + (boxW - (approvedByName.length * 7)) / 2,
+                  y: boxY + 80,
+                  size: 16,
+                  font,
+                  color: rgb(0,0,0)
+                });
+              }
+            } else {
+              // Fallback to text name signature
+              newPage.drawText(approvedByName, {
+                x: boxX + (boxW - (approvedByName.length * 7)) / 2,
+                y: boxY + 80,
+                size: 16,
+                font,
+                color: rgb(0,0,0)
+              });
+            }
+
+            if (sigDesignation) {
+              newPage.drawText(sigDesignation, {
+                x: boxX + (boxW - (sigDesignation.length * 5)) / 2,
+                y: boxY + 60,
+                size: 10,
+                font,
+                color: rgb(0.4, 0.4, 0.4)
+              });
+            }
+
+            const now = new Date();
+            const approvedAt = now.toLocaleString('en-IN', { dateStyle: 'long', timeStyle: 'short', hour12: true });
+            newPage.drawText(`Verification Time: ${approvedAt}`, {
+              x: boxX + 70, y: boxY + 20, size: 9, font, color: rgb(0.5, 0.5, 0.5)
+            });
+
+          } else {
+            // Original Choice: Corner Stamp on existing last page (Rotation Agnostic)
+            let angleVal = lastPage.getRotation().angle || 0;
+            let angle = ((angleVal % 360) + 360) % 360; 
+
+            const vPageW = (angle === 90 || angle === 270) ? height : width;
+            const vPageH = (angle === 90 || angle === 270) ? width : height;
+
+            const toPhysical = (vx, vy) => {
+              if (angle === 0) return [vx, vy];
+              if (angle === 90) return [width - vy, vx];
+              if (angle === 180) return [width - vx, height - vy];
+              if (angle === 270) return [vy, height - vx];
+            };
+
+            const boxW = 290;
+            const boxH = 65;
+            const padR = 20;
+            const padB = 30;
+
+            const vx = vPageW - padR - boxW;
+            const vy = padB;
+            const [unrotX, unrotY] = toPhysical(vx, vy);
+            const stampRotation = degrees(angle);
+
+            lastPage.drawRectangle({
+              x: unrotX, y: unrotY, width: boxW, height: boxH,
+              rotate: stampRotation,
+              borderColor: rgb(0.059, 0.580, 0.533),
+              borderWidth: 1.5,
+              color: rgb(0.937, 0.988, 0.984),
+              opacity: 0.95
+            });
+            
+            // Render Signature Image if exists
+            let imageDrawn = false;
+            let dims = { width: 0, height: 0 };
+            
+            if (sigImgPath) {
+              try {
+                const backendRoot = path.resolve(__dirname, '../..');
+                const safeSigPath = sigImgPath.replace(/^\//, ''); 
+                const imgAbsPath = path.join(backendRoot, safeSigPath);
+                
+                if (fs.existsSync(imgAbsPath)) {
+                  const imgBytes = fs.readFileSync(imgAbsPath);
+                  let embeddedImg;
+                  if (imgAbsPath.toLowerCase().endsWith('.png')) {
+                    embeddedImg = await pdfDoc.embedPng(imgBytes);
+                  } else {
+                    embeddedImg = await pdfDoc.embedJpg(imgBytes);
+                  }
+                  
+                  // Corner stamp image scaled very small
+                  dims = embeddedImg.scale(0.12);
+                  const imgVx = vx + 10;
+                  const imgVy = vy + 36;
+                  const [imgUx, imgUy] = toPhysical(imgVx, imgVy);
+                  
+                  lastPage.drawImage(embeddedImg, {
+                    x: imgUx, y: imgUy,
+                    width: dims.width, height: dims.height,
+                    rotate: stampRotation
+                  });
+                  imageDrawn = true;
+                  
+                  // Shift the "Digitally Approved by" text to the right of the image
+                  const txtVx = vx + 20 + dims.width;
+                  const txtVy = vy + 44;
+                  const [txtUx, txtUy] = toPhysical(txtVx, txtVy);
+                  
+                  lastPage.drawText(`Approved by: ${approvedByName}`, {
+                    x: txtUx, y: txtUy,
+                    size: 9, font, color: rgb(0.059, 0.435, 0.400),
+                    rotate: stampRotation
+                  });
+                }
+              } catch (err) {
+                 console.error('[approveLabTest Corner] Error embedding signature image:', err.message);
+              }
+            }
+            
+            if (!imageDrawn) {
+              const txtVx = vx + 10;
+              const txtVy = vy + 44;
+              const [txtUx, txtUy] = toPhysical(txtVx, txtVy);
+              
+              lastPage.drawText(`Digitally Approved by: ${approvedByName}`, {
+                x: txtUx, y: txtUy,
+                size: 10, font, color: rgb(0.059, 0.435, 0.400),
+                rotate: stampRotation
+              });
+            }
+
+            const dtVx = vx + 10;
+            const dtVy = vy + 20;
+            const [dtUx, dtUy] = toPhysical(dtVx, dtVy);
+            
+            lastPage.drawText(`Order: ${order.OrderNumber}  |  Approved On: ${new Date().toLocaleString()}`, {
+              x: dtUx, y: dtUy,
+              size: 7.5, font, color: rgb(0.37, 0.37, 0.37),
+              rotate: stampRotation
+            });
+            
+            const hlVx = vx + 10;
+            const hlVy = vy + 8;
+            const [hlUx, hlUy] = toPhysical(hlVx, hlVy);
+
+            lastPage.drawText('MediCore HMS — Verified Result', {
+              x: hlUx, y: hlUy,
+              size: 7.5, font, color: rgb(0.059, 0.580, 0.533),
+              rotate: stampRotation
+            });
+          }
+
+          const modifiedPdfBytes = await pdfDoc.save();
+          
+          // If it was an image, we should probably save as .pdf now
+          let targetPath = absPath;
+          if (isImage) {
+            targetPath = absPath.replace(/\.(jpg|jpeg|png)$/i, '.pdf');
+            fs.writeFileSync(targetPath, modifiedPdfBytes);
+            // Update database with new PDF path if needed, or just return it
+            stampedFilePath = attachment.FilePath.replace(/\.(jpg|jpeg|png)$/i, '.pdf');
+            
+            const newFileName = attachment.FileName.replace(/\.(jpg|jpeg|png)$/i, '.pdf');
+            await query(`UPDATE dbo.LabOrderAttachments SET FilePath = @newPath, FileType = 'application/pdf', FileName = @newName WHERE Id = @attachId`, {
+              newPath: { type: sql.NVarChar(sql.MAX), value: stampedFilePath },
+              newName: { type: sql.NVarChar(255), value: newFileName },
+              attachId: { type: sql.BigInt, value: attachment.Id }
+            });
+          } else {
+            fs.writeFileSync(absPath, modifiedPdfBytes);
+            stampedFilePath = attachment.FilePath;
+          }
+        } else {
+          console.error('[approveLabTest] File not found at:', absPath);
+        }
+      } catch (pdfErr) {
+        console.error('[approveLabTest] PDF processing failed:', pdfErr.message);
+        throw new Error('Digital signature processing failed: ' + pdfErr.message);
+      }
+    }
+    }
+  }
+
+  // 3. Mark order as Completed with VerifiedAt and VerifiedBy
+  await query(`
+    UPDATE dbo.LabOrders
+    SET Status = 'Completed',
+        VerifiedBy = @approvedBy,
+        VerifiedAt = GETUTCDATE(),
+        UpdatedAt = GETUTCDATE()
+    WHERE Id = @orderId
+  `, {
+    orderId: { type: sql.BigInt, value: orderId },
+    approvedBy: { type: sql.BigInt, value: approvedByUserId }
+  });
+
+  return {
+    success: true,
+    orderNumber: order.OrderNumber,
+    patientName: order.PatientName,
+    stampedFile: stampedFilePath
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
+// ENTER / UPDATE TEST RESULT
+// ─────────────────────────────────────────────────────────────
+async function enterTestResult(orderId, itemId, { resultValue, resultUnit, normalRange, isAbnormal, remarks }, enteredBy) {
+  const q = `
+    UPDATE dbo.LabOrderItems
+    SET ResultValue = @resultValue,
+        ResultUnit  = @resultUnit,
+        NormalRange = @normalRange,
+        IsAbnormal  = @isAbnormal,
+        Remarks     = @remarks,
+        Status      = 'Completed'
+    WHERE Id = @itemId AND LabOrderId = @orderId
+  `;
+  const result = await query(q, {
+    resultValue: { type: sql.NVarChar(500), value: resultValue },
+    resultUnit:  { type: sql.NVarChar(50),  value: resultUnit  || null },
+    normalRange: { type: sql.NVarChar(100), value: normalRange || null },
+    isAbnormal:  { type: sql.Bit,           value: isAbnormal  ?? null },
+    remarks:     { type: sql.NVarChar(sql.MAX), value: remarks || null },
+    itemId:      { type: sql.BigInt,        value: itemId },
+    orderId:     { type: sql.BigInt,        value: orderId },
+  });
+
+  // Auto-complete parent order if all items are done
+  if (result.rowsAffected[0] > 0) {
+    await query(`
+      UPDATE dbo.LabOrders
+      SET Status = 'Completed', ReportedAt = GETUTCDATE(), ReportedBy = @enteredBy, UpdatedAt = GETUTCDATE()
+      WHERE Id = @orderId
+        AND Status <> 'Cancelled'
+        AND NOT EXISTS (
+          SELECT 1 FROM dbo.LabOrderItems
+          WHERE LabOrderId = @orderId AND Status <> 'Completed'
+        )
+    `, {
+      orderId:    { type: sql.BigInt, value: orderId },
+      enteredBy:  { type: sql.BigInt, value: enteredBy },
+    });
+  }
+
+  return result.rowsAffected[0] > 0;
+}
+
+// ─────────────────────────────────────────────────────────────
+// GET RESULTS FOR A PATIENT (used by EMR lab reports tab)
+// ─────────────────────────────────────────────────────────────
+async function getPatientLabResults(patientId, hospitalId, { page = 1, limit = 20 } = {}) {
+  const offset = (page - 1) * limit;
+  const q = `
+    SELECT
+      lo.Id AS OrderId, lo.OrderNumber, lo.OrderDate, lo.Priority, lo.Status, lo.VerifiedAt AS CompletedAt,
+      li.LabType AS PlaceType, rm.RoomNo, li.ExternalLabName, lo.SampleId,
+      pp.FirstName + ' ' + pp.LastName AS PatientName, pp.UHID AS PatientUHID,
+      u.FirstName + ' ' + u.LastName AS DoctorName,
+      li.Id AS ItemId, lt.Name AS TestName, lt.Category,
+      li.ResultValue, li.ResultUnit, li.NormalRange, li.IsAbnormal, li.Remarks, li.Status AS ItemStatus,
+      COUNT(*) OVER() AS TotalCount
+    FROM dbo.LabOrders lo
+    JOIN dbo.LabOrderItems li     ON li.LabOrderId = lo.Id
+    JOIN dbo.LabTests lt          ON lt.Id = li.TestId
+    LEFT JOIN dbo.Users u         ON u.Id = lo.OrderedBy
+    LEFT JOIN dbo.PatientProfiles pp ON pp.Id = lo.PatientId
+    LEFT JOIN dbo.LabRooms rm     ON rm.Id = li.RoomId
+    WHERE lo.PatientId = @patientId
+      AND (@hospitalId IS NULL OR lo.HospitalId = @hospitalId)
+    ORDER BY lo.OrderDate DESC, lt.Category, lt.Name
+    OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY
+  `;
+  const result = await query(q, {
+    patientId:  { type: sql.BigInt, value: patientId },
+    hospitalId: { type: sql.BigInt, value: hospitalId || null },
+    offset:     { type: sql.Int,    value: offset },
+    limit:      { type: sql.Int,    value: limit },
+  });
+  const total = result.recordset[0]?.TotalCount ?? 0;
+  return { results: result.recordset, total, page, limit };
+}
+
+// ─────────────────────────────────────────────────────────────
+// ATTACHMENTS
+// ─────────────────────────────────────────────────────────────
+async function addLabAttachment({ labOrderId, fileName, filePath, fileType, fileSize, uploadedBy }) {
+  const result = await query(`
+    INSERT INTO dbo.LabOrderAttachments (LabOrderId, FileName, FilePath, FileType, FileSize, UploadedBy)
+    VALUES (@labOrderId, @fileName, @filePath, @fileType, @fileSize, @uploadedBy)
+  `, {
+    labOrderId: { type: sql.BigInt,       value: labOrderId },
+    fileName:   { type: sql.NVarChar(255), value: fileName },
+    filePath:   { type: sql.NVarChar(500), value: filePath },
+    fileType:   { type: sql.NVarChar(100), value: fileType },
+    fileSize:   { type: sql.BigInt,       value: fileSize },
+    uploadedBy: { type: sql.BigInt,       value: uploadedBy },
+  });
+  return result.rowsAffected[0] > 0;
+}
+
+async function removeLabAttachment(attachmentId) {
+  const result = await query(`
+    DELETE FROM dbo.LabOrderAttachments WHERE Id = @attachmentId
+  `, {
+    attachmentId: { type: sql.BigInt, value: attachmentId }
+  });
+  return result.rowsAffected[0] > 0;
+}
+
+async function getLabAttachments(labOrderId) {
+  const res = await query(`
+    SELECT Id, FileName, FilePath, FileType, FileSize, UploadedAt
+    FROM dbo.LabOrderAttachments
+    WHERE LabOrderId = @labOrderId
+    ORDER BY UploadedAt DESC
+  `, {
+    labOrderId: { type: sql.BigInt, value: labOrderId }
+  });
+  return res.recordset;
+}
+
+async function getAvailableLabRooms(hospitalId) {
+  const res = await query(`
+    SELECT lr.Id, lr.RoomNo, 
+           CASE WHEN EXISTS(SELECT 1 FROM dbo.LabAutofillRules ar WHERE ar.RoomId = lr.Id AND ar.IsActive = 1) 
+           THEN 'Alloted' ELSE 'Not-Alloted' END AS Status
     FROM dbo.LabRooms lr
-    ${labJoin}
     WHERE lr.IsActive = 1
-      AND (@HospitalId IS NULL OR lr.HospitalId = @HospitalId OR lr.HospitalId IS NULL)
-    ORDER BY lr.RoomNo
-  `, {
-    HospitalId: { type: sql.BigInt, value: hospitalId || null },
-  });
-
-  return result.recordset;
-}
-
-async function addLabRoom({ labId, roomNo, hospitalId }) {
-  const schema = await getLabSchema();
-  requireManagementTable(schema.hasLabRooms);
-
-  const finalLabId = labId || (schema.hasLabs ? await ensureDefaultLab(hospitalId) : null);
-  const result = await query(`
-    INSERT INTO dbo.LabRooms (HospitalId, LabId, RoomNo, RoomType, IsActive, CreatedAt, UpdatedAt)
-    OUTPUT INSERTED.Id
-    VALUES (@HospitalId, @LabId, @RoomNo, @RoomType, 1, SYSUTCDATETIME(), SYSUTCDATETIME())
-  `, {
-    HospitalId: { type: sql.BigInt, value: hospitalId || null },
-    LabId: { type: sql.BigInt, value: finalLabId || null },
-    RoomNo: { type: sql.NVarChar(30), value: roomNo },
-    RoomType: { type: sql.NVarChar(100), value: 'Lab Room' },
-  });
-  return result.recordset[0] || null;
-}
-
-async function removeLabRoom(roomId) {
-  const schema = await getLabSchema();
-  requireManagementTable(schema.hasLabRooms);
-
-  const result = await query(`
-    UPDATE dbo.LabRooms
-    SET IsActive = 0, UpdatedAt = SYSUTCDATETIME()
-    WHERE Id = @RoomId
-  `, {
-    RoomId: { type: sql.BigInt, value: roomId },
-  });
-
-  return result.rowsAffected[0] > 0;
-}
-
-async function getLabAutofillRules() {
-  const schema = await getLabSchema();
-  if (!schema.hasLabAutofillRules) return [];
-
-  const labJoin = schema.hasLabs ? 'LEFT JOIN dbo.Labs l ON l.Id = ar.LabId' : '';
-  const roomJoin = schema.hasLabRooms ? 'LEFT JOIN dbo.LabRooms r ON r.Id = ar.RoomId' : '';
-
-  const result = await query(`
-    SELECT
-      ar.Id,
-      ar.TestCategory,
-      ar.Place,
-      ar.RoomId,
-      ar.LabId,
-      ${schema.hasLabRooms ? 'r.RoomNo' : 'CAST(NULL AS NVARCHAR(30)) AS RoomNo'},
-      ${schema.hasLabs ? 'l.Name' : 'CAST(NULL AS NVARCHAR(200)) AS LabName'}
-    FROM dbo.LabAutofillRules ar
-    ${roomJoin}
-    ${labJoin}
-    WHERE ar.IsActive = 1
-    ORDER BY ar.TestCategory
   `);
-
-  return result.recordset;
+  return res.recordset;
 }
 
-async function addLabAutofillRule({ testCategory, place, roomId, labId, createdBy }) {
-  const schema = await getLabSchema();
-  requireManagementTable(schema.hasLabAutofillRules);
-
-  const existing = await query(`
-    SELECT TOP 1 Id
-    FROM dbo.LabAutofillRules
-    WHERE TestCategory = @TestCategory
+async function assignTechnicianToRoom({ userId, roomId, assignedBy, assignmentType = 'Shift Duty', notes = null, status = 'Active', hospitalId = null }) {
+  // 1. Get Technician Profile Id & Name
+  const techRes = await query(`
+    SELECT tp.Id, u.FirstName + ' ' + u.LastName AS Name 
+    FROM dbo.LabTechnicianProfiles tp
+    JOIN dbo.Users u ON u.Id = tp.UserId
+    WHERE tp.UserId = @userId
   `, {
-    TestCategory: { type: sql.NVarChar(200), value: testCategory },
+    userId: { type: sql.BigInt, value: userId }
   });
+  if (techRes.recordset.length === 0) throw new Error('Technician profile not found');
+  const techId = techRes.recordset[0].Id;
+  const techName = techRes.recordset[0].Name;
 
-  if (existing.recordset[0]?.Id) {
-    const updated = await query(`
-      UPDATE dbo.LabAutofillRules
-      SET Place = @Place,
-          RoomId = @RoomId,
-          LabId = @LabId,
-          IsActive = 1,
-          UpdatedAt = SYSUTCDATETIME()
-      WHERE Id = @Id
-    `, {
-      Id: { type: sql.BigInt, value: existing.recordset[0].Id },
-      Place: { type: sql.NVarChar(20), value: place },
-      RoomId: { type: sql.BigInt, value: roomId || null },
-      LabId: { type: sql.BigInt, value: labId || null },
-    });
-    return updated.rowsAffected[0] > 0;
-  }
-
-  const inserted = await query(`
-    INSERT INTO dbo.LabAutofillRules (TestCategory, Place, RoomId, LabId, CreatedBy, IsActive, CreatedAt, UpdatedAt)
-    VALUES (@TestCategory, @Place, @RoomId, @LabId, @CreatedBy, 1, SYSUTCDATETIME(), SYSUTCDATETIME())
-  `, {
-    TestCategory: { type: sql.NVarChar(200), value: testCategory },
-    Place: { type: sql.NVarChar(20), value: place },
-    RoomId: { type: sql.BigInt, value: roomId || null },
-    LabId: { type: sql.BigInt, value: labId || null },
-    CreatedBy: { type: sql.BigInt, value: createdBy || null },
-  });
-  return inserted.rowsAffected[0] > 0;
-}
-
-async function removeLabAutofillRule(id) {
-  const schema = await getLabSchema();
-  requireManagementTable(schema.hasLabAutofillRules);
-
-  const result = await query(`
-    DELETE FROM dbo.LabAutofillRules
-    WHERE Id = @Id
-  `, {
-    Id: { type: sql.BigInt, value: id },
-  });
-
-  return result.rowsAffected[0] > 0;
-}
-
-async function assignTechnicianToRoom({ userId, roomId, assignedBy, assignmentType = 'Formal Transfer', notes = null, status = 'Pending', hospitalId = null }) {
-  const schema = await getLabSchema();
-  requireManagementTable(schema.hasLabTechnicianProfiles && schema.hasLabTechnicianRoomAssignments);
-
-  const profile = await ensureTechnicianProfile(userId);
-
+  // 2. Prevent multiple pending requests
   if (status === 'Pending') {
-    const pending = await query(`
-      SELECT TOP 1 Id
-      FROM dbo.LabTechnicianRoomAssignments
-      WHERE TechnicianId = @TechnicianId
-        AND Status = 'Pending'
-    `, {
-      TechnicianId: { type: sql.BigInt, value: profile.Id },
+    const pendingRes = await query(`SELECT Id FROM dbo.LabTechnicianRoomAssignments WHERE TechnicianId = @techId AND Status = 'Pending'`, {
+      techId: { type: sql.BigInt, value: techId }
     });
-
-    if (pending.recordset[0]) {
+    if (pendingRes.recordset.length > 0) {
       throw new Error('A transfer request is already pending approval');
     }
   }
 
+  // 3. If status is Active, update Profile's current room and retire old ones
   if (status === 'Active') {
-    await query(`
-      UPDATE dbo.LabTechnicianRoomAssignments
-      SET Status = 'Historical', UpdatedAt = SYSUTCDATETIME()
-      WHERE TechnicianId = @TechnicianId
-        AND Status = 'Active'
-    `, {
-      TechnicianId: { type: sql.BigInt, value: profile.Id },
+    await query(`UPDATE dbo.LabTechnicianProfiles SET RoomId = @roomId WHERE Id = @techId`, {
+      roomId: { type: sql.BigInt, value: roomId },
+      techId: { type: sql.BigInt, value: techId }
     });
 
-    await query(`
-      UPDATE dbo.LabTechnicianProfiles
-      SET RoomId = @RoomId, UpdatedAt = SYSUTCDATETIME()
-      WHERE Id = @TechnicianId
-    `, {
-      RoomId: { type: sql.BigInt, value: roomId },
-      TechnicianId: { type: sql.BigInt, value: profile.Id },
+    await query(`UPDATE dbo.LabTechnicianRoomAssignments SET Status = 'Historical' WHERE TechnicianId = @techId AND Status = 'Active'`, {
+      techId: { type: sql.BigInt, value: techId }
     });
   }
 
-  const inserted = await query(`
-    INSERT INTO dbo.LabTechnicianRoomAssignments
-      (TechnicianId, RoomId, AssignedBy, Status, AssignmentType, Notes, AssignedAt, CreatedAt, UpdatedAt)
+  // 3. Create assignment record (Active or Pending)
+  const assignRes = await query(`
+    INSERT INTO dbo.LabTechnicianRoomAssignments (TechnicianId, RoomId, AssignedBy, Status, AssignmentType, Notes)
     OUTPUT INSERTED.Id
-    VALUES
-      (@TechnicianId, @RoomId, @AssignedBy, @Status, @AssignmentType, @Notes, SYSUTCDATETIME(), SYSUTCDATETIME(), SYSUTCDATETIME())
+    VALUES (@techId, @roomId, @assignedBy, @status, @assignmentType, @notes)
   `, {
-    TechnicianId: { type: sql.BigInt, value: profile.Id },
-    RoomId: { type: sql.BigInt, value: roomId },
-    AssignedBy: { type: sql.BigInt, value: assignedBy || null },
-    Status: { type: sql.NVarChar(20), value: status },
-    AssignmentType: { type: sql.NVarChar(50), value: assignmentType },
-    Notes: { type: sql.NVarChar(sql.MAX), value: notes || null },
+    techId: { type: sql.BigInt, value: techId },
+    roomId: { type: sql.BigInt, value: roomId },
+    assignedBy: { type: sql.BigInt, value: assignedBy },
+    status: { type: sql.NVarChar(20), value: status },
+    assignmentType: { type: sql.NVarChar(30), value: assignmentType },
+    notes: { type: sql.NVarChar(sql.MAX), value: notes }
   });
 
-  return { success: true, assignmentId: inserted.recordset[0]?.Id || null, hospitalId };
-}
+  const assignmentId = assignRes.recordset[0].Id;
 
-async function getTechnicianAssignment(userId) {
-  const schema = await getLabSchema();
-  if (!schema.hasLabTechnicianProfiles) return null;
+  // 4. If Pending, notify admins
+  if (status === 'Pending') {
+    const roomRes = await query(`SELECT RoomNo FROM dbo.LabRooms WHERE Id = @roomId`, { roomId: { type: sql.BigInt, value: roomId } });
+    const roomNo = roomRes.recordset[0]?.RoomNo || 'Unknown';
+    
+    await notifService.notifyAdminOfTransferRequest({
+      hospitalId,
+      technicianName: techName,
+      roomNo,
+      assignmentId
+    });
+  }
 
-  const labJoin = schema.hasLabs ? 'LEFT JOIN dbo.Labs l ON l.Id = lr.LabId' : '';
-
-  const result = await query(`
-    SELECT TOP 1
-      tp.RoomId,
-      lr.RoomNo,
-      ${schema.hasLabRooms ? nullableSelection(true, "COALESCE(lr.RoomType, l.Name, 'Lab Room')", 'RoomType') : "CAST(NULL AS NVARCHAR(100)) AS RoomType"}
-    FROM dbo.LabTechnicianProfiles tp
-    LEFT JOIN dbo.LabRooms lr ON lr.Id = tp.RoomId
-    ${labJoin}
-    WHERE tp.UserId = @UserId
-  `, {
-    UserId: { type: sql.BigInt, value: userId },
-  });
-
-  return result.recordset[0] || null;
-}
-
-async function getTransferHistory(userId) {
-  const schema = await getLabSchema();
-  if (!schema.hasLabTechnicianProfiles || !schema.hasLabTechnicianRoomAssignments) return [];
-
-  const labJoin = schema.hasLabs ? 'LEFT JOIN dbo.Labs l ON l.Id = lr.LabId' : '';
-
-  const result = await query(`
-    SELECT
-      tra.Id,
-      tra.AssignedAt,
-      tra.AssignmentType,
-      tra.Notes,
-      tra.Status,
-      lr.RoomNo,
-      ${schema.hasLabRooms ? nullableSelection(true, "COALESCE(lr.RoomType, l.Name, 'Lab Room')", 'RoomType') : "CAST(NULL AS NVARCHAR(100)) AS RoomType"},
-      adminUser.FirstName + ' ' + adminUser.LastName AS AssignedByAdmin
-    FROM dbo.LabTechnicianRoomAssignments tra
-    JOIN dbo.LabTechnicianProfiles tp ON tp.Id = tra.TechnicianId
-    LEFT JOIN dbo.LabRooms lr ON lr.Id = tra.RoomId
-    ${labJoin}
-    LEFT JOIN dbo.Users adminUser ON adminUser.Id = tra.AssignedBy
-    WHERE tp.UserId = @UserId
-    ORDER BY tra.AssignedAt DESC
-  `, {
-    UserId: { type: sql.BigInt, value: userId },
-  });
-
-  return result.recordset;
-}
-
-async function getPendingAssignments() {
-  const schema = await getLabSchema();
-  if (!schema.hasLabTechnicianProfiles || !schema.hasLabTechnicianRoomAssignments) return [];
-
-  const labJoin = schema.hasLabs ? 'LEFT JOIN dbo.Labs l ON l.Id = lr.LabId' : '';
-
-  const result = await query(`
-    SELECT
-      tra.Id,
-      tra.AssignedAt,
-      tra.AssignmentType,
-      tra.Notes,
-      u.FirstName + ' ' + u.LastName AS TechnicianName,
-      lr.RoomNo,
-      ${schema.hasLabRooms ? nullableSelection(true, "COALESCE(lr.RoomType, l.Name, 'Lab Room')", 'RoomType') : "CAST(NULL AS NVARCHAR(100)) AS RoomType"}
-    FROM dbo.LabTechnicianRoomAssignments tra
-    JOIN dbo.LabTechnicianProfiles tp ON tp.Id = tra.TechnicianId
-    JOIN dbo.Users u ON u.Id = tp.UserId
-    LEFT JOIN dbo.LabRooms lr ON lr.Id = tra.RoomId
-    ${labJoin}
-    WHERE tra.Status = 'Pending'
-    ORDER BY tra.AssignedAt ASC
-  `);
-
-  return result.recordset;
+  return { success: true, assignmentId };
 }
 
 async function approveRoomAssignment(assignmentId, adminId) {
-  const schema = await getLabSchema();
-  requireManagementTable(schema.hasLabTechnicianProfiles && schema.hasLabTechnicianRoomAssignments);
+  return await withTransaction(async (transaction) => {
+    // 1. Get assignment details
+    const res = await new sql.Request(transaction)
+      .input('id', sql.BigInt, assignmentId)
+      .query(`SELECT TechnicianId, RoomId FROM dbo.LabTechnicianRoomAssignments WHERE Id = @id AND Status = 'Pending'`);
+    
+    if (res.recordset.length === 0) throw new Error('Pending assignment not found');
+    const { TechnicianId, RoomId } = res.recordset[0];
 
-  return withTransaction(async (transaction) => {
-    const pending = await new sql.Request(transaction)
-      .input('AssignmentId', sql.BigInt, assignmentId)
-      .query(`
-        SELECT TOP 1 TechnicianId, RoomId
-        FROM dbo.LabTechnicianRoomAssignments
-        WHERE Id = @AssignmentId
-          AND Status = 'Pending'
-      `);
-
-    const assignment = pending.recordset[0];
-    if (!assignment) {
-      throw new Error('Pending assignment not found');
-    }
-
+    // 2. Mark previous as historical
     await new sql.Request(transaction)
-      .input('TechnicianId', sql.BigInt, assignment.TechnicianId)
-      .query(`
-        UPDATE dbo.LabTechnicianRoomAssignments
-        SET Status = 'Historical', UpdatedAt = SYSUTCDATETIME()
-        WHERE TechnicianId = @TechnicianId
-          AND Status = 'Active'
-      `);
+      .input('tid', sql.BigInt, TechnicianId)
+      .query(`UPDATE dbo.LabTechnicianRoomAssignments SET Status = 'Historical' WHERE TechnicianId = @tid AND Status = 'Active'`);
 
+    // 3. Activate new one
     await new sql.Request(transaction)
-      .input('AssignmentId', sql.BigInt, assignmentId)
-      .input('AdminId', sql.BigInt, adminId)
-      .query(`
-        UPDATE dbo.LabTechnicianRoomAssignments
-        SET Status = 'Active',
-            AssignedBy = @AdminId,
-            AssignedAt = SYSUTCDATETIME(),
-            UpdatedAt = SYSUTCDATETIME()
-        WHERE Id = @AssignmentId
-      `);
+      .input('id', sql.BigInt, assignmentId)
+      .input('adminId', sql.BigInt, adminId)
+      .query(`UPDATE dbo.LabTechnicianRoomAssignments SET Status = 'Active', AssignedBy = @adminId, AssignedAt = SYSUTCDATETIME() WHERE Id = @id`);
 
+    // 4. Update Profile
     await new sql.Request(transaction)
-      .input('TechnicianId', sql.BigInt, assignment.TechnicianId)
-      .input('RoomId', sql.BigInt, assignment.RoomId)
-      .query(`
-        UPDATE dbo.LabTechnicianProfiles
-        SET RoomId = @RoomId, UpdatedAt = SYSUTCDATETIME()
-        WHERE Id = @TechnicianId
-      `);
+      .input('rid', sql.BigInt, RoomId)
+      .input('tid', sql.BigInt, TechnicianId)
+      .query(`UPDATE dbo.LabTechnicianProfiles SET RoomId = @rid WHERE Id = @tid`);
 
     return true;
   });
 }
 
 async function rejectRoomAssignment(assignmentId, adminId) {
-  const schema = await getLabSchema();
-  requireManagementTable(schema.hasLabTechnicianRoomAssignments);
-
-  await query(`
-    UPDATE dbo.LabTechnicianRoomAssignments
-    SET Status = 'Rejected',
-        AssignedBy = @AdminId,
-        AssignedAt = SYSUTCDATETIME(),
-        UpdatedAt = SYSUTCDATETIME()
-    WHERE Id = @AssignmentId
-      AND Status = 'Pending'
-  `, {
-    AssignmentId: { type: sql.BigInt, value: assignmentId },
-    AdminId: { type: sql.BigInt, value: adminId },
+  await query(`UPDATE dbo.LabTechnicianRoomAssignments SET Status = 'Rejected', AssignedBy = @adminId, AssignedAt = SYSUTCDATETIME() WHERE Id = @id AND Status = 'Pending'`, {
+    id: { type: sql.BigInt, value: assignmentId },
+    adminId: { type: sql.BigInt, value: adminId }
   });
-
   return true;
 }
 
-async function getSignatureSettings(userId) {
-  const schema = await getLabSchema();
-  if (!schema.hasLabInchargeProfiles) {
-    return {
-      UserId: userId,
-      SignaturePreference: 'NewPage',
-      SignatureText: null,
-      SignatureImagePath: null,
-    };
-  }
+async function getPendingAssignments(hospitalId) {
+  // Simple version: return all pending assignments globally or by some lab filter if needed
+  const res = await query(`
+    SELECT 
+      tra.Id, tra.AssignedAt, tra.AssignmentType, tra.Notes,
+      u.FirstName + ' ' + u.LastName AS TechnicianName,
+      lr.RoomNo
+    FROM dbo.LabTechnicianRoomAssignments tra
+    JOIN dbo.LabTechnicianProfiles tp ON tp.Id = tra.TechnicianId
+    JOIN dbo.Users u ON u.Id = tp.UserId
+    JOIN dbo.LabRooms lr ON lr.Id = tra.RoomId
+    WHERE tra.Status = 'Pending'
+    ORDER BY tra.AssignedAt ASC
+  `);
+  return res.recordset;
+}
 
-  const result = await query(`
-    SELECT TOP 1 *
-    FROM dbo.LabInchargeProfiles
-    WHERE UserId = @UserId
+async function getTechnicianAssignment(userId) {
+  const res = await query(`
+    SELECT lt.RoomId, lr.RoomNo
+    FROM dbo.LabTechnicianProfiles lt
+    LEFT JOIN dbo.LabRooms lr ON lt.RoomId = lr.Id
+    WHERE lt.UserId = @userId
   `, {
-    UserId: { type: sql.BigInt, value: userId },
+    userId: { type: sql.BigInt, value: userId }
   });
+  return res.recordset[0] || null;
+}
 
-  return result.recordset[0] || {
+async function addLabRoom({ labId, roomNo }) {
+  const res = await query(`
+    INSERT INTO dbo.LabRooms (LabId, RoomNo, IsActive)
+    OUTPUT INSERTED.Id
+    VALUES (@labId, @roomNo, 1)
+  `, {
+    labId: { type: sql.BigInt, value: labId },
+    roomNo: { type: sql.NVarChar(30), value: roomNo }
+  });
+  return res.recordset[0];
+}
+
+async function removeLabRoom(roomId) {
+  const res = await query(`UPDATE dbo.LabRooms SET IsActive = 0 WHERE Id = @roomId`, {
+    roomId: { type: sql.BigInt, value: roomId }
+  });
+  return res.rowsAffected[0] > 0;
+}
+
+async function getTransferHistory(userId) {
+  const res = await query(`
+    SELECT 
+      tra.Id,
+      tra.AssignedAt,
+      tra.AssignmentType,
+      tra.Notes,
+      tra.Status,
+      lr.RoomNo,
+      u.FirstName + ' ' + u.LastName AS AssignedByAdmin
+    FROM dbo.LabTechnicianRoomAssignments tra
+    JOIN dbo.LabTechnicianProfiles tp ON tp.Id = tra.TechnicianId
+    JOIN dbo.LabRooms lr ON lr.Id = tra.RoomId
+    JOIN dbo.Users u ON u.Id = tra.AssignedBy
+    WHERE tp.UserId = @userId
+    ORDER BY tra.AssignedAt DESC
+  `, {
+    userId: { type: sql.BigInt, value: userId }
+  });
+  return res.recordset;
+}
+async function getLabs() {
+  const res = await query(`SELECT Id, Name, Type FROM dbo.Labs ORDER BY Name`);
+  return res.recordset;
+}
+
+async function getLabAutofillRules() {
+  const res = await query(`
+    SELECT a.Id, a.TestCategory, a.Place, a.RoomId, a.LabId, r.RoomNo, l.Name AS LabName
+    FROM dbo.LabAutofillRules a
+    LEFT JOIN dbo.LabRooms r ON r.Id = a.RoomId
+    LEFT JOIN dbo.Labs l ON l.Id = a.LabId
+    WHERE a.IsActive = 1
+    ORDER BY a.TestCategory
+  `);
+  return res.recordset;
+}
+
+async function addLabAutofillRule({ testCategory, place, roomId, labId, createdBy }) {
+  // Multiple tests can now map to the same room
+
+  const check = await query(`SELECT Id FROM dbo.LabAutofillRules WHERE TestCategory = @testCategory`, {
+    testCategory: { type: sql.NVarChar(100), value: testCategory }
+  });
+  
+  const ruleParams = {
+    testCategory: { type: sql.NVarChar(100), value: testCategory },
+    place: { type: sql.NVarChar(20), value: place },
+    roomId: { type: sql.BigInt, value: roomId || null },
+    labId: { type: sql.BigInt, value: labId || null },
+    createdBy: { type: sql.BigInt, value: createdBy }
+  };
+
+  if (check.recordset.length > 0) {
+    const res = await query(`
+      UPDATE dbo.LabAutofillRules 
+      SET Place = @place, RoomId = @roomId, LabId = @labId, IsActive = 1
+      WHERE TestCategory = @testCategory
+    `, ruleParams);
+    return res.rowsAffected[0] > 0;
+  } else {
+    const res = await query(`
+      INSERT INTO dbo.LabAutofillRules (TestCategory, Place, RoomId, LabId, CreatedBy, IsActive)
+      VALUES (@testCategory, @place, @roomId, @labId, @createdBy, 1)
+    `, ruleParams);
+    return res.rowsAffected[0] > 0;
+  }
+}
+
+async function addLabTest({ name, createdBy }) {
+  const res = await query(`
+    INSERT INTO dbo.LabTests (Name, Category, RequiresFasting, IsActive, CreatedAt, UpdatedAt, CreatedBy)
+    VALUES (@name, @name, 0, 1, SYSUTCDATETIME(), SYSUTCDATETIME(), @createdBy)
+  `, {
+    name: { type: sql.NVarChar(255), value: name },
+    createdBy: { type: sql.BigInt, value: createdBy }
+  });
+  return res.rowsAffected[0] > 0;
+}
+
+async function removeLabTest(id) {
+  const res = await query(`UPDATE dbo.LabTests SET IsActive = 0, UpdatedAt = SYSUTCDATETIME() WHERE Id = @id`, {
+    id: { type: sql.BigInt, value: id }
+  });
+  return res.rowsAffected[0] > 0;
+}
+
+async function removeLabAutofillRule(id) {
+  const res = await query(`DELETE FROM dbo.LabAutofillRules WHERE Id = @id`, {
+    id: { type: sql.BigInt, value: id }
+  });
+  return res.rowsAffected[0] > 0;
+}
+
+// ─────────────────────────────────────────────────────────────
+// SIGNATURE SETTINGS (Lab Incharge Profile)
+// ─────────────────────────────────────────────────────────────
+async function getSignatureSettings(userId) {
+  const res = await query(`
+    SELECT * FROM dbo.LabInchargeProfiles WHERE UserId = @userId
+  `, { userId: { type: sql.BigInt, value: userId } });
+  
+  if (res.recordset.length > 0) return res.recordset[0];
+  
+  // Default settings
+  return {
     UserId: userId,
     SignaturePreference: 'NewPage',
     SignatureText: null,
-    SignatureImagePath: null,
+    SignatureImagePath: null
   };
 }
 
 async function updateSignatureSettings({ userId, signatureText, signaturePreference, signatureImagePath }) {
-  const schema = await getLabSchema();
-  requireManagementTable(schema.hasLabInchargeProfiles);
-
-  const existing = await query(`
-    SELECT TOP 1 Id
-    FROM dbo.LabInchargeProfiles
-    WHERE UserId = @UserId
-  `, {
-    UserId: { type: sql.BigInt, value: userId },
+  const check = await query(`SELECT Id FROM dbo.LabInchargeProfiles WHERE UserId = @userId`, {
+    userId: { type: sql.BigInt, value: userId }
   });
-
-  if (existing.recordset[0]?.Id) {
+  
+  if (check.recordset.length > 0) {
     await query(`
       UPDATE dbo.LabInchargeProfiles
-      SET SignatureText = @SignatureText,
-          SignaturePreference = @SignaturePreference,
-          SignatureImagePath = COALESCE(@SignatureImagePath, SignatureImagePath),
-          UpdatedAt = SYSUTCDATETIME()
-      WHERE UserId = @UserId
+      SET SignatureText = @text,
+          SignaturePreference = @pref,
+          SignatureImagePath = ISNULL(@img, SignatureImagePath),
+          UpdatedAt = GETDATE()
+      WHERE UserId = @userId
     `, {
-      UserId: { type: sql.BigInt, value: userId },
-      SignatureText: { type: sql.NVarChar(200), value: signatureText || null },
-      SignaturePreference: { type: sql.NVarChar(20), value: signaturePreference || 'NewPage' },
-      SignatureImagePath: { type: sql.NVarChar(1000), value: signatureImagePath || null },
+      userId: { type: sql.BigInt, value: userId },
+      text: { type: sql.NVarChar(200), value: signatureText || null },
+      pref: { type: sql.NVarChar(20), value: signaturePreference || 'NewPage' },
+      img:  { type: sql.NVarChar(sql.MAX), value: signatureImagePath || null }
     });
-    return true;
-  }
-
-  await query(`
-    INSERT INTO dbo.LabInchargeProfiles
-      (UserId, SignatureText, SignaturePreference, SignatureImagePath, CreatedAt, UpdatedAt)
-    VALUES
-      (@UserId, @SignatureText, @SignaturePreference, @SignatureImagePath, SYSUTCDATETIME(), SYSUTCDATETIME())
-  `, {
-    UserId: { type: sql.BigInt, value: userId },
-    SignatureText: { type: sql.NVarChar(200), value: signatureText || null },
-    SignaturePreference: { type: sql.NVarChar(20), value: signaturePreference || 'NewPage' },
-    SignatureImagePath: { type: sql.NVarChar(1000), value: signatureImagePath || null },
-  });
-  return true;
-}
-
-async function generateSampleId() {
-  const schema = await getLabSchema();
-  const now = new Date();
-  const day = String(now.getDate()).padStart(2, '0');
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const year = now.getFullYear();
-  const prefix = `#smp-${day}/${month}/${year}-`;
-
-  const result = await query(schema.hasSampleId ? `
-    SELECT COUNT(*) AS TotalCount
-    FROM dbo.LabOrders
-    WHERE SampleId LIKE @Prefix + '%'
-  ` : `
-    SELECT COUNT(*) AS TotalCount
-    FROM dbo.LabOrders
-    WHERE CAST(OrderDate AS DATE) = CAST(SYSUTCDATETIME() AS DATE)
-  `, schema.hasSampleId ? {
-    Prefix: { type: sql.NVarChar(30), value: prefix },
-  } : {});
-
-  const nextSeq = String((result.recordset[0]?.TotalCount || 0) + 1).padStart(3, '0');
-  return `${prefix}${nextSeq}`;
-}
-
-async function createLabOrder({ hospitalId, patientId, orderedBy, appointmentId, notes, tests = [] }) {
-  const schema = await getLabSchema();
-
-  return withTransaction(async (transaction) => {
-    const orderNumber = generateOrderNumber();
-    const orderColumns = ['HospitalId', 'PatientId', 'OrderedBy', 'AppointmentId', 'OrderNumber', 'OrderDate', 'Status', 'Priority', 'Notes', 'CreatedAt', 'UpdatedAt', 'CreatedBy'];
-    const orderValues = ['@HospitalId', '@PatientId', '@OrderedBy', '@AppointmentId', '@OrderNumber', 'SYSUTCDATETIME()', '@Status', '@Priority', '@Notes', 'SYSUTCDATETIME()', 'SYSUTCDATETIME()', '@CreatedBy'];
-
-    if (schema.hasWorkflowStage) {
-      orderColumns.push('WorkflowStage');
-      orderValues.push('@WorkflowStage');
-    }
-
-    const orderRequest = new sql.Request(transaction)
-      .input('HospitalId', sql.BigInt, hospitalId)
-      .input('PatientId', sql.BigInt, patientId)
-      .input('OrderedBy', sql.BigInt, orderedBy || null)
-      .input('AppointmentId', sql.BigInt, appointmentId || null)
-      .input('OrderNumber', sql.NVarChar(30), orderNumber)
-      .input('Status', sql.NVarChar(20), 'Pending')
-      .input('Priority', sql.NVarChar(20), toPriority(tests))
-      .input('Notes', sql.NVarChar(sql.MAX), notes || null)
-      .input('CreatedBy', sql.BigInt, orderedBy || null);
-
-    if (schema.hasWorkflowStage) {
-      orderRequest.input('WorkflowStage', sql.NVarChar(30), 'Ordered');
-    }
-
-    const orderResult = await orderRequest.query(`
-      INSERT INTO dbo.LabOrders (${orderColumns.join(', ')})
-      OUTPUT INSERTED.Id
-      VALUES (${orderValues.join(', ')})
-    `);
-
-    const labOrderId = orderResult.recordset[0]?.Id;
-
-    for (const test of tests) {
-      const itemColumns = ['LabOrderId', 'TestId', 'Status'];
-      const itemValues = ['@LabOrderId', '@TestId', '@Status'];
-      const itemRequest = new sql.Request(transaction)
-        .input('LabOrderId', sql.BigInt, labOrderId)
-        .input('TestId', sql.BigInt, Number(test.testId || test.TestId || test.id))
-        .input('Status', sql.NVarChar(20), 'Pending');
-
-      if (schema.hasCriteriaText) {
-        itemColumns.push('CriteriaText');
-        itemValues.push('@CriteriaText');
-        itemRequest.input('CriteriaText', sql.NVarChar(500), test.criteria || test.Criteria || null);
-      }
-      if (schema.hasAdditionalDetails) {
-        itemColumns.push('AdditionalDetails');
-        itemValues.push('@AdditionalDetails');
-        itemRequest.input('AdditionalDetails', sql.NVarChar(1000), test.additionalDetails || test.AdditionalDetails || null);
-      }
-      if (schema.hasRoomId) {
-        itemColumns.push('RoomId');
-        itemValues.push('@RoomId');
-        itemRequest.input('RoomId', sql.BigInt, test.roomId || null);
-      }
-      if (schema.hasLabId) {
-        itemColumns.push('LabId');
-        itemValues.push('@LabId');
-        itemRequest.input('LabId', sql.BigInt, test.labId || null);
-      }
-      if (schema.hasLabType) {
-        itemColumns.push('LabType');
-        itemValues.push('@LabType');
-        itemRequest.input('LabType', sql.NVarChar(20), test.place || test.placeType || test.LabType || 'Indoor');
-      }
-
-      await itemRequest.query(`
-        INSERT INTO dbo.LabOrderItems (${itemColumns.join(', ')})
-        VALUES (${itemValues.join(', ')})
-      `);
-    }
-
-    return { labOrderId, orderNumber };
-  });
-}
-
-async function getLabOrders({ hospitalId, patientId, orderedBy, status, priority, date, page = 1, limit = 20 } = {}) {
-  const schema = await getLabSchema();
-  const offset = (Math.max(1, Number(page)) - 1) * Math.max(1, Number(limit));
-  const where = ['1 = 1'];
-  const params = {
-    OffsetRows: { type: sql.Int, value: offset },
-    FetchRows: { type: sql.Int, value: Number(limit) || 20 },
-  };
-
-  if (hospitalId) {
-    where.push('lo.HospitalId = @HospitalId');
-    params.HospitalId = { type: sql.BigInt, value: hospitalId };
-  }
-  if (patientId) {
-    where.push('lo.PatientId = @PatientId');
-    params.PatientId = { type: sql.BigInt, value: patientId };
-  }
-  if (orderedBy) {
-    where.push('lo.OrderedBy = @OrderedBy');
-    params.OrderedBy = { type: sql.BigInt, value: orderedBy };
-  }
-  if (status) {
-    where.push('lo.Status = @Status');
-    params.Status = { type: sql.NVarChar(20), value: status };
-  }
-  if (priority) {
-    where.push('lo.Priority = @Priority');
-    params.Priority = { type: sql.NVarChar(20), value: priority };
-  }
-  if (date) {
-    where.push('CAST(lo.OrderDate AS DATE) = @OrderDate');
-    params.OrderDate = { type: sql.Date, value: date };
-  }
-
-  const whereSql = where.join(' AND ');
-  const listResult = await query(`
-    SELECT
-      lo.Id,
-      lo.OrderNumber,
-      lo.OrderDate,
-      lo.Status,
-      lo.Priority,
-      lo.ReportedAt,
-      lo.VerifiedAt,
-      ${nullableSelection(schema.hasWorkflowStage, 'lo.WorkflowStage', 'WorkflowStage', 'NVARCHAR(30)')},
-      p.UHID,
-      p.FirstName + ' ' + p.LastName AS PatientName,
-      u.FirstName + ' ' + u.LastName AS DoctorName
-    FROM dbo.LabOrders lo
-    JOIN dbo.PatientProfiles p ON p.Id = lo.PatientId
-    LEFT JOIN dbo.DoctorProfiles dp ON dp.Id = lo.OrderedBy
-    LEFT JOIN dbo.Users u ON u.Id = dp.UserId
-    WHERE ${whereSql}
-    ORDER BY lo.OrderDate DESC
-    OFFSET @OffsetRows ROWS FETCH NEXT @FetchRows ROWS ONLY
-  `, params);
-
-  const countResult = await query(`
-    SELECT COUNT(*) AS TotalCount
-    FROM dbo.LabOrders lo
-    WHERE ${whereSql}
-  `, Object.fromEntries(Object.entries(params).filter(([key]) => !['OffsetRows', 'FetchRows'].includes(key))));
-
-  const orders = await attachTestNames(listResult.recordset);
-  return {
-    orders,
-    total: countResult.recordset[0]?.TotalCount || 0,
-    page: Number(page) || 1,
-    limit: Number(limit) || 20,
-  };
-}
-
-async function getLabAttachments(labOrderId) {
-  const schema = await getLabSchema();
-  if (!schema.hasLabResultAttachments) return [];
-
-  const result = await query(`
-    SELECT
-      Id,
-      FileName,
-      StoragePath,
-      ContentType,
-      FileSizeBytes,
-      UploadedAt
-    FROM dbo.LabResultAttachments
-    WHERE LabOrderId = @LabOrderId
-    ORDER BY UploadedAt DESC
-  `, {
-    LabOrderId: { type: sql.BigInt, value: labOrderId },
-  });
-
-  return result.recordset;
-}
-
-async function addLabAttachment({ labOrderId, fileName, filePath, fileType, fileSize, uploadedBy }) {
-  const schema = await getLabSchema();
-  requireManagementTable(schema.hasLabResultAttachments);
-
-  const result = await query(`
-    INSERT INTO dbo.LabResultAttachments
-      (LabOrderId, LabOrderItemId, FileCategory, FileName, StoragePath, ContentType, FileSizeBytes, IsPrimary, UploadedByUserId)
-    VALUES
-      (@LabOrderId, NULL, @FileCategory, @FileName, @StoragePath, @ContentType, @FileSizeBytes, 0, @UploadedByUserId)
-  `, {
-    LabOrderId: { type: sql.BigInt, value: labOrderId },
-    FileCategory: { type: sql.NVarChar(50), value: 'LabReport' },
-    FileName: { type: sql.NVarChar(255), value: fileName },
-    StoragePath: { type: sql.NVarChar(1000), value: filePath },
-    ContentType: { type: sql.NVarChar(100), value: fileType || 'application/octet-stream' },
-    FileSizeBytes: { type: sql.BigInt, value: fileSize || 0 },
-    UploadedByUserId: { type: sql.BigInt, value: uploadedBy || null },
-  });
-
-  return result.rowsAffected[0] > 0;
-}
-
-async function removeLabAttachment(attachmentId) {
-  const schema = await getLabSchema();
-  requireManagementTable(schema.hasLabResultAttachments);
-
-  const existing = await query(`
-    SELECT TOP 1 StoragePath
-    FROM dbo.LabResultAttachments
-    WHERE Id = @AttachmentId
-  `, {
-    AttachmentId: { type: sql.BigInt, value: attachmentId },
-  });
-
-  const result = await query(`
-    DELETE FROM dbo.LabResultAttachments
-    WHERE Id = @AttachmentId
-  `, {
-    AttachmentId: { type: sql.BigInt, value: attachmentId },
-  });
-
-  const storagePath = existing.recordset[0]?.StoragePath;
-  if (storagePath) {
-    const absolutePath = path.resolve(__dirname, '../..', storagePath.replace(/^\//, ''));
-    if (fs.existsSync(absolutePath)) {
-      fs.unlinkSync(absolutePath);
-    }
-  }
-
-  return result.rowsAffected[0] > 0;
-}
-
-async function getLabOrderById(orderId, hospitalId) {
-  const schema = await getLabSchema();
-
-  const orderResult = await query(`
-    SELECT TOP 1
-      lo.Id,
-      lo.OrderNumber,
-      lo.OrderDate,
-      lo.Status,
-      lo.Priority,
-      lo.Notes,
-      lo.ReportedAt,
-      lo.VerifiedAt,
-      lo.VerifiedBy,
-      ${nullableSelection(schema.hasWorkflowStage, 'lo.WorkflowStage', 'WorkflowStage', 'NVARCHAR(30)')},
-      p.UHID,
-      p.FirstName + ' ' + p.LastName AS PatientName,
-      p.Phone AS PatientPhone,
-      u.FirstName + ' ' + u.LastName AS DoctorName
-    FROM dbo.LabOrders lo
-    JOIN dbo.PatientProfiles p ON p.Id = lo.PatientId
-    LEFT JOIN dbo.DoctorProfiles dp ON dp.Id = lo.OrderedBy
-    LEFT JOIN dbo.Users u ON u.Id = dp.UserId
-    WHERE lo.Id = @OrderId
-      AND (@HospitalId IS NULL OR lo.HospitalId = @HospitalId)
-  `, {
-    OrderId: { type: sql.BigInt, value: orderId },
-    HospitalId: { type: sql.BigInt, value: hospitalId || null },
-  });
-
-  const header = orderResult.recordset[0];
-  if (!header) return null;
-
-  const itemResult = await query(`
-    SELECT
-      li.Id,
-      li.LabOrderId,
-      li.Status,
-      li.ResultValue,
-      li.ResultUnit,
-      li.NormalRange,
-      li.IsAbnormal,
-      li.Remarks,
-      lt.Name AS TestName,
-      ${nullableSelection(schema.hasCriteriaText, 'li.CriteriaText', 'Criteria', 'NVARCHAR(500)')},
-      ${nullableSelection(schema.hasAdditionalDetails, 'li.AdditionalDetails', 'AdditionalDetails', 'NVARCHAR(1000)')},
-      ${nullableSelection(schema.hasLabType, 'li.LabType', 'Place', 'NVARCHAR(20)')},
-      ${schema.hasRoomId && schema.hasLabRooms ? 'lr.RoomNo AS RoomNo' : 'CAST(NULL AS NVARCHAR(30)) AS RoomNo'}
-    FROM dbo.LabOrderItems li
-    JOIN dbo.LabTests lt ON lt.Id = li.TestId
-    ${schema.hasRoomId && schema.hasLabRooms ? 'LEFT JOIN dbo.LabRooms lr ON lr.Id = li.RoomId' : ''}
-    WHERE li.LabOrderId = @OrderId
-    ORDER BY li.Id
-  `, {
-    OrderId: { type: sql.BigInt, value: orderId },
-  });
-
-  const attachments = await getLabAttachments(orderId);
-  const items = itemResult.recordset;
-  const primary = items[0] || {};
-
-  return {
-    ...header,
-    id: header.Id,
-    patientName: header.PatientName,
-    uhid: header.UHID,
-    testType: primary.TestName || null,
-    testName: primary.TestName || null,
-    testNames: items.map((item) => item.TestName).join(', '),
-    date: header.OrderDate,
-    assignedDate: header.ReportedAt || header.OrderDate,
-    criteria: primary.Criteria || null,
-    additionalDetails: primary.AdditionalDetails || header.Notes || null,
-    place: primary.Place || 'Indoor',
-    roomNo: primary.RoomNo || null,
-    items,
-    tests: items,
-    attachments,
-  };
-}
-
-async function updateOrderStatus(orderId, hospitalId, status, updatedBy, providedSampleId = null) {
-  const schema = await getLabSchema();
-  const clauses = ['Status = @Status', 'UpdatedAt = SYSUTCDATETIME()'];
-  const params = {
-    OrderId: { type: sql.BigInt, value: orderId },
-    HospitalId: { type: sql.BigInt, value: hospitalId || null },
-    Status: { type: sql.NVarChar(20), value: status },
-    UpdatedBy: { type: sql.BigInt, value: updatedBy || null },
-  };
-
-  let workflowStage = null;
-
-  if (status === 'Collecting' || status === 'Processing') {
-    clauses.push('CollectedAt = COALESCE(CollectedAt, SYSUTCDATETIME())');
-    clauses.push('CollectedBy = COALESCE(CollectedBy, @UpdatedBy)');
-    if (schema.hasSampleId) {
-      params.SampleId = { type: sql.NVarChar(50), value: providedSampleId || await generateSampleId() };
-      clauses.push('SampleId = COALESCE(SampleId, @SampleId)');
-    }
-    workflowStage = status === 'Collecting' ? 'PendingCollection' : 'Processing';
-  }
-
-  if (status === 'Completed' || status === 'Pending Approval') {
-    clauses.push('ReportedAt = SYSUTCDATETIME()');
-    clauses.push('ReportedBy = COALESCE(ReportedBy, @UpdatedBy)');
-    params.Status = { type: sql.NVarChar(20), value: 'Completed' };
-    workflowStage = 'Completed';
-  }
-
-  if (schema.hasWorkflowStage && workflowStage) {
-    clauses.push('WorkflowStage = @WorkflowStage');
-    params.WorkflowStage = { type: sql.NVarChar(30), value: workflowStage };
-  }
-
-  const result = await query(`
-    UPDATE dbo.LabOrders
-    SET ${clauses.join(', ')}
-    WHERE Id = @OrderId
-      AND (@HospitalId IS NULL OR HospitalId = @HospitalId)
-  `, params);
-
-  return result.rowsAffected[0] > 0;
-}
-
-async function enterTestResult(orderId, itemId, { resultValue, resultUnit, normalRange, isAbnormal, remarks }, enteredBy) {
-  const schema = await getLabSchema();
-
-  const itemResult = await query(`
-    UPDATE dbo.LabOrderItems
-    SET ResultValue = @ResultValue,
-        ResultUnit = @ResultUnit,
-        NormalRange = @NormalRange,
-        IsAbnormal = @IsAbnormal,
-        Remarks = @Remarks,
-        Status = 'Completed'
-    WHERE Id = @ItemId
-      AND LabOrderId = @OrderId
-  `, {
-    ResultValue: { type: sql.NVarChar(500), value: resultValue || null },
-    ResultUnit: { type: sql.NVarChar(50), value: resultUnit || null },
-    NormalRange: { type: sql.NVarChar(100), value: normalRange || null },
-    IsAbnormal: { type: sql.Bit, value: isAbnormal === undefined ? null : isAbnormal },
-    Remarks: { type: sql.NVarChar(sql.MAX), value: remarks || null },
-    ItemId: { type: sql.BigInt, value: itemId },
-    OrderId: { type: sql.BigInt, value: orderId },
-  });
-
-  if (!itemResult.rowsAffected[0]) return false;
-
-  const pendingItems = await query(`
-    SELECT COUNT(*) AS PendingCount
-    FROM dbo.LabOrderItems
-    WHERE LabOrderId = @OrderId
-      AND Status <> 'Completed'
-  `, {
-    OrderId: { type: sql.BigInt, value: orderId },
-  });
-
-  if ((pendingItems.recordset[0]?.PendingCount || 0) === 0) {
-    const clauses = [
-      "Status = 'Completed'",
-      'ReportedAt = SYSUTCDATETIME()',
-      'ReportedBy = COALESCE(ReportedBy, @EnteredBy)',
-      'UpdatedAt = SYSUTCDATETIME()',
-    ];
-    const params = {
-      OrderId: { type: sql.BigInt, value: orderId },
-      EnteredBy: { type: sql.BigInt, value: enteredBy || null },
-    };
-
-    if (schema.hasWorkflowStage) {
-      clauses.push("WorkflowStage = 'Completed'");
-    }
-
+  } else {
     await query(`
-      UPDATE dbo.LabOrders
-      SET ${clauses.join(', ')}
-      WHERE Id = @OrderId
-    `, params);
+      INSERT INTO dbo.LabInchargeProfiles (UserId, SignatureText, SignaturePreference, SignatureImagePath)
+      VALUES (@userId, @text, @pref, @img)
+    `, {
+      userId: { type: sql.BigInt, value: userId },
+      text: { type: sql.NVarChar(200), value: signatureText || null },
+      pref: { type: sql.NVarChar(20), value: signaturePreference || 'NewPage' },
+      img:  { type: sql.NVarChar(sql.MAX), value: signatureImagePath || null }
+    });
   }
-
   return true;
-}
-
-async function getPatientLabResults(patientId, hospitalId, { page = 1, limit = 20 } = {}) {
-  const schema = await getLabSchema();
-  const offset = (Math.max(1, Number(page)) - 1) * Math.max(1, Number(limit));
-
-  const result = await query(`
-    SELECT
-      lo.Id AS OrderId,
-      lo.OrderNumber,
-      lo.OrderDate,
-      lo.Priority,
-      lo.Status,
-      ${nullableSelection(schema.hasWorkflowStage, 'lo.WorkflowStage', 'WorkflowStage', 'NVARCHAR(30)')},
-      pp.FirstName + ' ' + pp.LastName AS PatientName,
-      pp.UHID AS PatientUHID,
-      u.FirstName + ' ' + u.LastName AS DoctorName,
-      li.Id AS ItemId,
-      lt.Name AS TestName,
-      li.ResultValue,
-      li.ResultUnit,
-      li.NormalRange,
-      li.IsAbnormal,
-      li.Remarks,
-      li.Status AS ItemStatus
-    FROM dbo.LabOrders lo
-    JOIN dbo.LabOrderItems li ON li.LabOrderId = lo.Id
-    JOIN dbo.LabTests lt ON lt.Id = li.TestId
-    LEFT JOIN dbo.DoctorProfiles dp ON dp.Id = lo.OrderedBy
-    LEFT JOIN dbo.Users u ON u.Id = dp.UserId
-    LEFT JOIN dbo.PatientProfiles pp ON pp.Id = lo.PatientId
-    WHERE lo.PatientId = @PatientId
-      AND (@HospitalId IS NULL OR lo.HospitalId = @HospitalId)
-    ORDER BY lo.OrderDate DESC, li.Id
-    OFFSET @OffsetRows ROWS FETCH NEXT @FetchRows ROWS ONLY
-  `, {
-    PatientId: { type: sql.BigInt, value: patientId },
-    HospitalId: { type: sql.BigInt, value: hospitalId || null },
-    OffsetRows: { type: sql.Int, value: offset },
-    FetchRows: { type: sql.Int, value: Number(limit) || 20 },
-  });
-
-  const countResult = await query(`
-    SELECT COUNT(*) AS TotalCount
-    FROM dbo.LabOrderItems li
-    JOIN dbo.LabOrders lo ON lo.Id = li.LabOrderId
-    WHERE lo.PatientId = @PatientId
-      AND (@HospitalId IS NULL OR lo.HospitalId = @HospitalId)
-  `, {
-    PatientId: { type: sql.BigInt, value: patientId },
-    HospitalId: { type: sql.BigInt, value: hospitalId || null },
-  });
-
-  return {
-    results: result.recordset,
-    total: countResult.recordset[0]?.TotalCount || 0,
-    page: Number(page) || 1,
-    limit: Number(limit) || 20,
-  };
-}
-
-async function getPendingApprovalOrders(hospitalId) {
-  const schema = await getLabSchema();
-  const workflowFilter = schema.hasWorkflowStage
-    ? "OR lo.WorkflowStage IN ('DoctorReview', 'Reviewed')"
-    : '';
-
-  const result = await query(`
-    SELECT
-      lo.Id,
-      lo.OrderNumber,
-      lo.Priority,
-      lo.Status,
-      lo.ReportedAt,
-      ${nullableSelection(schema.hasWorkflowStage, 'lo.WorkflowStage', 'WorkflowStage', 'NVARCHAR(30)')},
-      p.UHID,
-      p.FirstName + ' ' + p.LastName AS PatientName
-    FROM dbo.LabOrders lo
-    JOIN dbo.PatientProfiles p ON p.Id = lo.PatientId
-    WHERE lo.HospitalId = @HospitalId
-      AND lo.VerifiedAt IS NULL
-      AND (
-        lo.ReportedAt IS NOT NULL
-        OR lo.Status IN ('Completed', 'Pending Approval')
-        ${workflowFilter}
-      )
-    ORDER BY COALESCE(lo.ReportedAt, lo.OrderDate) DESC
-  `, {
-    HospitalId: { type: sql.BigInt, value: hospitalId },
-  });
-
-  return attachTestNames(result.recordset);
-}
-
-async function approveLabTest(orderId, approvedByUserId, approvedByName, hospitalId) {
-  const schema = await getLabSchema();
-  const settings = await getSignatureSettings(approvedByUserId);
-  const clauses = [
-    "Status = 'Completed'",
-    'VerifiedAt = SYSUTCDATETIME()',
-    'VerifiedBy = @VerifiedBy',
-    'UpdatedAt = SYSUTCDATETIME()',
-  ];
-
-  if (schema.hasWorkflowStage) {
-    clauses.push("WorkflowStage = 'DoctorReview'");
-  }
-  if (schema.hasRejectionReason) {
-    clauses.push('RejectionReason = NULL');
-  }
-
-  const lookup = await query(`
-    SELECT TOP 1 lo.OrderNumber, p.FirstName + ' ' + p.LastName AS PatientName
-    FROM dbo.LabOrders lo
-    JOIN dbo.PatientProfiles p ON p.Id = lo.PatientId
-    WHERE lo.Id = @OrderId
-      AND lo.HospitalId = @HospitalId
-  `, {
-    OrderId: { type: sql.BigInt, value: orderId },
-    HospitalId: { type: sql.BigInt, value: hospitalId || null },
-  });
-
-  if (!lookup.recordset[0]) {
-    throw new Error('Lab order not found');
-  }
-
-  await query(`
-    UPDATE dbo.LabOrders
-    SET ${clauses.join(', ')}
-    WHERE Id = @OrderId
-      AND (@HospitalId IS NULL OR HospitalId = @HospitalId)
-  `, {
-    VerifiedBy: { type: sql.BigInt, value: approvedByUserId || null },
-    OrderId: { type: sql.BigInt, value: orderId },
-    HospitalId: { type: sql.BigInt, value: hospitalId || null },
-  });
-
-  return {
-    orderId,
-    orderNumber: lookup.recordset[0].OrderNumber,
-    patientName: lookup.recordset[0].PatientName,
-    approvedByName,
-    signatureText: settings.SignatureText || approvedByName,
-    signaturePreference: settings.SignaturePreference || 'NewPage',
-    signatureImagePath: settings.SignatureImagePath || null,
-  };
-}
-
-async function rejectLabTest(orderId, reason, rejectedByUserId, hospitalId) {
-  const schema = await getLabSchema();
-  const clauses = [
-    "Status = 'Processing'",
-    'VerifiedAt = NULL',
-    'VerifiedBy = NULL',
-    'UpdatedAt = SYSUTCDATETIME()',
-    'Notes = CONCAT(COALESCE(Notes, \'\'), CASE WHEN Notes IS NULL OR Notes = \'\' THEN \'\' ELSE CHAR(10) END, @ReasonNote)',
-  ];
-
-  if (schema.hasWorkflowStage) {
-    clauses.push("WorkflowStage = 'Processing'");
-  }
-  if (schema.hasRejectionReason) {
-    clauses.push('RejectionReason = @Reason');
-  }
-
-  return withTransaction(async (transaction) => {
-    const orderRequest = new sql.Request(transaction);
-    const orderUpdate = await orderRequest
-      .input('OrderId', sql.BigInt, orderId)
-      .input('HospitalId', sql.BigInt, hospitalId || null)
-      .input('Reason', sql.NVarChar(1000), reason)
-      .input('ReasonNote', sql.NVarChar(1100), `Rejected by lab incharge: ${reason}`)
-      .query(`
-        UPDATE dbo.LabOrders
-        SET ${clauses.join(', ')}
-        WHERE Id = @OrderId
-          AND (@HospitalId IS NULL OR HospitalId = @HospitalId)
-      `);
-
-    if (!orderUpdate.rowsAffected[0]) {
-      return {
-        success: false,
-        message: 'Lab order not found',
-      };
-    }
-
-    await new sql.Request(transaction)
-      .input('OrderId', sql.BigInt, orderId)
-      .query(`
-        UPDATE dbo.LabOrderItems
-        SET
-          Status = CASE WHEN Status = 'Completed' THEN 'Processing' ELSE Status END
-        WHERE LabOrderId = @OrderId
-      `);
-
-    await new sql.Request(transaction)
-      .input('OrderId', sql.BigInt, orderId)
-      .query(`
-        IF OBJECT_ID('dbo.LabSamples', 'U') IS NOT NULL
-        BEGIN
-          UPDATE ls
-          SET SampleStatus = 'Processing'
-          FROM dbo.LabSamples ls
-          JOIN dbo.LabOrderItems li ON li.Id = ls.LabOrderItemId
-          WHERE li.LabOrderId = @OrderId;
-        END
-      `);
-
-    return {
-      success: true,
-      message: 'Lab result rejected and sent back to processing.',
-    };
-  });
 }
 
 module.exports = {
   getLabTests,
-  addLabTest,
-  removeLabTest,
   createLabOrder,
   getLabOrders,
   getLabOrderById,
-  generateSampleId,
   updateOrderStatus,
   enterTestResult,
   getPatientLabResults,
+  generateSampleId,
   addLabAttachment,
   removeLabAttachment,
   getLabAttachments,
@@ -1342,7 +1237,10 @@ module.exports = {
   getLabAutofillRules,
   addLabAutofillRule,
   removeLabAutofillRule,
+  addLabTest,
+  removeLabTest,
   getPendingApprovalOrders,
+  getCompletedApprovalOrders,
   approveLabTest,
   rejectLabTest,
   getSignatureSettings,

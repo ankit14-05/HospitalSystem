@@ -1,718 +1,606 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import toast from 'react-hot-toast';
-import { useAuth } from '../../context/AuthContext';
-import api from '../../services/api';
-import { getList, getPayload } from '../../utils/apiPayload';
-import { buildServerFileUrl } from '../../utils/fileUrls';
-import ProcessSampleModal from '../../components/lab/ProcessSampleModal';
-import StatusUpdateModal from '../../components/lab/StatusUpdateModal';
-import TestDetailsModal from '../../components/lab/TestDetailsModal';
+import React, { useState, useEffect, useRef, useCallback } from "react";
+import { useAuth } from "../../context/AuthContext";
+import api from "../../services/api";
+import StatusUpdateModal from "../../components/lab/StatusUpdateModal";
+import TestDetailsModal from "../../components/lab/TestDetailsModal";
+import toast from "react-hot-toast";
 
-const ACCENT = '#0f766e';
+// ── Constants & Mock Data ───────────────────────────────────────────────────
 const ROWS_PER_PAGE = 5;
 
-/* ── Priority config ────────────────────────────────────────────── */
 const PRIORITY_CONFIG = {
-  High:   { label: 'High',   bg: '#FCEBEB', color: '#E24B4A', border: '#F09595' },
-  Normal: { label: 'Normal', bg: '#EAF3DE', color: '#3B6D11', border: '#BDDC9A' },
-  Medium: { label: 'Medium', bg: '#FAEEDA', color: '#854F0B', border: '#FAC775' },
-  Low:    { label: 'Low',    bg: '#E6F1FB', color: '#185FA5', border: '#A1C9F2' },
+  High: { label: "High", bg: "#FCEBEB", color: "#E24B4A", border: "#F09595" },
+  Normal: { label: "Normal", bg: "#EAF3DE", color: "#3B6D11", border: "#BDDC9A" },
+  Medium: { label: "Medium", bg: "#FAEEDA", color: "#854F0B", border: "#FAC775" },
+  Low: { label: "Low", bg: "#E6F1FB", color: "#185FA5", border: "#A1C9F2" },
 };
 
-/* ── Avatar palette ─────────────────────────────────────────────── */
 const AVATAR_PALETTE = [
-  { bg: '#E6F1FB', color: '#0C447C' },
-  { bg: '#EAF3DE', color: '#27500A' },
-  { bg: '#EEEDFE', color: '#3C3489' },
-  { bg: '#FAEEDA', color: '#633806' },
-  { bg: '#FAECE7', color: '#712B13' },
-  { bg: '#E1F5EE', color: '#085041' },
+  { bg: "#E6F1FB", color: "#0C447C" },
+  { bg: "#EAF3DE", color: "#27500A" },
+  { bg: "#EEEDFE", color: "#3C3489" },
+  { bg: "#FAEEDA", color: "#633806" },
+  { bg: "#FAECE7", color: "#712B13" },
+  { bg: "#E1F5EE", color: "#085041" },
 ];
 
-const getInitials = (name = '') =>
-  name.split(' ').filter(Boolean).map((p) => p[0].toUpperCase()).slice(0, 2).join('');
+const TEST_TYPES = [
+  "Complete Blood Count", "Lipid Profile", "HbA1c / Glucose",
+  "Thyroid Function Test", "Liver Function Test", "Urinalysis",
+];
 
-const getAvatarColor = (name = '') => {
-  let hash = 0;
-  for (const ch of name) hash = (hash * 31 + ch.charCodeAt(0)) % AVATAR_PALETTE.length;
-  return AVATAR_PALETTE[Math.abs(hash) % AVATAR_PALETTE.length];
-};
+// Real data will be fetched via API
 
-/* ── Helpers ────────────────────────────────────────────────────── */
-const formatDateTime = (value, fallback = 'Pending') => {
-  if (!value) return fallback;
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return fallback;
-  return d.toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-};
+// ── Helpers ────────────────────────────────────────────────────────────────
+function getInitials(name) {
+  return name.split(" ").filter(Boolean).map(p => p[0].toUpperCase()).slice(0, 2).join("");
+}
 
-const formatDate = (value, fallback = '—') => {
-  if (!value) return fallback;
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return fallback;
-  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-};
+function getAvatarColor(name) {
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) % AVATAR_PALETTE.length;
+  return AVATAR_PALETTE[Math.abs(h) % AVATAR_PALETTE.length];
+}
 
-const mapPriority = (value) => {
-  const v = String(value || '').toLowerCase();
-  if (v === 'stat') return 'High';
-  if (v === 'urgent') return 'Medium';
-  if (v === 'routine') return 'Normal';
-  return 'Low';
-};
-
-/* ── Tab → status mapping ───────────────────────────────────────── */
-// Pending   = backend status 'Pending'
-// Collected = backend status 'Processing' (sample collected, being processed)
-// Processing = backend status 'Completed' (results entered, awaiting Lab Head)
-const mapStatus = (row) => {
-  const rawStatus = String(row.Status || '').trim().toLowerCase();
-  const workflow  = String(row.WorkflowStage || '').trim().toLowerCase();
-
-  if (rawStatus === 'completed' || workflow === 'doctorreview' || workflow === 'reviewed' || workflow === 'released') {
-    return 'Processing'; // "Processing" tab = awaiting/done approval
-  }
-  if (['processing', 'samplecollected', 'sample collected'].includes(rawStatus)) {
-    return 'Collected';
-  }
-  return 'Pending';
-};
-
-const isApproved = (row) => {
-  const wf = String(row.WorkflowStage || row.workflowStage || '').toLowerCase();
-  return wf === 'released' || Boolean(row.VerifiedAt || row.verifiedAt || row.VerifiedAt);
-};
-
-const normalizeRow = (row = {}) => ({
-  id:           row.OrderNumber || `LAB-${row.LabOrderId || row.ItemId || '0000'}`,
-  itemId:       row.ItemId,
-  labOrderId:   row.LabOrderId,
-  patientName:  row.PatientName || 'Unknown Patient',
-  patientId:    row.UHID || row.PatientId || 'P-0000',
-  uhid:         row.UHID || row.PatientId || 'P-0000',
-  testType:     row.TestName || 'Lab Test',
-  priority:     mapPriority(row.Priority),
-  priorityRaw:  row.Priority || 'Routine',
-  sampleId:     row.SampleCode || `SMP-${row.ItemId || '0000'}`,
-  collectedDate:formatDateTime(row.CollectedAt || row.OrderCollectedAt || row.ReceivedAtLabAt, 'Awaiting collection'),
-  resultDate:   formatDate(row.ReportedAt || row.ProcessingCompletedAt, '—'),
-  assignedDate: formatDateTime(row.OrderDate, 'Today'),
-  status:       mapStatus(row),
-  approved:     isApproved(row),
-  criteria:     row.CriteriaText || row.ClinicalIndication || 'Standard lab protocol.',
-  additionalDetails: row.AdditionalDetails || row.DoctorInstructions || row.Notes || 'No additional notes.',
-  place:        'Indoor',
-  roomNo:       row.CollectionLocation || row.DepartmentName || 'Collection Desk',
-  location:     row.CollectionLocation || row.DepartmentName || 'Collection Desk',
-  resultValue:  row.ResultValue || '',
-  resultUnit:   row.ResultUnit || row.Unit || '',
-  normalRange:  row.NormalRange || '',
-  isAbnormal:   Boolean(row.IsAbnormal),
-  remarks:      row.Remarks || '',
-  technicianNote: row.TechnicianNotes || '',
-  hasResult:    Boolean(row.ResultValue || row.ReportedAt),
-});
-
-const emptyForm = {
-  barcodeValue: '', collectionLocation: '', technicianNote: '',
-  resultValue: '', resultUnit: '', normalRange: '',
-  isAbnormal: false, remarks: '', attachments: [],
-  collectionDate: '', resultDate: '',
-};
-
-/* ── SVG Icons ──────────────────────────────────────────────────── */
+// ── UI Components ──────────────────────────────────────────────────────────
 const Icons = {
-  Microscope: () => (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-      <path d="M6 18h12M12 6l3 5-3 3-3-5z"/><path d="M15 11l2 3"/><path d="M9 21v-5a3 3 0 0 1 3-3"/>
-    </svg>
-  ),
-  Clipboard: () => (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-      <rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
-      <path d="M9 12h6M9 16h4"/>
-    </svg>
-  ),
-  CheckCircle: () => (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-      <circle cx="12" cy="12" r="10"/><path d="M9 12l2 2 4-4"/>
-    </svg>
-  ),
-  Refresh: () => (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-      <path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
-    </svg>
-  ),
-  Bell: () => (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-      <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>
-    </svg>
-  ),
-  Search: () => (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-      <circle cx="6.5" cy="6.5" r="4.5"/><path d="M10.5 10.5l3 3"/>
-    </svg>
-  ),
-  Calendar: () => (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-      <rect x="1" y="2" width="14" height="13" rx="2"/><path d="M1 6h14M5 1v2M11 1v2"/>
-    </svg>
-  ),
-  ChevronDown: () => (
-    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-      <path d="M2 3.5l3 3 3-3"/>
-    </svg>
-  ),
-  ChevronLeft: () => (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-      <path d="M9 2L4 7l5 5"/>
-    </svg>
-  ),
-  ChevronRight: () => (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-      <path d="M5 2l5 5-5 5"/>
-    </svg>
-  ),
-  Plus: () => (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-      <path d="M7 2v10M2 7h10"/>
-    </svg>
-  ),
-  Eye: () => (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
-    </svg>
-  ),
-  PDF: () => (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-      <rect width="24" height="24" rx="5" fill="#fee2e2"/>
-      <text x="12" y="16" textAnchor="middle" fill="#b91c1c" fontSize="8" fontWeight="800">PDF</text>
-    </svg>
-  ),
-  FileOther: () => (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-      <rect width="24" height="24" rx="5" fill="#e0e7ff"/>
-      <text x="12" y="16" textAnchor="middle" fill="#4338ca" fontSize="7" fontWeight="800">FILE</text>
-    </svg>
-  ),
-  ShieldCheck: () => (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/>
-    </svg>
-  ),
+  Microscope: (props) => <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" {...props}><path d="M7 3l2 3-2 2-2-3z" /><path d="M9 6l2 3" /><path d="M3 15h12" /><path d="M9 10v5" /><path d="M6 15a3 3 0 0 1 3-3" /></svg>,
+  Clipboard: (props) => <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" {...props}><rect x="4" y="3" width="10" height="12" rx="1.5" /><path d="M7 3a2 2 0 0 1 4 0" /><path d="M7 9h4M7 12h2" /></svg>,
+  Check: (props) => <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" {...props}><circle cx="9" cy="9" r="6" /><path d="M6 9l2.5 2.5L12 6.5" /></svg>,
+  Refresh: (props) => <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" {...props}><path d="M9 3a6 6 0 1 1-4.24 1.76" /><path d="M9 3v3M9 3l2 2" /></svg>,
+  Search: (props) => <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" {...props}><circle cx="6.5" cy="6.5" r="4.5" /><path d="M10.5 10.5l3 3" /></svg>,
+  Calendar: (props) => <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" {...props}><rect x="1" y="2" width="14" height="13" rx="2" /><path d="M1 6h14M5 1v2M11 1v2" /></svg>,
+  ChevronDown: (props) => <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" {...props}><path d="M2 3.5l3 3 3-3" /></svg>,
+  ChevronLeft: (props) => <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" {...props}><path d="M9 2L4 7l5 5" /></svg>,
+  ChevronRight: (props) => <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" {...props}><path d="M5 2l5 5-5 5" /></svg>,
+  Eye: (props) => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>,
+  History: (props) => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path></svg>,
 };
 
-/* ── Metric Card ────────────────────────────────────────────────── */
-function MetricCard({ label, value, iconBg, iconColor, Icon, valueColor, loading }) {
+function MetricCard({ label, value, iconBg, Icon, valueColor, loading }) {
   return (
-    <div style={{ background: '#fff', border: '1px solid #e5e9ee', borderRadius: 14, padding: '18px 22px', display: 'flex', alignItems: 'center', gap: 16, flex: 1, minWidth: 180 }}>
-      <div style={{ width: 46, height: 46, borderRadius: 12, background: iconBg, color: iconColor, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+    <div style={{ background: "#fff", border: "0.5px solid #e0dfd8", borderRadius: 12, padding: "16px 20px", display: "flex", alignItems: "center", gap: 14, flex: 1, minWidth: 200 }}>
+      <div style={{ width: 42, height: 42, borderRadius: "50%", background: iconBg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
         <Icon />
       </div>
       <div>
-        <div style={{ fontSize: 12.5, color: '#8a95a3', marginBottom: 3 }}>{label}</div>
-        {loading
-          ? <div style={{ width: 44, height: 26, background: '#e8ede8', borderRadius: 6, animation: 'pulse 1.5s infinite' }} />
-          : <div style={{ fontSize: 28, fontWeight: 700, color: valueColor, lineHeight: 1 }}>{value}</div>
-        }
+        <div style={{ fontSize: 13, color: "#888780", marginBottom: 2 }}>{label}</div>
+        {loading ? (
+          <div style={{ width: 48, height: 28, background: "#e8ede8", borderRadius: 6, animation: "pulse 1.5s infinite" }} />
+        ) : (
+          <div style={{ fontSize: 26, fontWeight: 700, color: valueColor, lineHeight: 1 }}>{value}</div>
+        )}
       </div>
     </div>
   );
 }
 
-/* ═══════════════════════════════════════════════════════════════════
-   Main Dashboard
-═══════════════════════════════════════════════════════════════════ */
+// ── Main Dashboard Component ───────────────────────────────────────────────
 export default function LabTechnicianDashboard() {
   const { user } = useAuth();
+
+  // State
+  const [activeTab, setActiveTab] = useState("Pending");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [metricsLoading, setMetricsLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState({});
   const debounceRef = useRef(null);
 
-  const [activeTab,    setActiveTab]    = useState('Pending');
-  const [currentPage,  setCurrentPage]  = useState(1);
-  const [searchQuery,  setSearchQuery]  = useState('');
-  const [loading,      setLoading]      = useState(true);
-  const [saving,       setSaving]       = useState(false);
-  const [worklist,     setWorklist]     = useState([]);
+  const [labOrders, setLabOrders] = useState({ Pending: [], Processing: [], "Pending Approval": [], Completed: [] });
+  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [currentAssignment, setCurrentAssignment] = useState(null);
+  const [availableRooms, setAvailableRooms] = useState([]);
+  const [transferHistory, setTransferHistory] = useState({ open: false, data: [] });
 
-  // Process Sample modal (Pending → Collected)
-  const [processModal, setProcessModal] = useState({ open: false, testData: null });
-  const [processForm,  setProcessForm]  = useState({ collectionDate: '', nextStatus: 'Processing' });
+  // Modal State
+  const [modal, setModal] = useState({ open: false, currentStatus: "", nextStatus: "", testData: null });
 
-  // Upload Result modal (Collected → Processing/Completed)
-  const [uploadModal,  setUploadModal]  = useState({ open: false, testData: null });
-  const [uploadForm,   setUploadForm]   = useState(emptyForm);
-
-  // Full details modal
-  const [detailsModal, setDetailsModal] = useState({ open: false, testData: null, loading: false });
-
-  /* ── Load worklist ─────────────────────────────────────────────── */
-  const loadWorklist = useCallback(async () => {
-    setLoading(true);
+  const fetchOrders = useCallback(async () => {
     try {
-      const data = getList(await api.get('/reports/worklist', { params: { limit: 250 } }));
-      setWorklist(Array.isArray(data) ? data.map(normalizeRow) : []);
+      const data = await api.get(`/lab/orders?limit=100&date=${selectedDate}`);
+      if (data.success && data.orders) {
+        const sorted = { Pending: [], Processing: [], "Pending Approval": [], Completed: [] };
+        // Map backend schema to UI format
+        data.orders.forEach(order => {
+          // Normalize status
+          let stat = 'Pending';
+          if (order.Status === 'Processing') stat = 'Processing';
+          else if (order.Status === 'Pending Approval') stat = 'Pending Approval';
+          else if (order.Status === 'Completed') stat = 'Completed';
+
+          const mapped = {
+            id: order.OrderNumber,
+            patientName: order.PatientName,
+            patientId: order.UHID,
+            testType: order.TestName || "Lab Test",
+            priority: order.Priority === 'STAT' ? 'High' : order.Priority === 'Urgent' ? 'Medium' : 'Normal',
+            sampleId: order.SampleId || `SMP-${order.Id}`,
+            collectedDate: new Date(order.OrderDate).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short', hour12: true }),
+            resultDate: order.ReportedAt ? new Date(order.ReportedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short', hour12: true }) : "-",
+            status: stat,
+            raw: order
+          };
+          if (sorted[stat]) {
+            sorted[stat].push(mapped);
+          }
+        });
+        setLabOrders(sorted);
+      }
     } catch (err) {
-      setWorklist([]);
-      toast.error(err?.message || 'Could not load lab worklist');
+      console.error(err);
+      toast.error(`Failed to load lab queue: ${err.message || err.response?.data?.message || err}`);
     } finally {
-      setLoading(false);
+      setMetricsLoading(false);
+    }
+  }, [selectedDate]);
+
+  const fetchRoomsInfo = useCallback(async () => {
+    try {
+      const [assignRes, roomsRes] = await Promise.all([
+        api.get('/lab/my-assignment'),
+        api.get('/lab/rooms')
+      ]);
+      if (assignRes.success) setCurrentAssignment(assignRes.data);
+      if (roomsRes.success) setAvailableRooms(roomsRes.data);
+    } catch (err) {
+      console.error("Error fetching room info:", err);
     }
   }, []);
 
-  useEffect(() => { loadWorklist(); }, [loadWorklist]);
-  useEffect(() => () => clearTimeout(debounceRef.current), []);
+  const fetchTransferHistory = useCallback(async () => {
+    try {
+      const res = await api.get('/lab/my-transfers');
+      if (res.success) setTransferHistory(prev => ({ ...prev, data: res.data }));
+    } catch (err) {
+      console.error("Error fetching transfers:", err);
+    }
+  }, []);
 
-  /* ── Metrics ───────────────────────────────────────────────────── */
-  const metrics = useMemo(() => ({
-    total:      worklist.length,
-    pending:    worklist.filter((r) => r.status === 'Pending').length,
-    collected:  worklist.filter((r) => r.status === 'Collected').length,
-    processing: worklist.filter((r) => r.status === 'Processing').length,
-  }), [worklist]);
+  const handleRoomChange = async (roomId) => {
+    try {
+      const res = await api.post('/lab/assign-room', { roomId });
+      if (res.success) {
+        toast.success(res.message || "Room change requested");
+        fetchRoomsInfo();
+        fetchTransferHistory();
+      }
+    } catch (err) {
+      console.error("Error changing room:", err);
+      toast.error(err.message || "Failed to request room change");
+    }
+  };
 
-  /* ── Search + Tab filter ───────────────────────────────────────── */
-  const handleSearch = useCallback((value) => {
+  useEffect(() => {
+    fetchOrders();
+    fetchRoomsInfo();
+    fetchTransferHistory();
+  }, [fetchOrders, fetchRoomsInfo, fetchTransferHistory]);
+
+  const handleSearch = useCallback((val) => {
     clearTimeout(debounceRef.current);
-    debounceRef.current = window.setTimeout(() => {
-      setSearchQuery(value.trim().toLowerCase());
+    debounceRef.current = setTimeout(() => {
+      setSearchQuery(val.trim().toLowerCase());
       setCurrentPage(1);
-    }, 250);
+    }, 300);
   }, []);
 
   const handleTabClick = (tab) => {
     setActiveTab(tab);
     setCurrentPage(1);
-    setSearchQuery('');
-    const el = document.getElementById('lab-search-input');
-    if (el) el.value = '';
+    setSearchQuery("");
+    const searchInput = document.getElementById("lab-search-input");
+    if (searchInput) searchInput.value = "";
   };
 
-  const filteredData = useMemo(() => {
-    const bucket = worklist.filter((r) => r.status === activeTab);
-    if (!searchQuery) return bucket;
-    return bucket.filter((r) =>
-      [r.id, r.patientName, r.testType, r.sampleId, r.patientId]
-        .filter(Boolean)
-        .some((v) => String(v).toLowerCase().includes(searchQuery))
-    );
-  }, [activeTab, searchQuery, worklist]);
+  // Data Filtering & Pagination
+  const [detailsModal, setDetailsModal] = useState({ open: false, testData: null });
+
+  const samples = searchQuery 
+    ? [...labOrders.Pending, ...labOrders.Processing, ...labOrders.Completed]
+    : (labOrders[activeTab] || []);
+  
+  const filteredData = searchQuery
+    ? samples.filter(s => {
+      const q = searchQuery.toLowerCase();
+      return (
+        (s.id || '').toLowerCase().includes(q) ||
+        (s.raw?.Id?.toString() || '').includes(q) ||
+        (s.patientName || '').toLowerCase().includes(q) ||
+        (s.patientId || '').toLowerCase().includes(q) ||
+        (s.testType || '').toLowerCase().includes(q) ||
+        (s.sampleId || '').toLowerCase().includes(q)
+      );
+    })
+    : samples;
 
   const totalPages = Math.max(1, Math.ceil(filteredData.length / ROWS_PER_PAGE));
-  const safePage   = Math.min(Math.max(1, currentPage), totalPages);
-  const startIdx   = (safePage - 1) * ROWS_PER_PAGE;
-  const pageData   = filteredData.slice(startIdx, startIdx + ROWS_PER_PAGE);
-  const startItem  = filteredData.length === 0 ? 0 : startIdx + 1;
-  const endItem    = Math.min(startIdx + ROWS_PER_PAGE, filteredData.length);
+  const safePage = Math.min(Math.max(1, currentPage), totalPages);
+  const startIdx = (safePage - 1) * ROWS_PER_PAGE;
+  const pageData = filteredData.slice(startIdx, startIdx + ROWS_PER_PAGE);
+  const startItem = filteredData.length === 0 ? 0 : startIdx + 1;
+  const endItem = Math.min(startIdx + ROWS_PER_PAGE, filteredData.length);
 
-  /* ── Open "Process Sample" modal (Pending tab) ─────────────────── */
-  const openProcessModal = (row) => {
-    setProcessForm({ collectionDate: new Date().toISOString().slice(0, 10), nextStatus: 'Processing' });
-    setProcessModal({ open: true, testData: row });
-  };
+  // Actions
+  const handleActionClick = async (test) => {
+    let nextStatus = "";
+    let fetchedSampleId = "";
 
-  /* ── Submit: Pending → Collected (Processing in backend) ───────── */
-  const confirmProcess = async () => {
-    if (!processModal.testData?.itemId) return;
-    setSaving(true);
-    try {
-      await api.patch(`/reports/items/${processModal.testData.itemId}/collect`, {
-        collectionLocation: null,
-        technicianNote: null,
-        barcodeValue: null,
-      });
-      toast.success('Sample moved to Collected');
-      setProcessModal({ open: false, testData: null });
-      await loadWorklist();
-    } catch (err) {
-      toast.error(err?.message || 'Could not update sample');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  /* ── Open "Upload Result" modal (Collected tab) ────────────────── */
-  const openUploadModal = (row) => {
-    setUploadForm({
-      ...emptyForm,
-      resultValue: row.resultValue || '',
-      resultUnit:  row.resultUnit  || '',
-      normalRange: row.normalRange  || '',
-      isAbnormal:  Boolean(row.isAbnormal),
-      remarks:     row.remarks || '',
-      technicianNote: row.technicianNote || '',
-      resultDate: new Date().toISOString().slice(0, 10),
-    });
-    setUploadModal({ open: true, testData: row });
-  };
-
-  /* ── Submit: Collected → Processing (Completed in backend → Lab Head queue) */
-  const confirmUpload = async () => {
-    if (!uploadModal.testData?.itemId) return;
-    setSaving(true);
-    try {
-      await api.patch(`/reports/items/${uploadModal.testData.itemId}/result`, {
-        resultValue:    uploadForm.resultValue  || null,
-        resultUnit:     uploadForm.resultUnit   || null,
-        normalRange:    uploadForm.normalRange  || null,
-        isAbnormal:     uploadForm.isAbnormal,
-        remarks:        uploadForm.remarks      || null,
-        technicianNote: uploadForm.technicianNote || null,
-      });
-
-      if (Array.isArray(uploadForm.attachments) && uploadForm.attachments.length) {
-        const fd = new FormData();
-        fd.append('labOrderItemId', String(uploadModal.testData.itemId));
-        uploadForm.attachments.forEach((a) => {
-          if (a?.file) fd.append('files', a.file, a.file.name);
-        });
-        await api.post(`/reports/${uploadModal.testData.labOrderId}/attachments/files`, fd);
+    if (activeTab === "Pending") {
+      nextStatus = "Processing";
+      try {
+        const res = await api.get('/lab/next-sample-id');
+        if (res.success) fetchedSampleId = res.sampleId;
+      } catch (err) {
+        console.error("Failed to fetch next sample ID", err);
       }
+    } else if (activeTab === "Processing") {
+      nextStatus = "Pending Approval";
+    }
 
-      toast.success('Result uploaded — sent to Lab Head for approval');
-      setUploadModal({ open: false, testData: null });
-      setUploadForm(emptyForm);
-      await loadWorklist();
-    } catch (err) {
-      toast.error(err?.message || 'Could not upload result');
-    } finally {
-      setSaving(false);
+    if (nextStatus) {
+      setModal({
+        open: true,
+        currentStatus: activeTab,
+        nextStatus,
+        testData: {
+          id: test.raw.Id,
+          humanId: test.id,
+          test: test.testType,
+          patient: test.patientName,
+          uhid: test.patientId,
+          sampleId: fetchedSampleId || test.raw.SampleId
+        }
+      });
     }
   };
 
-  /* ── Open full details modal ───────────────────────────────────── */
-  const openDetailsModal = useCallback(async (row) => {
-    setDetailsModal({ open: true, testData: row, loading: true });
+  const handleViewDetails = async (row, autoDownload = false) => {
     try {
-      const payload = getPayload(await api.get(`/reports/items/${row.itemId}`)) || {};
-      const attachments = Array.isArray(payload.attachments)
-        ? payload.attachments.map((a) => ({
-            ...a,
-            url: buildServerFileUrl(a.StoragePath || a.storagePath),
-          }))
-        : [];
-      setDetailsModal({ open: true, loading: false, testData: { ...row, ...payload, attachments } });
-    } catch (err) {
-      toast.error(err?.message || 'Could not load details');
-      setDetailsModal({ open: true, testData: row, loading: false });
-    }
-  }, []);
+      toast.loading("Fetching details...", { id: "viewDetails" });
+      const res = await api.get(`/lab/orders/${row.raw.Id}`);
+      if (res.success) {
+        setDetailsModal({ open: true, testData: res.data });
+        toast.success("Details loaded", { id: "viewDetails" });
 
-  /* ── Table column config per tab ───────────────────────────────── */
+        // Direct Download Logic: If autoDownload is requested and attachments exist
+        if (autoDownload && res.data.attachments?.length > 0) {
+          const firstFile = res.data.attachments[0];
+          const baseUrl = import.meta.env.VITE_API_URL || "http://localhost:5000";
+          window.open(`${baseUrl}${firstFile.FilePath}`, "_blank");
+        }
+      } else {
+        throw new Error("Failed to fetch details");
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error("Error loading details", { id: "viewDetails" });
+    }
+  };
+
+  const confirmStatusUpdate = async () => {
+    try {
+      const orderId = modal.testData?.id;
+      if (!orderId) throw new Error("Missing Order ID");
+
+      toast.loading(`Updating status to ${modal.nextStatus}...`, { id: "statusUpdate" });
+
+      const res = await api.patch(`/lab/orders/${orderId}/status`, {
+        status: modal.nextStatus,
+        sampleId: modal.testData?.sampleId
+      });
+
+      if (res.success) {
+        toast.success(`Success! Order moved to ${modal.nextStatus}`, { id: "statusUpdate" });
+        setModal({ ...modal, open: false });
+        fetchOrders();
+      } else {
+        throw new Error(res.message || "Update failed");
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error(`Error! ${err.message || "Failed to update status"}`, { id: "statusUpdate" });
+    }
+  };
+
+  // Table Configuration Based on Tab
   const getTableConfig = () => {
-    if (activeTab === 'Pending') {
+    if (activeTab === "Pending") {
       return {
-        headers: ['TEST ID', 'PATIENT NAME', 'TEST TYPE', 'PRIORITY', 'SAMPLE ID', 'DATE OF SAMPLE COLLECTION', 'ACTIONS'],
-        widths:  ['100px', '1.4fr', '1.2fr', '90px', '110px', '1.2fr', '220px'],
+        headers: ["Test ID", "Patient", "Test Type", "Priority", "Assigned Date", "Actions"],
+        widths: ["110px", "200px", "200px", "90px", "1fr", "180px"]
+      };
+    } else if (activeTab === "Processing") {
+      return {
+        headers: ["Test ID", "Patient", "Test Type", "Sample ID", "Collection Time", "Actions"],
+        widths: ["110px", "200px", "200px", "170px", "1fr", "180px"]
+      };
+    } else {
+      return {
+        headers: ["Test ID", "Patient", "Test Type", "Sample ID", "Sent for Approval", "Actions"],
+        widths: ["110px", "200px", "200px", "170px", "1fr", "180px"]
       };
     }
-    if (activeTab === 'Collected') {
-      return {
-        headers: ['TEST ID', 'PATIENT NAME', 'TEST TYPE', 'PRIORITY', 'SAMPLE ID', 'DATE OF SAMPLE COLLECTION', 'DATE OF RESULT', 'TEST RESULT', 'ACTIONS'],
-        widths:  ['90px', '1.2fr', '1fr', '80px', '100px', '1fr', '90px', '80px', '200px'],
-      };
-    }
-    // Processing tab
-    return {
-      headers: ['TEST ID', 'PATIENT NAME', 'TEST TYPE', 'SAMPLE ID', 'DATE OF RESULT', 'STATUS', 'ACTIONS'],
-      widths:  ['100px', '1.4fr', '1.2fr', '110px', '100px', '120px', '180px'],
-    };
   };
 
   const { headers, widths } = getTableConfig();
-  const gridTemplate = widths.join(' ');
-
-  /* ── Tab labels ────────────────────────────────────────────────── */
-  const TABS = ['Pending', 'Collected', 'Processing'];
-  const TAB_COUNTS = {
-    Pending:    metrics.pending,
-    Collected:  metrics.collected,
-    Processing: metrics.processing,
-  };
+  const gridTemplate = widths.join(" ");
 
   return (
-    <div style={{ fontFamily: "'DM Sans','Segoe UI',sans-serif", background: '#f4f6f8', minHeight: '100vh', padding: '24px 28px', color: '#1a1a1a' }}>
+    <div style={{ fontFamily: "'DM Sans', 'Segoe UI', sans-serif", background: "#f5f4f0", minHeight: "100vh", padding: "24px 28px", color: "#1a1a1a" }}>
       <style>{`
-        @keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.5} }
-        .lt-tab:hover:not(.lt-tab-active){ background:#eeede8!important; }
-        .lt-row:hover{ background:#f8f7f3; }
-        .btn-primary{ background:${ACCENT};color:#fff;border:none;padding:7px 14px;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;transition:0.2s;white-space:nowrap; }
-        .btn-primary:hover{ background:#0a5f56; }
-        .btn-outline{ background:#fff;color:#1a1a1a;border:1.5px solid #d3d1c7;padding:7px 14px;border-radius:7px;font-size:13px;font-weight:500;cursor:pointer;transition:0.2s;white-space:nowrap; }
-        .btn-outline:hover{ background:#f3f4f6; }
-        .btn-icon{ background:none;border:none;cursor:pointer;color:#64748b;padding:5px;border-radius:6px;display:flex;align-items:center;justify-content:center;transition:0.2s; }
-        .btn-icon:hover{ background:#f1f5f9;color:#0f766e; }
+        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+        .tab-btn:hover:not(.tab-active) { background: #eeede8 !important; }
+        .row-hover:hover { background: #f8f7f3; }
+        .action-btn { background: #0f6e56; color: white; border: none; padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; transition: 0.2s; white-space: nowrap; }
+        .action-btn:hover { background: #0a4f3e; }
+        .view-btn { background: #fff; color: #1a1a1a; border: 1px solid #d3d1c7; padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; transition: 0.2s; white-space: nowrap; }
+        .view-btn:hover { background: #eeede8; }
       `}</style>
 
-      {/* ── Stat Cards ─────────────────────────────────────────────── */}
-      <div style={{ display: 'flex', gap: 14, marginBottom: 24, flexWrap: 'wrap' }}>
-        <MetricCard label="Total Samples"      value={metrics.total}      iconBg="#f0fdf4" iconColor={ACCENT}    Icon={Icons.Microscope}  valueColor="#1a1a1a" loading={loading} />
-        <MetricCard label="Pending Collection" value={metrics.pending}    iconBg="#fff7ed" iconColor="#d97706"   Icon={Icons.Clipboard}   valueColor="#d97706" loading={loading} />
-        <MetricCard label="Collected Today"    value={metrics.collected}  iconBg="#f0fdf4" iconColor={ACCENT}    Icon={Icons.CheckCircle} valueColor={ACCENT}  loading={loading} />
-        <MetricCard label="Processing"         value={metrics.processing} iconBg="#eff6ff" iconColor="#2563eb"   Icon={Icons.Refresh}     valueColor="#2563eb" loading={loading} />
+      {/* Current Room Session */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24, gap: 16, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 14px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, color: "#475569" }}>
+            <Icons.Microscope style={{ stroke: "#475569" }} />
+            <div style={{ display: "flex", flexDirection: "column" }}>
+              <span style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, opacity: 0.7 }}>Current Station</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <select 
+                  value={currentAssignment?.RoomId || ""} 
+                  onChange={(e) => handleRoomChange(e.target.value)}
+                  disabled={transferHistory.data.length > 0 && transferHistory.data[0].Status === 'Pending'}
+                  style={{ 
+                    border: "none", 
+                    background: "transparent", 
+                    fontSize: 13, 
+                    fontWeight: 600, 
+                    color: "#1e293b", 
+                    outline: "none",
+                    cursor: transferHistory.data.length > 0 && transferHistory.data[0].Status === 'Pending' ? "not-allowed" : "pointer",
+                    padding: 0,
+                    margin: 0,
+                    opacity: transferHistory.data.length > 0 && transferHistory.data[0].Status === 'Pending' ? 0.6 : 1
+                  }}
+                >
+                  <option value="" disabled>Select Room</option>
+                  {availableRooms.map(r => (
+                    <option key={r.Id} value={r.Id}>{r.RoomNo} - {r.RoomType}</option>
+                  ))}
+                </select>
+                {transferHistory.data.length > 0 && transferHistory.data[0].Status === 'Pending' && (
+                  <span style={{ fontSize: 10, background: "#fef3c7", color: "#92400e", padding: "2px 6px", borderRadius: 4, fontWeight: 700, whiteSpace: "nowrap" }}>
+                    PENDING APPROVAL
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+          <button 
+            onClick={() => { fetchTransferHistory(); setTransferHistory(prev => ({ ...prev, open: true })); }}
+            style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px", display: "flex", alignItems: "center", cursor: "pointer", color: "#64748b" }}
+            title="Transfer History"
+          >
+            <Icons.History />
+          </button>
+        </div>
       </div>
 
-      {/* ── Table Card ─────────────────────────────────────────────── */}
-      <div style={{ background: '#fff', border: '1px solid #e5e9ee', borderRadius: 16, overflow: 'hidden' }}>
+      {/* Metrics Row */}
+      <div style={{ display: "flex", gap: 14, marginBottom: 24, flexWrap: "wrap" }}>
+        <MetricCard label="Total Samples" value={labOrders.Pending.length + labOrders.Processing.length + (labOrders['Pending Approval']?.length || 0) + labOrders.Completed.length} iconBg="#0D1F0D" Icon={Icons.Microscope} valueColor="#1a1a1a" loading={metricsLoading} />
+        <MetricCard label="Pending Collection" value={labOrders.Pending.length} iconBg="#BA7517" Icon={Icons.Clipboard} valueColor="#BA7517" loading={metricsLoading} />
+        <MetricCard label="In Processing" value={labOrders.Processing.length} iconBg="#185FA5" Icon={Icons.Refresh} valueColor="#185FA5" loading={metricsLoading} />
+        <MetricCard label="Sent for Approval" value={labOrders['Pending Approval']?.length || 0} iconBg="#6d28d9" Icon={Icons.Check} valueColor="#6d28d9" loading={metricsLoading} />
+        <MetricCard label="Completed Today" value={labOrders.Completed.length} iconBg="#0f6e56" Icon={Icons.Check} valueColor="#0f6e56" loading={metricsLoading} />
+      </div>
 
-        {/* Toolbar */}
-        <div style={{ padding: '14px 20px', display: 'flex', alignItems: 'center', gap: 12, borderBottom: '1px solid #f0efe9', background: '#fafaf7', flexWrap: 'wrap' }}>
-          {/* Tabs */}
-          <div style={{ display: 'flex', gap: 3, background: '#eeede8', padding: 4, borderRadius: 10 }}>
-            {TABS.map((tab) => (
+      <div style={{ background: "#fff", border: "1px solid #e0dfd8", borderRadius: 16, overflow: "hidden" }}>
+
+        {/* Controls Bar */}
+        <div style={{ padding: "16px 20px", display: "flex", alignItems: "center", gap: 16, borderBottom: "1px solid #f0efe9", flexWrap: "wrap", background: "#fafaf7" }}>
+
+          <div style={{ display: "flex", gap: 4, background: "#eeede8", padding: 4, borderRadius: 10 }}>
+            {["Pending", "Processing", "Pending Approval", "Completed"].map((tab) => (
               <button
                 key={tab}
-                className={`lt-tab${activeTab === tab ? ' lt-tab-active' : ''}`}
+                className={`tab-btn${activeTab === tab ? " tab-active" : ""}`}
                 onClick={() => handleTabClick(tab)}
                 style={{
-                  background: activeTab === tab ? '#fff' : 'transparent',
-                  border: 'none', borderRadius: 7,
-                  padding: '6px 14px',
-                  cursor: 'pointer',
-                  fontSize: 13,
-                  fontWeight: activeTab === tab ? 700 : 500,
-                  color: activeTab === tab ? '#1a1a1a' : '#5f5e5a',
-                  boxShadow: activeTab === tab ? '0 1px 4px rgba(0,0,0,0.07)' : 'none',
-                  transition: 'all 0.18s',
-                  display: 'flex', alignItems: 'center', gap: 6,
+                  background: activeTab === tab ? "#fff" : "transparent",
+                  border: "none", borderRadius: 6, padding: "6px 16px", cursor: "pointer",
+                  fontSize: 13, fontWeight: activeTab === tab ? 600 : 500,
+                  color: activeTab === tab ? "#1a1a1a" : "#5f5e5a",
+                  boxShadow: activeTab === tab ? "0 2px 4px rgba(0,0,0,0.05)" : "none",
+                  transition: "all 0.2s"
                 }}
               >
                 {tab}
-                {TAB_COUNTS[tab] > 0 && (
-                  <span style={{
-                    background: activeTab === tab ? ACCENT : '#d1d5db',
-                    color: activeTab === tab ? '#fff' : '#374151',
-                    borderRadius: 100, fontSize: 10, fontWeight: 700,
-                    padding: '1px 6px', lineHeight: 1.6,
-                  }}>
-                    {TAB_COUNTS[tab]}
-                  </span>
-                )}
               </button>
             ))}
           </div>
 
-          {/* Date Range */}
-          <button style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '7px 12px', border: '1px solid #d3d1c7', borderRadius: 8, background: '#fff', fontSize: 13, color: '#5f5e5a', cursor: 'pointer' }}>
-            <Icons.Calendar /> Date Range: Today <Icons.ChevronDown />
-          </button>
-
-          {/* Search */}
-          <div style={{ position: 'relative', flex: 1, minWidth: 180 }}>
-            <span style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', color: '#b4b2a9' }}><Icons.Search /></span>
+          <div style={{ position: "relative", display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", background: "#fff", border: "1px solid #d3d1c7", borderRadius: 8, fontSize: 13, color: "#1a1a1a", minWidth: 150 }}>
+            <Icons.Calendar style={{ color: "#64748b" }} />
             <input
-              id="lab-search-input"
-              type="text"
-              placeholder="Search samples..."
-              onChange={(e) => handleSearch(e.target.value)}
-              style={{ width: '100%', padding: '8px 12px 8px 32px', border: '1px solid #d3d1c7', borderRadius: 8, fontSize: 13, outline: 'none', boxSizing: 'border-box' }}
+              type="date"
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              style={{
+                border: "none",
+                outline: "none",
+                fontSize: 13,
+                fontFamily: "inherit",
+                color: "inherit",
+                background: "transparent",
+                width: "100%",
+                cursor: "pointer"
+              }}
             />
           </div>
 
-          {/* New Sample */}
-          <button
-            className="btn-primary"
-            style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '8px 16px', fontSize: 13 }}
-          >
-            <Icons.Plus /> New Sample
-          </button>
+          <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
+            <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "#b4b2a9" }}><Icons.Search /></span>
+            <input
+              id="lab-search-input"
+              type="text"
+              placeholder="Search by ID, name, or test..."
+              onChange={(e) => handleSearch(e.target.value)}
+              style={{ width: "100%", padding: "8px 12px 8px 36px", border: "1px solid #d3d1c7", borderRadius: 8, fontSize: 13, outline: "none" }}
+            />
+          </div>
+
         </div>
 
-        {/* Table header */}
-        <div style={{ display: 'grid', gridTemplateColumns: gridTemplate, padding: '11px 20px', borderBottom: '1px solid #e5e9ee', background: '#f8f9fb', gap: 10 }}>
-          {headers.map((h) => (
-            <div key={h} style={{ fontSize: 11, fontWeight: 700, color: '#7c8898', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{h}</div>
-          ))}
+        {/* Table View */}
+        <div style={{ overflowX: "auto" }}>
+          <div style={{ display: "grid", gridTemplateColumns: gridTemplate, padding: "12px 20px", borderBottom: "1px solid #e0dfd8", background: "#fff", gap: 12 }}>
+            {headers.map((h, i) => <div key={i} style={{ fontSize: 12, fontWeight: 700, color: "#888780", textTransform: "uppercase", letterSpacing: "0.05em" }}>{h}</div>)}
+          </div>
+
+          {pageData.length === 0 ? (
+            <div style={{ padding: "60px 20px", textAlign: "center", color: "#888780", fontSize: 14 }}>
+              No records found.
+            </div>
+          ) : (
+            pageData.map((row) => {
+              const av = getAvatarColor(row.patientName);
+              const pc = PRIORITY_CONFIG[row.priority] || PRIORITY_CONFIG.Normal;
+
+              return (
+                <div key={row.id} className="row-hover" style={{ display: "grid", gridTemplateColumns: gridTemplate, padding: "12px 20px", borderBottom: "1px solid #f0efe9", alignItems: "center", gap: 12, transition: "background 0.2s" }}>
+
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "#1a1a1a" }}>{row.id}</div>
+
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                    <div style={{ width: 32, height: 32, borderRadius: "50%", background: av.bg, color: av.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
+                      {getInitials(row.patientName)}
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: "#1a1a1a", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{row.patientName}</div>
+                      <div style={{ fontSize: 11, color: "#888780" }}>{row.patientId}</div>
+                    </div>
+                  </div>
+
+                  <div style={{ fontSize: 13, color: "#5f5e5a", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{row.testType}</div>
+
+                  {row.status === "Pending" && (
+                    <div><span style={{ background: pc.bg, color: pc.color, border: `1px solid ${pc.border}`, padding: "3px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600 }}>{pc.label}</span></div>
+                  )}
+                  
+                  {row.status !== "Pending" && (
+                    <div style={{ fontSize: 13, color: "#1a1a1a", fontWeight: 500 }}>{row.sampleId}</div>
+                  )}
+
+                  {row.status === "Pending" ? (
+                    <div style={{ fontSize: 13, color: "#5f5e5a" }}>{row.collectedDate}</div>
+                  ) : row.status === "Processing" ? (
+                    <div style={{ fontSize: 13, color: "#5f5e5a" }}>{row.collectedDate}</div>
+                  ) : (
+                    <div style={{ fontSize: 13, color: "#5f5e5a" }}>{row.resultDate}</div>
+                  )}
+
+                  <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                    <button onClick={() => handleViewDetails(row)} style={{ background: "none", border: "none", cursor: "pointer", color: "#64748b", padding: "6px" }} title="View Details">
+                      <Icons.Eye />
+                    </button>
+                    {row.status === "Pending" && <button className="action-btn" onClick={() => handleActionClick(row)}>Collect Sample</button>}
+                    {row.status === "Processing" && <button className="action-btn" style={{ background: "#185FA5" }} onClick={() => handleActionClick(row)}>Upload Result</button>}
+                    {row.status === "Completed" && <button className="view-btn" onClick={() => handleViewDetails(row, true)}>Download Result</button>}
+                  </div>
+                </div>
+              );
+            })
+          )}
         </div>
-
-        {/* Table body */}
-        {loading ? (
-          <div style={{ padding: '60px 20px', textAlign: 'center', color: '#888780', fontSize: 14 }}>Loading records...</div>
-        ) : pageData.length === 0 ? (
-          <div style={{ padding: '60px 20px', textAlign: 'center', color: '#888780', fontSize: 14 }}>No records found.</div>
-        ) : (
-          pageData.map((row) => {
-            const avatar   = getAvatarColor(row.patientName);
-            const priority = PRIORITY_CONFIG[row.priority] || PRIORITY_CONFIG.Normal;
-
-            return (
-              <div key={row.itemId} className="lt-row" style={{ display: 'grid', gridTemplateColumns: gridTemplate, padding: '12px 20px', borderBottom: '1px solid #f0efe9', alignItems: 'center', gap: 10, transition: 'background 0.15s' }}>
-
-                {/* Test ID */}
-                <div style={{ fontSize: 13, fontWeight: 600, color: '#1a1a1a' }}>{row.id}</div>
-
-                {/* Patient */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
-                  <div style={{ width: 32, height: 32, borderRadius: '50%', background: avatar.bg, color: avatar.color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
-                    {getInitials(row.patientName)}
-                  </div>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: '#1a1a1a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.patientName}</div>
-                    <div style={{ fontSize: 11, color: '#888780' }}>{row.patientId}</div>
-                  </div>
-                </div>
-
-                {/* Test Type */}
-                <div style={{ fontSize: 13, color: '#4a5568', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.testType}</div>
-
-                {/* Priority */}
-                <div>
-                  <span style={{ background: priority.bg, color: priority.color, border: `1px solid ${priority.border}`, padding: '3px 9px', borderRadius: 6, fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap' }}>
-                    {priority.label}
-                  </span>
-                </div>
-
-                {/* Sample ID */}
-                <div style={{ fontSize: 12.5, color: '#4a5568', fontFamily: 'monospace', fontWeight: 500 }}>{row.sampleId}</div>
-
-                {/* Date of Sample Collection */}
-                <div style={{ fontSize: 12.5, color: '#5f5e5a' }}>{row.collectedDate}</div>
-
-                {/* Collected tab extra columns */}
-                {activeTab === 'Collected' && (
-                  <>
-                    <div style={{ fontSize: 12.5, color: '#5f5e5a' }}>{row.resultDate}</div>
-                    <div style={{ display: 'flex', alignItems: 'center' }}>
-                      {row.hasResult ? <Icons.PDF /> : <Icons.FileOther />}
-                    </div>
-                  </>
-                )}
-
-                {/* Processing tab extra columns */}
-                {activeTab === 'Processing' && (
-                  <>
-                    <div style={{ fontSize: 12.5, color: '#5f5e5a' }}>{row.resultDate}</div>
-                    <div>
-                      {row.approved ? (
-                        <span style={{ background: '#d1fae5', color: '#065f46', border: '1px solid #6ee7b7', padding: '3px 9px', borderRadius: 6, fontSize: 11, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                          <Icons.ShieldCheck /> Signed
-                        </span>
-                      ) : (
-                        <span style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fcd34d', padding: '3px 9px', borderRadius: 6, fontSize: 11, fontWeight: 600 }}>
-                          Awaiting Sign
-                        </span>
-                      )}
-                    </div>
-                  </>
-                )}
-
-                {/* Actions */}
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  {activeTab === 'Pending' && (
-                    <>
-                      <button className="btn-primary" onClick={() => openProcessModal(row)} style={{ fontSize: 12, padding: '6px 12px' }}>
-                        Process Sample
-                      </button>
-                      <button className="btn-outline" onClick={() => openDetailsModal(row)} style={{ fontSize: 12, padding: '6px 12px' }}>
-                        Check Full Details
-                      </button>
-                    </>
-                  )}
-                  {activeTab === 'Collected' && (
-                    <>
-                      <button className="btn-outline" onClick={() => openUploadModal(row)} style={{ fontSize: 12, padding: '6px 12px' }}>
-                        Edit
-                      </button>
-                      <button className="btn-primary" onClick={() => openDetailsModal(row)} style={{ fontSize: 12, padding: '6px 12px' }}>
-                        Check Full Details
-                      </button>
-                    </>
-                  )}
-                  {activeTab === 'Processing' && (
-                    <>
-                      <button className="btn-icon" onClick={() => openDetailsModal(row)} title="View details">
-                        <Icons.Eye />
-                      </button>
-                      <button className="btn-outline" onClick={() => openDetailsModal(row)} style={{ fontSize: 12, padding: '6px 12px' }}>
-                        {row.approved ? 'Download Report' : 'View Details'}
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-            );
-          })
-        )}
 
         {/* Pagination */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 20px', borderTop: '1px solid #e5e9ee', background: '#fafaf7' }}>
-          <div style={{ fontSize: 13, color: '#888780' }}>
-            {filteredData.length === 0
-              ? 'No samples'
-              : `Showing ${startItem} to ${endItem} of ${filteredData.length} samples`}
-          </div>
-          <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
-            <button
-              disabled={safePage <= 1}
-              onClick={() => setCurrentPage((p) => p - 1)}
-              style={{ width: 30, height: 30, borderRadius: 6, background: '#fff', border: '1px solid #d3d1c7', cursor: safePage <= 1 ? 'not-allowed' : 'pointer', opacity: safePage <= 1 ? 0.45 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-            >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 20px", borderTop: "1px solid #e0dfd8", background: "#fafaf7" }}>
+          <div style={{ fontSize: 13, color: "#888780" }}>Showing {startItem} to {endItem} of {filteredData.length} entries</div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button disabled={safePage <= 1} onClick={() => setCurrentPage(p => p - 1)} style={{ padding: "6px 10px", borderRadius: 6, background: "#fff", border: "1px solid #d3d1c7", cursor: safePage <= 1 ? "not-allowed" : "pointer", opacity: safePage <= 1 ? 0.5 : 1 }}>
               <Icons.ChevronLeft />
             </button>
-            {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => i + 1).map((pg) => (
-              <button
-                key={pg}
-                onClick={() => setCurrentPage(pg)}
-                style={{
-                  width: 30, height: 30, borderRadius: 6,
-                  background: safePage === pg ? ACCENT : '#fff',
-                  border: `1px solid ${safePage === pg ? ACCENT : '#d3d1c7'}`,
-                  color: safePage === pg ? '#fff' : '#1a1a1a',
-                  fontWeight: safePage === pg ? 700 : 400,
-                  cursor: 'pointer', fontSize: 13,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}
-              >
-                {pg}
-              </button>
-            ))}
-            <button
-              disabled={safePage >= totalPages}
-              onClick={() => setCurrentPage((p) => p + 1)}
-              style={{ width: 30, height: 30, borderRadius: 6, background: '#fff', border: '1px solid #d3d1c7', cursor: safePage >= totalPages ? 'not-allowed' : 'pointer', opacity: safePage >= totalPages ? 0.45 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-            >
+            <span style={{ padding: "6px 12px", fontSize: 13, fontWeight: 600, color: "#1a1a1a" }}>{safePage} / {totalPages}</span>
+            <button disabled={safePage >= totalPages} onClick={() => setCurrentPage(p => p + 1)} style={{ padding: "6px 10px", borderRadius: 6, background: "#fff", border: "1px solid #d3d1c7", cursor: safePage >= totalPages ? "not-allowed" : "pointer", opacity: safePage >= totalPages ? 0.5 : 1 }}>
               <Icons.ChevronRight />
             </button>
           </div>
         </div>
+
       </div>
 
-      {/* ── Modals ─────────────────────────────────────────────────── */}
-
-      {/* Process Sample (Pending → Collected) */}
-      <ProcessSampleModal
-        isOpen={processModal.open}
-        testData={processModal.testData}
-        form={processForm}
-        setForm={setProcessForm}
-        saving={saving}
-        onClose={() => setProcessModal({ open: false, testData: null })}
-        onConfirm={confirmProcess}
-      />
-
-      {/* Finalize / Upload Result (Collected → Processing) */}
-      <StatusUpdateModal
-        isOpen={uploadModal.open}
-        mode="upload"
-        testData={uploadModal.testData}
-        currentStatus="Collected"
-        nextStatus="Completed"
-        form={uploadForm}
-        setForm={setUploadForm}
-        saving={saving}
-        onClose={() => { setUploadModal({ open: false, testData: null }); setUploadForm(emptyForm); }}
-        onConfirm={confirmUpload}
-        accent={ACCENT}
-      />
-
-      {/* Full Details */}
       {detailsModal.open && (
-        <TestDetailsModal
-          test={detailsModal.testData}
-          loading={detailsModal.loading}
-          onClose={() => setDetailsModal({ open: false, testData: null, loading: false })}
-          accent={ACCENT}
+        <TestDetailsModal test={detailsModal.testData} onClose={() => setDetailsModal({ open: false, testData: null })} />
+      )}
+
+      <StatusUpdateModal
+        isOpen={modal.open}
+        onClose={() => setModal({ ...modal, open: false })}
+        currentStatus={modal.currentStatus}
+        nextStatus={modal.nextStatus}
+        testData={modal.testData}
+        onConfirm={confirmStatusUpdate}
+      />
+
+      {transferHistory.open && (
+        <TransferHistoryModal 
+          data={transferHistory.data} 
+          onClose={() => setTransferHistory(prev => ({ ...prev, open: false }))} 
         />
       )}
+    </div>
+  );
+}
+
+function TransferHistoryModal({ data, onClose }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20 }}>
+      <div style={{ background: "#fff", borderRadius: 16, width: "100%", maxWidth: 600, maxHeight: "80vh", display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 20px 25px -5px rgba(0,0,0,0.1)" }}>
+        <div style={{ padding: "20px 24px", borderBottom: "1px solid #f0efe9", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "#1a1a1a" }}>Transfer & Duty History</h3>
+            <p style={{ margin: "4px 0 0 0", fontSize: 13, color: "#5f5e5a" }}>Historical room assignments and formal transfers</p>
+          </div>
+          <button onClick={onClose} style={{ background: "#f5f4f0", border: "none", width: 32, height: 32, borderRadius: "50%", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#888780" }}>✕</button>
+        </div>
+        
+        <div style={{ padding: 24, overflowY: "auto", flex: 1 }}>
+          {data.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "40px 0", color: "#888780" }}>No transfer history found.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              {data.map((item, idx) => (
+                <div key={item.Id} style={{ display: "flex", gap: 16, position: "relative" }}>
+                  {idx !== data.length - 1 && <div style={{ position: "absolute", left: 15, top: 32, bottom: -16, width: 2, background: "#f0efe9" }} />}
+                  <div style={{ width: 32, height: 32, borderRadius: "50%", background: item.Status === 'Active' ? "#ebf5f1" : "#f5f4f0", color: item.Status === 'Active' ? "#0f6e56" : "#888780", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, zIndex: 1 }}>
+                    {data.length - idx}
+                  </div>
+                  <div style={{ flex: 1, paddingBottom: 8 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: "#1a1a1a" }}>{item.RoomNo} ({item.RoomType})</span>
+                      <span style={{ fontSize: 12, color: "#888780" }}>{new Date(item.AssignedAt).toLocaleDateString()}</span>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
+                      <span style={{ fontSize: 11, padding: "2px 6px", borderRadius: 4, background: item.Status === 'Active' ? "#ebf5f1" : "#f1f1f1", color: item.Status === 'Active' ? "#0f6e56" : "#666", fontWeight: 600, textTransform: "uppercase" }}>
+                        {item.AssignmentType || 'Shift Duty'}
+                      </span>
+                      {item.Status === 'Active' && <span style={{ fontSize: 11, color: "#0f6e56", fontWeight: 500 }}>• Currently Active</span>}
+                    </div>
+                    {item.Notes && <p style={{ margin: 0, fontSize: 12, color: "#5f5e5a", fontStyle: "italic", background: "#fafafa", padding: "8px 12px", borderRadius: 6, border: "1px solid #f0f0f0" }}>"{item.Notes}"</p>}
+                    <div style={{ marginTop: 6, fontSize: 11, color: "#b4b2a9" }}>Assigned by {item.AssignedByAdmin}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        
+        <div style={{ padding: "16px 24px", borderTop: "1px solid #f0efe9", display: "flex", justifyContent: "flex-end" }}>
+          <button className="view-btn" onClick={onClose}>Close</button>
+        </div>
+      </div>
     </div>
   );
 }

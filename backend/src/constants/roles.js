@@ -5,7 +5,6 @@ const ROLE_ALIASES = {
   opd_manager: 'opdmanager',
   'lab incharge': 'lab_incharge',
   lab_incharge: 'lab_incharge',
-  labincharge: 'lab_incharge',
 };
 
 const normalizeRole = (value) => {

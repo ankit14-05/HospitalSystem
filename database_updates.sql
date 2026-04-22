@@ -1,4 +1,4 @@
-USE [Hospital_Database]
+USE [HospitalDB]
 GO
 
 SET ANSI_NULLS ON

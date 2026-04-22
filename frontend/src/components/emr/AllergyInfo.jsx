@@ -1,66 +1,34 @@
+import React, { useState, useEffect } from "react";
 import { Icon, S } from "./shared";
-
-const DRUG_ALLERGIES = [
-  {
-    name: "Penicillin",
-    label: "Critical allergy",
-    severity: "SEVERE - Anaphylaxis",
-    severityBg: "#dc2626", severityColor: "#fff",
-    confirmed: "Confirmed: 2020",
-    bg: "#fef2f2", border: "#fecaca",
-    critical: true,
-  },
-  {
-    name: "Sulfa Drugs",
-    label: null,
-    severity: "MODERATE - Skin Rash",
-    severityBg: "#f97316", severityColor: "#fff",
-    confirmed: "Confirmed: 2018",
-    bg: "#fffbeb", border: "#fde68a",
-    critical: false,
-  },
-];
-
-const FOOD_ALLERGIES = [
-  {
-    name: "Shellfish",
-    severity: "MILD - Hives",
-    severityBg: "#fef08a", severityColor: "#854d0e",
-    confirmed: "Confirmed: 2019",
-    bg: "#fefce8", border: "#fde68a",
-  },
-];
-
-const ENV_ALLERGIES = [
-  {
-    name: "Dust Mites",
-    severity: "MILD - Respiratory symptoms",
-    severityBg: "#dbeafe", severityColor: "#1e40af",
-    confirmed: "Self-reported",
-    bg: "#eff6ff", border: "#bfdbfe",
-  },
-];
+import api from "../../services/api";
+import toast from "react-hot-toast";
 
 function AllergyCard({ item }) {
+  const isCritical = item.Severity === 'Severe' || item.IsCritical;
+  const bg = isCritical ? "#fef2f2" : item.Severity === 'Moderate' ? "#fffbeb" : "#eff6ff";
+  const border = isCritical ? "#fecaca" : item.Severity === 'Moderate' ? "#fde68a" : "#bfdbfe";
+  const severityBg = isCritical ? "#dc2626" : item.Severity === 'Moderate' ? "#f97316" : "#3b82f6";
+
   return (
-    <div style={{ background: item.bg, border: `1px solid ${item.border}`, borderRadius: 10, padding: "14px 18px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+    <div style={{ background: bg, border: `1px solid ${border}`, borderRadius: 10, padding: "14px 18px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
       <div>
-        <div style={{ fontSize: 15, fontWeight: 700, color: "#111827", marginBottom: 4 }}>{item.name}</div>
-        {item.critical && (
+        <div style={{ fontSize: 15, fontWeight: 700, color: "#111827", marginBottom: 4 }}>{item.AllergyName}</div>
+        {isCritical && (
           <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "#dc2626", fontWeight: 500 }}>
             <Icon.Alert size={13} /> Critical allergy
           </div>
         )}
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-        <span style={{ background: item.severityBg, color: item.severityColor, fontSize: 12, fontWeight: 700, padding: "4px 12px", borderRadius: 20 }}>{item.severity}</span>
-        <span style={{ fontSize: 13, color: "#6b7280" }}>{item.confirmed}</span>
+        <span style={{ background: severityBg, color: "#fff", fontSize: 12, fontWeight: 700, padding: "4px 12px", borderRadius: 20 }}>{item.Severity}</span>
+        <span style={{ fontSize: 13, color: "#6b7280" }}>{item.Reaction || 'No reaction notes'}</span>
       </div>
     </div>
   );
 }
 
 function Section({ title, icon, children }) {
+  if (React.Children.count(children) === 0) return null;
   return (
     <div style={{ marginBottom: 24 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
@@ -72,15 +40,49 @@ function Section({ title, icon, children }) {
   );
 }
 
-export default function AllergyInfo() {
+export default function AllergyInfo({ patientId }) {
+  const [allergies, setAllergies] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!patientId) return;
+
+    const fetchAllergies = async () => {
+      setLoading(true);
+      try {
+        const res = await api.get(`/emr/${patientId}/allergies`);
+        setAllergies(res.data?.data || res.data || []);
+      } catch (err) {
+        toast.error("Failed to load allergies");
+        console.error(err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchAllergies();
+  }, [patientId]);
+
+  const drugAllergies = allergies.filter(a => (a.Category || a.AllergyType)?.toLowerCase() === 'drug');
+  const foodAllergies = allergies.filter(a => (a.Category || a.AllergyType)?.toLowerCase() === 'food');
+  const envAllergies = allergies.filter(a => !['drug', 'food'].includes((a.Category || a.AllergyType)?.toLowerCase()));
+
+  if (loading) {
+    return (
+      <div style={{ ...S.card, marginTop: 20, textAlign: 'center', padding: '40px' }}>
+        <div className="spinner w-6 h-6 mx-auto border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+        <p style={{ marginTop: 12, color: '#6b7280', fontSize: 13 }}>Loading allergies...</p>
+      </div>
+    );
+  }
+
   return (
     <div style={{ ...S.card, marginTop: 20 }}>
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>Your Allergies</h2>
+          <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>Allergy Records</h2>
           <div style={{ color: "#dc2626" }}><Icon.Alert size={18} /></div>
-          <span style={{ fontSize: 11, fontWeight: 700, color: "#9ca3af", letterSpacing: 1 }}>SECTION HEADER</span>
         </div>
         <button style={S.btn.outline}><Icon.Plus /> Report New Allergy</button>
       </div>
@@ -89,21 +91,29 @@ export default function AllergyInfo() {
       <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderLeft: "4px solid #dc2626", borderRadius: 8, padding: "12px 16px", marginBottom: 24, display: "flex", alignItems: "flex-start", gap: 10 }}>
         <div style={{ color: "#dc2626", marginTop: 1, flexShrink: 0 }}><Icon.Alert size={16} /></div>
         <span style={{ fontSize: 13, color: "#991b1b", fontWeight: 500 }}>
-          Critical: Always inform healthcare providers about your allergies before any treatment or medication
+          Critical: Always inform healthcare providers about allergies before any treatment or medication.
         </span>
       </div>
 
-      <Section title="Drug Allergies" icon="💊">
-        {DRUG_ALLERGIES.map((a, i) => <AllergyCard key={i} item={a} />)}
-      </Section>
+      {allergies.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '20px', color: '#6b7280', fontSize: 14 }}>
+          No allergy records found for this patient.
+        </div>
+      ) : (
+        <>
+          <Section title="Drug Allergies" icon="💊">
+            {drugAllergies.map((a, i) => <AllergyCard key={i} item={a} />)}
+          </Section>
 
-      <Section title="Food Allergies" icon="🍎">
-        {FOOD_ALLERGIES.map((a, i) => <AllergyCard key={i} item={a} />)}
-      </Section>
+          <Section title="Food Allergies" icon="🍎">
+            {foodAllergies.map((a, i) => <AllergyCard key={i} item={a} />)}
+          </Section>
 
-      <Section title="Environmental" icon="🍃">
-        {ENV_ALLERGIES.map((a, i) => <AllergyCard key={i} item={a} />)}
-      </Section>
+          <Section title="Environmental & Other" icon="🍃">
+            {envAllergies.map((a, i) => <AllergyCard key={i} item={a} />)}
+          </Section>
+        </>
+      )}
     </div>
   );
 }

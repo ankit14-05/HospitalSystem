@@ -7,7 +7,6 @@ import {
   Bed, TrendingUp, CheckCircle,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-import { getDashboardPath } from '../../config/roles';
 import useHospitalBranding from '../../hooks/useHospitalBranding';
 
 // ── Colour helpers ────────────────────────────────────────────────────────────
@@ -53,6 +52,27 @@ export default function LoginPage() {
   const deep    = shiftColor(primary, -65);
   const light   = shiftColor(primary, -20);
 
+  const ROLE_ROUTES = {
+    superadmin:   'admin',
+    admin:        'admin',
+    auditor:      'admin',
+    doctor:       'doctor',
+    nurse:        'nurse',
+    receptionist: 'receptionist',
+    pharmacist:   'pharmacist',
+    labtech:      'labtech',
+    lab_technician: 'labtech',
+    'Lab Technician': 'labtech',
+    'Lab Assistant': 'labtech',
+    ward_boy:     'wardboy',
+    housekeeping: 'housekeeping',
+    security:     'security',
+    admin_staff:  'adminstaff',
+    opdmanager:   'opd',
+    opd_manager:  'opd',
+    patient:      'patient',
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!form.username || !form.password) { setError('Please enter your username and password.'); return; }
@@ -62,7 +82,7 @@ export default function LoginPage() {
       if (user.role === 'patient') {
         navigate('/patient/profiles', { replace: true });
       } else {
-        navigate(getDashboardPath(user.role), { replace: true });
+        navigate(`/dashboard/${ROLE_ROUTES[user.role] || 'admin'}`, { replace: true });
       }
     } catch (err) {
       setError(err.message || 'Invalid credentials. Please try again.');
@@ -200,13 +220,9 @@ export default function LoginPage() {
 
             {/* Stat cards */}
             <div className="space-y-2 mb-8">
-              {branding?.bedCapacity && (
-                <FloatCard icon={Bed}        value={`${branding.bedCapacity}+ Beds`} label="Total hospital capacity"  delay=".18s" />
-              )}
-              <FloatCard   icon={TrendingUp} value="Real-time Dashboards"           label="Live analytics & reports"  delay=".34s" />
-              {branding?.emergencyNumber && (
-                <FloatCard icon={Phone}      value={branding.emergencyNumber}       label="24/7 Emergency line"       delay=".42s" />
-              )}
+              <FloatCard icon={Bed}         value={branding?.bedsOccupied || "142"}      label="Beds Occupied"      delay=".18s" />
+              <FloatCard icon={CheckCircle} value={branding?.appointmentsToday || "89"} label="Appointments Today" delay=".34s" />
+              <FloatCard icon={Users}       value={branding?.activePatients || "304"}    label="Active Patients"    delay=".42s" />
             </div>
 
             {/* Role access */}

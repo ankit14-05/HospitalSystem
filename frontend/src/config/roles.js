@@ -17,7 +17,6 @@ export const ROLE_LABELS = {
   opd_manager: 'OPD Manager',
   lab_incharge: 'Lab Incharge',
   labincharge: 'Lab Incharge',
-  'Lab Incharge': 'Lab Incharge',
 };
 
 export const STAFF_ROLES = [
@@ -27,8 +26,6 @@ export const STAFF_ROLES = [
   'labtech',
   'lab_technician',
   'lab_incharge',
-  'labincharge',
-  'Lab Incharge',
   'ward_boy',
   'housekeeping',
   'security',
@@ -47,33 +44,6 @@ export const APPOINTMENT_DESK_ROLES = [
 ];
 
 export const isStaffRole = (role) => STAFF_ROLES.includes(role);
-
-export const DASHBOARD_SEGMENTS = {
-  superadmin: 'admin',
-  admin: 'admin',
-  auditor: 'admin',
-  doctor: 'doctor',
-  nurse: 'nurse',
-  receptionist: 'receptionist',
-  pharmacist: 'pharmacist',
-  labtech: 'labtech',
-  lab_technician: 'labtech',
-  lab_incharge: 'labincharge',
-  labincharge: 'labincharge',
-  'Lab Incharge': 'labincharge',
-  ward_boy: 'wardboy',
-  housekeeping: 'housekeeping',
-  security: 'security',
-  admin_staff: 'adminstaff',
-  opdmanager: 'opd',
-  opd_manager: 'opd',
-  patient: 'patient',
-};
-
-export const getDashboardPath = (role) => {
-  if (role === 'patient') return '/patient/profiles';
-  return `/dashboard/${DASHBOARD_SEGMENTS[role] || 'admin'}`;
-};
 
 export const getProfileBasePath = (role) => {
   if (role === 'superadmin') return '/superadmin';

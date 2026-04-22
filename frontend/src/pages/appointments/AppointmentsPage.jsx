@@ -6,7 +6,7 @@ import {
   Calendar, Search, Filter, RefreshCw, Plus, CheckCircle, XCircle,
   Clock, Eye, RotateCcw, ChevronLeft, ChevronRight, AlertCircle,
   Stethoscope, User, Phone, Hash, Building2, ArrowUpRight, Bell,
-  Check, X, CalendarClock, ClipboardList
+  Check, X, CalendarClock, ClipboardList, FileText
 } from 'lucide-react';
 import api from '../../services/api';
 import toast from 'react-hot-toast';
@@ -595,8 +595,13 @@ export default function AppointmentsPage() {
                             <div className="w-8 h-8 rounded-xl bg-indigo-100 flex items-center justify-center text-xs font-bold text-indigo-700 flex-shrink-0">
                               {a.PatientFirstName?.[0]}{a.PatientLastName?.[0]}
                             </div>
-                            <div>
-                              <p className="font-semibold text-slate-700">{a.PatientFirstName} {a.PatientLastName}</p>
+                            <div 
+                              className="cursor-pointer group/name"
+                              onClick={() => navigate(`/patient/emr/${a.PatientId || a.ProfileId}`)}
+                            >
+                              <p className="font-semibold text-slate-700 group-hover/name:text-indigo-600 transition-colors">
+                                {a.PatientFirstName} {a.PatientLastName}
+                              </p>
                               <p className="text-xs text-slate-400">{a.PatientPhone || a.UHID}</p>
                             </div>
                           </div>
@@ -649,6 +654,17 @@ export default function AppointmentsPage() {
                               className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors" title="View Details">
                               <Eye size={13} />
                             </button>
+
+                            {/* View EMR */}
+                            {['doctor', 'superadmin', 'admin'].includes(user?.role) && (
+                              <button 
+                                onClick={() => navigate(`/patient/emr/${a.PatientId || a.ProfileId}`)}
+                                className="p-1.5 rounded-lg hover:bg-indigo-50 text-indigo-400 hover:text-indigo-600 transition-colors" 
+                                title="View Patient EMR"
+                              >
+                                <FileText size={13} />
+                              </button>
+                            )}
 
                             {/* Confirm */}
                             {isDeskRole && a.Status === 'Scheduled' && (

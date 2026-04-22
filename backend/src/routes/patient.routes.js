@@ -3,19 +3,13 @@ const router = require('express').Router();
 const { authenticate: protect, authorize } = require('../middleware/auth.middleware');
 const { getPool }                          = require('../config/database');
 const { requireActivePatientProfile }      = require('../services/patientAccess.service');
-const { getPatientEmrSummary }             = require('../services/emr.service');
 
 router.use(protect);
 
-const searchPatients = async (pool, search, limit, { role = null, userId = null, hospitalId = null } = {}) => {
-  const doctorScopedSearch = role === 'doctor';
-
+const searchPatients = async (pool, search, limit) => {
   return pool.request()
-    .input('SearchRaw', search)
     .input('Search', `%${search}%`)
     .input('Limit',  limit)
-    .input('HospitalId', hospitalId)
-    .input('DoctorUserId', doctorScopedSearch ? userId : null)
     .query(`
       SELECT TOP (@Limit)
         p.Id, p.UHID,
@@ -23,28 +17,10 @@ const searchPatients = async (pool, search, limit, { role = null, userId = null,
         p.FirstName + ' ' + p.LastName AS FullName,
         p.Phone, p.Email,
         p.Gender, p.DateOfBirth,
-        p.BloodGroup, p.PhotoUrl,
-        completedVisit.AppointmentId AS LatestCompletedAppointmentId,
-        completedVisit.AppointmentStatus AS LatestCompletedAppointmentStatus,
-        completedVisit.AppointmentDate AS LatestCompletedAppointmentDate
+        p.BloodGroup, p.PhotoUrl
       FROM dbo.PatientProfiles p
-      OUTER APPLY (
-        SELECT TOP 1
-          a.Id AS AppointmentId,
-          a.Status AS AppointmentStatus,
-          a.AppointmentDate
-        FROM dbo.Appointments a
-        JOIN dbo.DoctorProfiles dp ON dp.Id = a.DoctorId
-        WHERE a.PatientId = p.Id
-          AND a.Status = 'Completed'
-          AND (@HospitalId IS NULL OR a.HospitalId = @HospitalId)
-          AND (@DoctorUserId IS NULL OR dp.UserId = @DoctorUserId)
-        ORDER BY a.AppointmentDate DESC, a.Id DESC
-      ) completedVisit
       WHERE p.DeletedAt IS NULL
-        AND (@HospitalId IS NULL OR p.HospitalId = @HospitalId)
         AND (
-          CAST(p.Id AS NVARCHAR(30))             LIKE @Search OR
           p.FirstName                          LIKE @Search OR
           p.LastName                           LIKE @Search OR
           CONCAT(p.FirstName, ' ', p.LastName) LIKE @Search OR
@@ -52,17 +28,7 @@ const searchPatients = async (pool, search, limit, { role = null, userId = null,
           p.Phone                              LIKE @Search OR
           p.Email                              LIKE @Search
         )
-      ORDER BY
-        CASE
-          WHEN CAST(p.Id AS NVARCHAR(30)) = @SearchRaw THEN 0
-          WHEN p.UHID = @SearchRaw THEN 1
-          WHEN p.Phone = @SearchRaw THEN 2
-          WHEN CONCAT(p.FirstName, ' ', p.LastName) = @SearchRaw THEN 3
-          WHEN p.FirstName LIKE @Search THEN 4
-          WHEN p.LastName LIKE @Search THEN 5
-          ELSE 6
-        END,
-        p.FirstName ASC, p.LastName ASC
+      ORDER BY p.FirstName ASC, p.LastName ASC
     `);
 };
 
@@ -72,16 +38,17 @@ router.get('/search', async (req, res, next) => {
     const pool   = await getPool();
     const search = req.query.q || req.query.search || '';
     const limit  = Math.min(parseInt(req.query.limit) || 20, 100);
-    const hospitalId = req.user.role === 'superadmin'
-      ? parseInt(req.query.hospitalId, 10) || null
-      : parseInt(req.user.hospitalId, 10) || null;
-    const result = await searchPatients(pool, search, limit, {
-      role: req.user.role,
-      userId: req.user.id,
-      hospitalId,
-    });
+    console.log(`[DEBUG] /patients/search - Query: "${search}", Limit: ${limit}`);
+    
+    const result = await searchPatients(pool, search, limit);
+    console.log(`[DEBUG] /patients/search - Found ${result.recordset?.length || 0} rows`);
+    console.log(result.recordset);
+    
     res.json({ success: true, data: result.recordset });
-  } catch (err) { next(err); }
+  } catch (err) { 
+    console.error(`[DEBUG] /patients/search API Error:`, err);
+    next(err); 
+  }
 });
 
 // ── 2. GET /profile  ──────────────────────────────────────────────────────────
@@ -270,23 +237,15 @@ router.get('/',
       const limit  = Math.min(parseInt(req.query.limit) || 20, 100);
       const page   = Math.max(parseInt(req.query.page)  || 1, 1);
       const offset = (page - 1) * limit;
-      const hospitalId = req.user.role === 'superadmin'
-        ? parseInt(req.query.hospitalId, 10) || null
-        : parseInt(req.user.hospitalId, 10) || null;
 
       if (search) {
-        const result = await searchPatients(pool, search, limit, {
-          role: req.user.role,
-          userId: req.user.id,
-          hospitalId,
-        });
+        const result = await searchPatients(pool, search, limit);
         return res.json({ success: true, data: result.recordset });
       }
 
       const result = await pool.request()
         .input('Limit',  limit)
         .input('Offset', offset)
-        .input('HospitalId', hospitalId)
         .query(`
           SELECT
             p.Id, p.UHID,
@@ -298,14 +257,12 @@ router.get('/',
             p.CreatedAt
           FROM dbo.PatientProfiles p
           WHERE p.DeletedAt IS NULL
-            AND (@HospitalId IS NULL OR p.HospitalId = @HospitalId)
           ORDER BY p.CreatedAt DESC
           OFFSET @Offset ROWS FETCH NEXT @Limit ROWS ONLY;
 
           SELECT COUNT(*) AS Total
           FROM dbo.PatientProfiles
-          WHERE DeletedAt IS NULL
-            AND (@HospitalId IS NULL OR HospitalId = @HospitalId);
+          WHERE DeletedAt IS NULL;
         `);
 
       const patients = result.recordsets[0];
@@ -431,13 +388,6 @@ router.get('/:id',
         Items: r.Items ? JSON.parse(r.Items) : [],
       }));
 
-      const emr = await getPatientEmrSummary({
-        pool,
-        hospitalId: profileRes.recordset[0]?.HospitalId || null,
-        patientId: id,
-        includePrivateNotes: req.user.role !== 'patient',
-      });
-
       res.json({
         success: true,
         data: {
@@ -450,7 +400,6 @@ router.get('/:id',
           prescriptions,
           vitals:        vitalsRes.recordset[0] || null,
           labOrders:     labRes.recordset,
-          emr,
         },
       });
     } catch (err) { next(err); }

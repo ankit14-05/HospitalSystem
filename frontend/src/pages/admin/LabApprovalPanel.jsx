@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import api from '../../services/api';
 import toast from 'react-hot-toast';
 import { Check, X, FlaskConical, User, Clock, MapPin } from 'lucide-react';
-import api from '../../services/api';
 
 export default function LabApprovalPanel() {
   const [pending, setPending] = useState([]);
@@ -11,9 +11,9 @@ export default function LabApprovalPanel() {
     try {
       setLoading(true);
       const res = await api.get('/lab/pending-transfers');
-      if (res.success) setPending(res.data || []);
-    } catch (error) {
-      toast.error('Failed to fetch pending transfers');
+      if (res.success) setPending(res.data);
+    } catch (err) {
+      toast.error("Failed to fetch pending transfers");
     } finally {
       setLoading(false);
     }
@@ -27,21 +27,21 @@ export default function LabApprovalPanel() {
     try {
       if (action === 'approve') {
         const res = await api.post('/lab/approve-transfer', { assignmentId });
-        if (res.success) toast.success('Transfer approved');
+        if (res.success) toast.success("Transfer approved");
       } else {
         const res = await api.post('/lab/reject-transfer', { assignmentId });
-        if (res.success) toast.success('Transfer rejected');
+        if (res.success) toast.success("Transfer rejected");
       }
       fetchPending();
-    } catch (error) {
-      toast.error(error.message || 'Action failed');
+    } catch (err) {
+      toast.error(err.message || "Action failed");
     }
   };
 
   return (
     <div style={{ padding: '24px', maxWidth: '1200px', margin: '0 auto' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '32px' }}>
-        <div style={{ background: '#0f766e', color: '#fff', padding: '12px', borderRadius: '12px', boxShadow: '0 4px 12px rgba(15, 118, 110, 0.2)' }}>
+        <div style={{ background: '#6d28d9', color: '#fff', padding: '12px', borderRadius: '12px', boxShadow: '0 4px 12px rgba(109, 40, 217, 0.2)' }}>
           <FlaskConical size={24} />
         </div>
         <div>
@@ -52,8 +52,8 @@ export default function LabApprovalPanel() {
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: '100px' }}>
-          <div className="spinner" style={{ width: '40px', height: '40px', border: '4px solid #f3f3f3', borderTop: '4px solid #0f766e', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
-          <style>{'@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }'}</style>
+          <div className="spinner" style={{ width: '40px', height: '40px', border: '4px solid #f3f3f3', borderTop: '4px solid #6d28d9', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div>
+          <style>{`@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`}</style>
         </div>
       ) : pending.length === 0 ? (
         <div style={{ background: '#fff', padding: '80px 40px', borderRadius: '24px', textAlign: 'center', border: '1px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
@@ -65,12 +65,12 @@ export default function LabApprovalPanel() {
         </div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(400px, 1fr))', gap: '20px' }}>
-          {pending.map((item) => (
+          {pending.map(item => (
             <div key={item.Id} style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: '20px', overflow: 'hidden', transition: 'all 0.3s ease', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>
               <div style={{ padding: '24px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
                   <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                    <div style={{ width: '40px', height: '40px', background: '#ccfbf1', color: '#0f766e', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <div style={{ width: '40px', height: '40px', background: '#ede9fe', color: '#6d28d9', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                       <User size={20} />
                     </div>
                     <div>
@@ -84,27 +84,27 @@ export default function LabApprovalPanel() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#475569', fontSize: '14px' }}>
                     <MapPin size={16} />
-                    <span>Requested Station: <strong>{item.RoomNo} - {item.RoomType || 'Lab Room'}</strong></span>
+                    <span>Requested Station: <strong>{item.RoomNo} - {item.RoomType}</strong></span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#475569', fontSize: '14px' }}>
                     <Clock size={16} />
-                    <span>Requested At: {new Date(item.AssignedAt || item.CreatedAt || Date.now()).toLocaleString()}</span>
+                    <span>Requested At: {new Date(item.AssignedAt).toLocaleString()}</span>
                   </div>
-                  {item.Notes ? (
+                  {item.Notes && (
                     <div style={{ background: '#f8fafc', padding: '12px', borderRadius: '12px', fontSize: '13px', color: '#64748b', border: '1px solid #f1f5f9' }}>
                       <strong>Note:</strong> {item.Notes}
                     </div>
-                  ) : null}
+                  )}
                 </div>
 
                 <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
-                  <button
+                  <button 
                     onClick={() => handleAction(item.Id, 'approve')}
-                    style={{ flex: 1, background: '#0f766e', color: '#fff', border: 'none', padding: '12px', borderRadius: '12px', fontWeight: '600', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', cursor: 'pointer', transition: 'all 0.2s' }}
+                    style={{ flex: 1, background: '#6d28d9', color: '#fff', border: 'none', padding: '12px', borderRadius: '12px', fontWeight: '600', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', cursor: 'pointer', transition: 'all 0.2s' }}
                   >
                     <Check size={18} /> Approve Transfer
                   </button>
-                  <button
+                  <button 
                     onClick={() => handleAction(item.Id, 'reject')}
                     style={{ background: '#fff', color: '#ef4444', border: '1px solid #fee2e2', padding: '12px', borderRadius: '12px', fontWeight: '600', cursor: 'pointer', transition: 'all 0.2s' }}
                     title="Reject"

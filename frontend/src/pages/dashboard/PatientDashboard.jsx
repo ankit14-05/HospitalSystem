@@ -19,10 +19,6 @@ import {
   SectionHeader, Card, Modal, fmtDate, fmtTime, fmtTimeRange, initials, InfoBadge
 } from '../../components/ui';
 import DashboardTabs from '../../components/dashboard/DashboardTabs';
-import {
-  PatientEmrLabWorkspace,
-  PatientLabReportsWorkspace,
-} from '../../components/emr/PatientEmrLabWorkspace';
 import { getList, getPayload } from '../../utils/apiPayload';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -103,22 +99,6 @@ const getPrescriptionCount = (appointment) =>
 
 const getLabOrderCount = (appointment) =>
   Number(appointment?.LabOrderCount || appointment?.labOrderCount || 0) || 0;
-
-const joinDisplayParts = (...values) => values
-  .map((value) => String(value || '').trim())
-  .filter(Boolean);
-
-const resolveDoctorName = (record = {}, fallback = '') => {
-  const directName = record.DoctorName || record.doctorName || record.OrderedByName || record.orderedByName || record.FullName || '';
-  if (String(directName).trim()) return String(directName).trim();
-
-  const composedName = joinDisplayParts(
-    record.DoctorFirstName || record.doctorFirstName,
-    record.DoctorLastName || record.doctorLastName
-  ).join(' ');
-
-  return composedName || fallback;
-};
 
 const VitalCard = ({ icon: Icon, label, value, unit, normal, color, loading }) => (
   <div className="bg-white rounded-2xl border border-slate-100 p-4 shadow-sm hover:shadow-md transition-shadow flex flex-col gap-3">
@@ -657,7 +637,7 @@ const OverviewTab = ({ profile, appointments, prescriptions, vitals, healthChart
                         <span className="text-white/70 text-[9px] font-bold">{safeMon(nextAppt.AppointmentDate || nextAppt.Date || nextAppt.date)}</span>
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="font-bold text-slate-800 text-sm truncate">{resolveDoctorName(nextAppt, 'Doctor not linked')}</p>
+                        <p className="font-bold text-slate-800 text-sm truncate">{nextAppt.DoctorName || nextAppt.doctorName}</p>
                         <p className="text-xs text-slate-400 mt-0.5">
                           {fmtTimeRange(nextAppt.AppointmentTime || nextAppt.StartTime || nextAppt.time, nextAppt.EndTime || nextAppt.endTime)}
                         </p>
@@ -746,7 +726,7 @@ const OverviewTab = ({ profile, appointments, prescriptions, vitals, healthChart
                   <span className="text-[9px] font-bold" style={{ color: `${BLUE}80` }}>{safeMon(a.AppointmentDate || a.Date || a.date)}</span>
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-bold text-slate-800 truncate">{resolveDoctorName(a, 'Doctor not linked')}</p>
+                  <p className="text-sm font-bold text-slate-800 truncate">{a.DoctorName || a.doctorName || a.FullName || 'Doctor'}</p>
                   <p className="text-xs text-slate-400 mt-0.5">
                     {a.DepartmentName || a.departmentName} · {fmtTimeRange(a.AppointmentTime || a.StartTime || a.time, a.EndTime || a.endTime)}
                   </p>
@@ -784,7 +764,7 @@ const AppointmentsTab = ({ appointments, loading, onRefresh, onBook, onCancel })
                   <span className="text-[10px] font-bold" style={{ color: `${BLUE}80` }}>{safeMon(a.AppointmentDate || a.Date || a.date)}</span>
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-bold text-slate-800 text-sm">{resolveDoctorName(a, 'Doctor not linked')}</p>
+                  <p className="font-bold text-slate-800 text-sm">{a.DoctorName || a.doctorName || a.FullName || 'Doctor'}</p>
                   <p className="text-xs text-slate-400 mt-0.5">
                     {a.DepartmentName || a.departmentName} · {fmtTimeRange(a.AppointmentTime || a.StartTime || a.time, a.EndTime || a.endTime)} · Token: {a.TokenNumber || a.Token || a.token || 'N/A'}
                   </p>
@@ -839,7 +819,7 @@ const PrescriptionsTab = ({ prescriptions, loading, onRefresh }) => (
                   <p className="font-bold text-slate-800 text-sm">{rx.RxNumber || 'Prescription'}</p>
                   <p className="text-xs text-slate-400 mt-0.5">{rx.Diagnosis || 'Consultation prescription'}</p>
                   <p className="text-xs text-slate-400">
-                    {resolveDoctorName(rx, 'Doctor not linked')} · {getPrescriptionItems(rx).length} medicine(s) · {fmtDate(rx.RxDate || rx.PrescribedDate || rx.date)}
+                    {rx.DoctorName || rx.doctorName || 'Doctor'} · {getPrescriptionItems(rx).length} medicine(s) · {fmtDate(rx.RxDate || rx.PrescribedDate || rx.date)}
                   </p>
                 </div>
                 <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${isPrescriptionActive(rx) ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
@@ -873,7 +853,7 @@ const ReportsTab = ({ reports, loading, onRefresh }) => (
                 <div className="flex-1 min-w-0">
                   <p className="font-bold text-slate-800 text-sm">{r.OrderNumber || 'Lab Order'}</p>
                   <p className="text-xs text-slate-400 mt-0.5">
-                    {getReportTests(r).length ? `${getReportTests(r).length} test(s)` : 'Investigation order'} · {resolveDoctorName(r, 'Doctor not linked')} · {fmtDate(r.OrderDate || r.Date || r.date)}
+                    {getReportTests(r).length ? `${getReportTests(r).length} test(s)` : 'Investigation order'} · {r.OrderedByName || r.DoctorName || r.doctorName || 'Doctor'} · {fmtDate(r.OrderDate || r.Date || r.date)}
                   </p>
                   <p className="text-xs text-slate-400">{getReportTests(r).slice(0, 2).map((test) => test.TestName || test.Name).join(', ') || 'Tests pending'}</p>
                 </div>
@@ -981,11 +961,10 @@ export default function PatientDashboard() {
   const [prescriptions, setPrescriptions] = useState([]);
   const [reports,       setReports]       = useState([]);
   const [bills,         setBills]         = useState([]);
-  const [emr,           setEmr]           = useState(null);
   const [vitals,        setVitals]        = useState(null);
   const [healthChart,   setHealthChart]   = useState([]);
 
-  const [loading,     setLoading]     = useState({ profile: true, appointments: true, prescriptions: true, reports: true, bills: true, emr: true, vitals: true });
+  const [loading,     setLoading]     = useState({ profile: true, appointments: true, prescriptions: true, reports: true, bills: true, vitals: true });
   const [activeTab,   setActiveTab]   = useState('overview');
   const [showBook,    setShowBook]    = useState(false);
   const [showProfile, setShowProfile] = useState(false);
@@ -994,7 +973,7 @@ export default function PatientDashboard() {
   const setL = useCallback((k, v) => setLoading(l => ({ ...l, [k]: v })), []);
 
   const fetchAll = useCallback(async () => {
-    setLoading({ profile: true, appointments: true, prescriptions: true, reports: true, bills: true, emr: true, vitals: true });
+    setLoading({ profile: true, appointments: true, prescriptions: true, reports: true, bills: true, vitals: true });
 
     api.get('/patients/profile')
       .then(r => setProfile(getPayload(r) || {}))
@@ -1020,11 +999,6 @@ export default function PatientDashboard() {
       .then(r => setBills(r?.data?.data || []))
       .catch(() => setBills([]))
       .finally(() => setL('bills', false));
-
-    api.get('/emr/my')
-      .then(r => setEmr(getPayload(r) || null))
-      .catch(() => setEmr(null))
-      .finally(() => setL('emr', false));
 
     api.get('/patients/vitals')
       .then(r => {
@@ -1082,14 +1056,6 @@ export default function PatientDashboard() {
       .finally(() => setL('reports', false));
   }, [setL]);
 
-  const refreshEmr = useCallback(() => {
-    setL('emr', true);
-    api.get('/emr/my')
-      .then(r => setEmr(getPayload(r) || null))
-      .catch(() => setEmr(null))
-      .finally(() => setL('emr', false));
-  }, [setL]);
-
   const refreshBills = useCallback(() => {
     setL('bills', true);
     api.get('/bills/my')
@@ -1104,7 +1070,6 @@ export default function PatientDashboard() {
       refreshAppointments();
       refreshPrescriptions();
       refreshReports();
-      refreshEmr();
     };
 
     const handleVisibilityChange = () => {
@@ -1122,7 +1087,7 @@ export default function PatientDashboard() {
       window.removeEventListener('focus', refreshLiveAppointments);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [refreshAppointments, refreshPrescriptions, refreshReports, refreshEmr]);
+  }, [refreshAppointments, refreshPrescriptions, refreshReports]);
 
   const TABS = [
     { key: 'overview',      label: 'Dashboard',       icon: Activity                            },
@@ -1149,21 +1114,17 @@ export default function PatientDashboard() {
       <PrescriptionsTab prescriptions={prescriptions} loading={loading.prescriptions}
         onRefresh={refreshPrescriptions} />
     ),
-    emr: (
-      <PatientEmrLabWorkspace
-        profile={p}
-        user={user}
-        reports={reports}
-        prescriptions={prescriptions}
-        appointments={appointments}
-        emr={emr}
-        vitals={vitals}
-        loading={loading}
-        onOpenReports={() => setActiveTab('reports')}
-      />
-    ),
+    emr: (() => {
+      const patId = p?.Id || p?.id || profile?.Id;
+      if (patId) {
+        navigate(`/patient/emr/${patId}`);
+        return <Card className="p-8"><Empty icon={FileText} text="Redirecting to your EMR…" /></Card>;
+      }
+      return <Card className="p-8"><Empty icon={FileText} text="Loading your EMR…" /></Card>;
+    })(),
     reports: (
-      <PatientLabReportsWorkspace reports={reports} loading={loading.reports} onRefresh={refreshReports} />
+      <ReportsTab reports={reports} loading={loading.reports}
+        onRefresh={refreshReports} />
     ),
     billing: (
       <BillingTab bills={bills} loading={loading.bills}
