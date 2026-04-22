@@ -101,7 +101,12 @@ const NAV = {
     { path:'/patient/profiles',       label:'Patient Profiles',   icon: Users           },
     { path:'/patient/profile',        label:'My Profile',         icon: UserCircle      },
   ],
-  nurse:        staffNav('/dashboard/nurse'),
+  nurse: [
+    { path:'/dashboard/nurse',        label:'Dashboard',   icon: LayoutDashboard },
+    { path:'/appointments',           label:'Appointments',icon: Calendar        },
+    { path:'/nursing/lab-booking',    label:'Lab Booking', icon: FlaskConical    },
+    { path:'/staff/profile',          label:'My Profile',  icon: UserCircle      },
+  ],
   receptionist: staffNav('/dashboard/receptionist'),
   pharmacist:   staffNav('/dashboard/pharmacist'),
   labtech:      staffNav('/dashboard/labtech'),
@@ -174,7 +179,12 @@ export default function DashboardLayout() {
     await logout();
     navigate('/login', { replace: true });
   };
-  const isActive = (path) => location.pathname === path || location.pathname.startsWith(path + '/');
+  const isActive = (path) => {
+    if (path === '/appointments' && location.pathname.startsWith('/appointments/book')) {
+      return false;
+    }
+    return location.pathname === path || location.pathname.startsWith(path + '/');
+  };
 
   const SW = sidebarOpen ? 240 : 60;
 

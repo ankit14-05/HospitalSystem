@@ -8,9 +8,9 @@ const { getPool, sql, withTransaction } = require('../config/database');
 const { requireActivePatientProfile } = require('../services/patientAccess.service');
 const labService = require('../services/lab.service');
 
-const LAB_OPERATOR_ROLES = ['labtech', 'lab_technician', 'Lab Technician', 'Lab Assistant', 'admin', 'superadmin'];
+const LAB_OPERATOR_ROLES = ['nurse', 'labtech', 'lab_technician', 'Lab Technician', 'Lab Assistant', 'admin', 'superadmin'];
 const LAB_HEAD_ROLES = ['lab_incharge', 'labincharge', 'Lab Incharge', 'admin', 'superadmin'];
-const REPORT_VIEW_ROLES = ['patient', 'doctor', 'labtech', 'lab_technician', 'lab_incharge', 'labincharge', 'Lab Incharge', 'admin', 'superadmin', 'auditor'];
+const REPORT_VIEW_ROLES = ['patient', 'doctor', 'nurse', 'labtech', 'lab_technician', 'lab_incharge', 'labincharge', 'Lab Incharge', 'admin', 'superadmin', 'auditor'];
 const REVIEW_ROLES = ['doctor', 'admin', 'superadmin'];
 const REPORT_SCHEMA_CACHE_TTL_MS = 60 * 1000;
 const reportSchemaCache = {

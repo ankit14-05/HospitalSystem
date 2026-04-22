@@ -38,6 +38,14 @@ const SkRow = () => (
   </div>
 );
 
+const resolveAppointmentId = (appointment = {}) => (
+  appointment.AppointmentId
+  || appointment.appointmentId
+  || appointment.appointment_id
+  || appointment.AppointmentID
+  || null
+);
+
 const ChartTip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
   return (
@@ -1379,7 +1387,14 @@ export default function DoctorDashboard() {
     queue: (
       <QueueTab queue={queue} loading={loading.queue} onRefresh={fetchQueue}
         onViewPatient={(patientId, name) => setShowPatient({ patientId, patientName: name })}
-        onComplete={pt => navigate(`/dashboard/doctor/consult/${pt.Id||pt.id}`)}
+        onComplete={(pt) => {
+          const appointmentId = resolveAppointmentId(pt);
+          if (!appointmentId) {
+            toast.error('This queue entry is not linked to an appointment yet');
+            return;
+          }
+          navigate(`/dashboard/doctor/consult/${appointmentId}`);
+        }}
         onCallIn={callPatient} onMarkDone={markDone} onRx={setShowRx}
         search={search} setSearch={setSearch} />
     ),
@@ -1505,7 +1520,14 @@ export default function DoctorDashboard() {
                 style={{ color:TEAL, borderColor:`${TEAL}30`, background:`${TEAL}0c` }}>
                 <Pill size={13} /> Write Rx
               </button>
-              <button onClick={() => navigate(`/dashboard/doctor/consult/${current.Id||current.id}`)}
+              <button onClick={() => {
+                const appointmentId = resolveAppointmentId(current);
+                if (!appointmentId) {
+                  toast.error('This queue entry is not linked to an appointment yet');
+                  return;
+                }
+                navigate(`/dashboard/doctor/consult/${appointmentId}`);
+              }}
                 className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-white text-sm font-semibold"
                 style={{ background:'#059669' }}>
                 <CheckCircle size={13} /> Consult

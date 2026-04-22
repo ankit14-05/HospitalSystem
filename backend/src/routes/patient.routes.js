@@ -6,10 +6,11 @@ const { requireActivePatientProfile }      = require('../services/patientAccess.
 
 router.use(protect);
 
-const searchPatients = async (pool, search, limit) => {
+const searchPatients = async (pool, search, limit, hospitalId = null) => {
   return pool.request()
     .input('Search', `%${search}%`)
     .input('Limit',  limit)
+    .input('HospitalId', hospitalId)
     .query(`
       SELECT TOP (@Limit)
         p.Id, p.UHID,
@@ -17,9 +18,78 @@ const searchPatients = async (pool, search, limit) => {
         p.FirstName + ' ' + p.LastName AS FullName,
         p.Phone, p.Email,
         p.Gender, p.DateOfBirth,
-        p.BloodGroup, p.PhotoUrl
+        p.BloodGroup, p.PhotoUrl,
+        activeAdmission.Id AS ActiveAdmissionId,
+        activeAdmission.AdmissionNo,
+        activeAdmission.BedNumber AS RoomNo,
+        activeAdmission.WardName,
+        activeAdmission.Place,
+        latestVisit.Id AS LatestActiveAppointmentId,
+        latestVisit.Status AS LatestActiveAppointmentStatus,
+        latestVisit.VisitType AS LatestActiveVisitType,
+        latestVisit.AppointmentDate AS LatestActiveAppointmentDate,
+        latestVisit.OpdRoomNo,
+        activeQueue.Id AS ActiveOpdQueueId,
+        activeQueue.QueueStatus AS ActiveOpdQueueStatus,
+        activeQueue.AppointmentId AS ActiveOpdAppointmentId,
+        completedVisit.Id AS LatestCompletedAppointmentId,
+        completedVisit.Status AS LatestCompletedAppointmentStatus,
+        completedVisit.AppointmentDate AS LatestCompletedAppointmentDate
       FROM dbo.PatientProfiles p
+      OUTER APPLY (
+        SELECT TOP 1
+          adm.Id,
+          adm.AdmissionNo,
+          b.BedNumber,
+          w.Name AS WardName,
+          'Indoor' AS Place
+        FROM dbo.Admissions adm
+        LEFT JOIN dbo.Beds b ON b.Id = adm.BedId
+        LEFT JOIN dbo.Wards w ON w.Id = adm.WardId
+        WHERE adm.PatientId = p.Id
+          AND adm.Status = 'Active'
+        ORDER BY adm.AdmissionDate DESC, adm.Id DESC
+      ) activeAdmission
+      OUTER APPLY (
+        SELECT TOP 1
+          a.Id,
+          a.Status,
+          a.VisitType,
+          a.AppointmentDate,
+          r.RoomNumber AS OpdRoomNo
+        FROM dbo.Appointments a
+        LEFT JOIN dbo.AppointmentSlots aps ON aps.AppointmentId = a.Id
+        LEFT JOIN dbo.OpdRooms r ON r.Id = aps.OpdRoomId
+        WHERE a.PatientId = p.Id
+          AND a.Status IN ('Scheduled', 'Confirmed', 'Rescheduled', 'Completed')
+        ORDER BY
+          CASE WHEN a.Status IN ('Scheduled', 'Confirmed', 'Rescheduled') THEN 0 ELSE 1 END,
+          a.AppointmentDate DESC,
+          a.AppointmentTime DESC,
+          a.Id DESC
+      ) latestVisit
+      OUTER APPLY (
+        SELECT TOP 1
+          q.Id,
+          q.QueueStatus,
+          q.AppointmentId
+        FROM dbo.OpdQueue q
+        WHERE q.PatientId = p.Id
+          AND q.QueueStatus IN ('waiting', 'current', 'serving')
+        ORDER BY q.QueueDate DESC, q.UpdatedAt DESC, q.Id DESC
+      ) activeQueue
+      OUTER APPLY (
+        SELECT TOP 1
+          a.Id,
+          a.Status,
+          a.AppointmentDate
+        FROM dbo.Appointments a
+        WHERE a.PatientId = p.Id
+          AND a.Status = 'Completed'
+        ORDER BY a.AppointmentDate DESC, a.AppointmentTime DESC, a.Id DESC
+      ) completedVisit
       WHERE p.DeletedAt IS NULL
+        AND (@HospitalId IS NULL OR p.HospitalId = @HospitalId)
         AND (
           p.FirstName                          LIKE @Search OR
           p.LastName                           LIKE @Search OR
@@ -38,9 +108,10 @@ router.get('/search', async (req, res, next) => {
     const pool   = await getPool();
     const search = req.query.q || req.query.search || '';
     const limit  = Math.min(parseInt(req.query.limit) || 20, 100);
+    const hospitalId = req.user.role === 'superadmin' ? null : req.user.hospitalId;
     console.log(`[DEBUG] /patients/search - Query: "${search}", Limit: ${limit}`);
     
-    const result = await searchPatients(pool, search, limit);
+    const result = await searchPatients(pool, search, limit, hospitalId);
     console.log(`[DEBUG] /patients/search - Found ${result.recordset?.length || 0} rows`);
     console.log(result.recordset);
     
@@ -239,7 +310,8 @@ router.get('/',
       const offset = (page - 1) * limit;
 
       if (search) {
-        const result = await searchPatients(pool, search, limit);
+        const hospitalId = req.user.role === 'superadmin' ? null : req.user.hospitalId;
+        const result = await searchPatients(pool, search, limit, hospitalId);
         return res.json({ success: true, data: result.recordset });
       }
 

@@ -13,6 +13,7 @@ import {
   Search,
   Stethoscope,
   Activity,
+  X,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../services/api';
@@ -42,7 +43,8 @@ const normalizeTest = (test = {}) => ({
 });
 
 export default function ConsultationPage() {
-  const { appointmentId } = useParams();
+  const { id, appointmentId: appointmentIdParam } = useParams();
+  const appointmentId = appointmentIdParam || id;
   const navigate = useNavigate();
 
   const [appointment, setAppointment] = useState(null);
@@ -73,6 +75,13 @@ export default function ConsultationPage() {
   // Load appointment details
   useEffect(() => {
     async function fetchDetails() {
+      if (!appointmentId || appointmentId === 'undefined' || appointmentId === 'null') {
+        toast.error('Appointment details are missing');
+        navigate('/dashboard/doctor');
+        setLoadingInitial(false);
+        return;
+      }
+
       try {
         const payload = getPayload(await api.get(`/appointments/${appointmentId}`));
         const data = payload?.data || payload;
@@ -424,7 +433,10 @@ export default function ConsultationPage() {
                       {selectedTests.length === 0 && <p className="text-xs text-slate-400 italic">No tests selected</p>}
                       {selectedTests.map((t) => (
                         <div key={t.Id} className="flex items-center justify-between rounded-lg bg-indigo-50 border border-indigo-100 px-3 py-2">
-                          <span className="text-sm font-medium text-indigo-900">{t.Name}</span>
+                          <span>
+                            <span className="block text-sm font-medium text-indigo-900">{t.Name}</span>
+                            <span className="block text-[11px] text-indigo-400">{t.Category || 'General'}</span>
+                          </span>
                           <button onClick={() => removeLabTest(t.Id)} className="text-indigo-400 hover:text-indigo-700 p-0.5">
                             <X size={14} />
                           </button>

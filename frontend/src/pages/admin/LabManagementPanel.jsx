@@ -1,28 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Microscope, Plus, Trash2, Building, Layers, FlaskConical } from 'lucide-react';
+import { Microscope, Plus, Trash2, Building, Layers, FlaskConical, AlertTriangle, X } from 'lucide-react';
+import toast from 'react-hot-toast';
 import api from '../../services/api';
-
-function Toast({ message, type, onClose }) {
-  return (
-    <div style={{
-      position: "fixed", top: 24, right: 24, zIndex: 1000,
-      background: type === "error" ? "#fcebeb" : "#e6f9f0",
-      border: `1px solid ${type === "error" ? "#f09595" : "#9fe1cb"}`,
-      color: type === "error" ? "#a32d2d" : "#0f6e56",
-      borderRadius: 10, padding: "12px 20px", fontSize: 14, fontWeight: 500,
-      display: "flex", alignItems: "center", gap: 10, boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
-      animation: "slideIn 0.2s ease"
-    }}>
-      <span>{type === "error" ? "⚠" : "✓"}</span>
-      {message}
-      <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", marginLeft: 8, color: "inherit", fontSize: 16 }}>×</button>
-    </div>
-  );
-}
 
 export default function LabManagementPanel() {
   const [activeTab, setActiveTab] = useState('rooms');
-  const [toast, setToast] = useState(null);
   
   // Data State
   const [rooms, setRooms] = useState([]);
@@ -30,7 +12,6 @@ export default function LabManagementPanel() {
   const [labs, setLabs] = useState([]); 
   const [tests, setTests] = useState([]); // Full tests list
 
-  
   // Selected Data (For forms)
   const [testCategories, setTestCategories] = useState([]);
   
@@ -47,6 +28,9 @@ export default function LabManagementPanel() {
     labId: '' 
   });
   
+  // Delete Modal State
+  const [deleteConfirm, setDeleteConfirm] = useState(null); // { id, type }
+
   // Load initial data
   useEffect(() => {
     fetchRooms();
@@ -55,18 +39,12 @@ export default function LabManagementPanel() {
     fetchLabs();
   }, []);
 
-  const showToast = (message, type = "success") => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 3000);
-  };
-
   const fetchRooms = async () => {
     try {
       const res = await api.get('/lab/rooms');
       if (res.success) setRooms(res.data);
     } catch (err) {
-      console.error(err);
-      showToast("Failed to load rooms", "error");
+      toast.error("Failed to load rooms");
     }
   };
 
@@ -93,7 +71,6 @@ export default function LabManagementPanel() {
       const res = await api.get('/lab/tests');
       if (res.success) {
         setTests(res.data);
-        // Extract unique categories
         const cats = [...new Set(res.data.map(t => t.Category).filter(Boolean))];
         setTestCategories(cats.sort());
       }
@@ -103,7 +80,6 @@ export default function LabManagementPanel() {
   };
 
   // --- Handlers ---
-
   const handleAddRoom = async (e) => {
     e.preventDefault();
     if (!roomForm.roomNo) return;
@@ -113,26 +89,45 @@ export default function LabManagementPanel() {
         roomNo: roomForm.roomNo
       });
       if (res.success) {
-        showToast("Room added successfully");
+        toast.success("Room added successfully");
         setRoomForm({ roomNo: '' });
         fetchRooms();
       }
     } catch (err) {
-      showToast(err.response?.data?.message || "Failed to add room", "error");
+      toast.error(err.response?.data?.message || "Failed to add room");
     }
   };
 
-  const handleDeleteRoom = async (id) => {
-    if (!window.confirm("Are you sure you want to delete this room?")) return;
+  const confirmDelete = async () => {
+    if (!deleteConfirm) return;
+    const { id, type } = deleteConfirm;
+    
     try {
-      const res = await api.delete(`/lab/rooms/${id}`);
-      if (res.success) {
-        showToast("Room deleted successfully");
-        fetchRooms();
-        fetchRules(); // Because rules mapped to this room might be broken
+      if (type === 'room') {
+        const res = await api.delete(`/lab/rooms/${id}`);
+        if (res.success) {
+          toast.success("Room deleted successfully");
+          fetchRooms();
+          fetchRules(); // Refresh rules that might be broken
+        }
+      } else if (type === 'rule') {
+        const res = await api.delete(`/lab/autofill-rules/${id}`);
+        if (res.success) {
+          toast.success("Rule deleted successfully");
+          fetchRules();
+          fetchRooms();
+        }
+      } else if (type === 'test') {
+        const res = await api.delete(`/lab/tests/${id}`);
+        if (res.success) {
+          toast.success("Lab test deleted successfully");
+          fetchTestCategories();
+        }
       }
     } catch (err) {
-      showToast("Failed to delete room", "error");
+      toast.error(`Failed to delete ${type}`);
+    } finally {
+      setDeleteConfirm(null);
     }
   };
 
@@ -143,27 +138,13 @@ export default function LabManagementPanel() {
     try {
       const res = await api.post('/lab/autofill-rules', ruleForm);
       if (res.success) {
-        showToast("Autofill rule saved successfully");
+        toast.success("Autofill rule saved successfully");
         setRuleForm({ testCategory: '', place: 'Indoor', roomId: '', labId: '' });
         fetchRules();
         fetchRooms(); // Refresh room status
       }
     } catch (err) {
-      showToast(err.response?.data?.message || "Failed to save rule", "error");
-    }
-  };
-
-  const handleDeleteRule = async (id) => {
-    if (!window.confirm("Are you sure you want to delete this autofill rule?")) return;
-    try {
-      const res = await api.delete(`/lab/autofill-rules/${id}`);
-      if (res.success) {
-        showToast("Rule deleted successfully");
-        fetchRules();
-        fetchRooms();
-      }
-    } catch (err) {
-      showToast("Failed to delete rule", "error");
+      toast.error(err.response?.data?.message || "Failed to save rule");
     }
   };
 
@@ -173,110 +154,78 @@ export default function LabManagementPanel() {
     try {
       const res = await api.post('/lab/tests', { name: testForm.name });
       if (res.success) {
-        showToast("Lab test added successfully");
+        toast.success("Lab test added successfully");
         setTestForm({ name: '' });
         fetchTestCategories(); // Refresh the list
       }
     } catch (err) {
-      showToast(err.response?.data?.message || "Failed to add test", "error");
-    }
-  };
-
-  const handleDeleteTest = async (id) => {
-    if (!window.confirm("Are you sure you want to delete this lab test?")) return;
-    try {
-      const res = await api.delete(`/lab/tests/${id}`);
-      if (res.success) {
-        showToast("Lab test deleted successfully");
-        fetchTestCategories();
-      }
-    } catch (err) {
-      showToast("Failed to delete test", "error");
+      toast.error(err.response?.data?.message || "Failed to add test");
     }
   };
 
   // --- UI Components ---
-  
   const renderTabBtn = (id, label, Icon) => {
     const isActive = activeTab === id;
     return (
       <button
         onClick={() => setActiveTab(id)}
-        style={{
-          display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px',
-          background: isActive ? '#fff' : 'transparent',
-          color: isActive ? '#0d1f0d' : '#607060',
-          border: 'none', borderBottom: isActive ? '2px solid #0f6e56' : '2px solid transparent',
-          fontWeight: isActive ? 600 : 500, cursor: 'pointer', transition: '0.2s', fontSize: 14
-        }}
+        className={`flex items-center gap-2 px-5 py-3 font-medium transition-all text-sm border-b-2
+          ${isActive 
+            ? 'text-teal-900 border-teal-600 bg-white' 
+            : 'text-slate-500 border-transparent hover:text-slate-700 hover:border-slate-300'}`}
       >
-        <Icon size={16} />
+        <Icon size={16} className={isActive ? 'text-teal-600' : 'text-slate-400'} />
         {label}
       </button>
     );
   };
 
   return (
-    <div style={{ fontFamily: "'DM Sans', sans-serif", background: "#f0f2f0", minHeight: "100%", padding: "32px 24px" }}>
-      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
-
-      <style>{`
-        input, select {
-          padding: 10px 14px; border-radius: 8px; border: 1px solid #dde3dd;
-          background: #f7f8f7; font-size: 14px; color: #1a2e1a; outline: none; transition: 0.2s;
-        }
-        input:focus, select:focus { border-color: #1d9e75; background: #fff; }
-        .btn-submit {
-          padding: 10px 16px; border-radius: 8px; background: #0f6e56; color: #fff;
-          border: none; font-size: 14px; font-weight: 600; cursor: pointer; transition: 0.2s;
-          display: flex; alignItems: center; gap: 6px;
-        }
-        .btn-submit:hover { background: #085041; }
-        table { width: 100%; border-collapse: collapse; }
-        th { text-align: left; padding: 12px 16px; border-bottom: 2px solid #e4ebe4; color: #607060; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
-        td { padding: 14px 16px; border-bottom: 1px solid #f0f2f0; color: #1a2e1a; font-size: 14px; }
-        tr:hover td { background: #fafcfa; }
-        .btn-del {
-          background: none; border: none; color: #e24b4a; cursor: pointer;
-          padding: 6px; border-radius: 6px; transition: 0.15s;
-        }
-        .btn-del:hover { background: #fcebeb; }
-      `}</style>
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
-        <div style={{ background: '#e1f5ee', padding: 12, borderRadius: 12, color: '#0f6e56' }}>
-          <Microscope size={24} />
+    <div className="min-h-full p-6 lg:p-8 animate-fade-in">
+      {/* Header */}
+      <div className="flex items-center gap-4 mb-8">
+        <div className="p-3 bg-teal-50 rounded-2xl text-teal-600 shadow-sm shadow-teal-100">
+          <Microscope size={28} />
         </div>
         <div>
-          <h1 style={{ margin: "0 0 4px", fontSize: 26, fontWeight: 700, color: "#0d1f0d" }}>Lab Management</h1>
-          <p style={{ margin: 0, fontSize: 14, color: "#607060" }}>Manage clinical rooms and dynamic autofill heuristics.</p>
+          <h1 className="text-2xl font-bold text-slate-800 tracking-tight">Lab Management</h1>
+          <p className="text-sm text-slate-500 font-medium mt-1">Manage clinical rooms and dynamic autofill heuristics.</p>
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 8, borderBottom: '1px solid #dde3dd', marginBottom: 24 }}>
+      {/* Tabs */}
+      <div className="flex gap-2 border-b border-slate-200 mb-6 px-2">
         {renderTabBtn('rooms', 'Room Settings', Building)}
         {renderTabBtn('autofill', 'Autofill Rules', Layers)}
         {renderTabBtn('tests', 'Lab Tests', FlaskConical)}
       </div>
 
-      <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e4ebe4', overflow: 'hidden' }}>
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
         
         {/* ROOMS TAB */}
         {activeTab === 'rooms' && (
-          <div style={{ padding: 24 }}>
-            <h2 style={{ margin: '0 0 16px', fontSize: 18, color: '#0d1f0d' }}>Add New Room</h2>
-            <form onSubmit={handleAddRoom} style={{ display: 'flex', gap: 16, alignItems: 'flex-end', marginBottom: 32 }}>
-              <div style={{ flex: 1 }}>
-                <label style={{ display: 'block', marginBottom: 6, fontSize: 13, color: '#3a4a3a', fontWeight: 500 }}>Room Number</label>
-                <input style={{ width: '100%' }} required placeholder="e.g. 104A" value={roomForm.roomNo} onChange={e => setRoomForm({ ...roomForm, roomNo: e.target.value })} />
+          <div className="p-6">
+            <h2 className="text-lg font-bold text-slate-800 mb-4">Add New Room</h2>
+            <form onSubmit={handleAddRoom} className="flex gap-4 items-end mb-8 max-w-2xl">
+              <div className="flex-1">
+                <label className="block text-xs font-semibold text-slate-600 mb-2 uppercase tracking-wide">Room Number</label>
+                <input 
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 transition-all text-sm" 
+                  required 
+                  placeholder="e.g. 104A" 
+                  value={roomForm.roomNo} 
+                  onChange={e => setRoomForm({ ...roomForm, roomNo: e.target.value })} 
+                />
               </div>
-              <button type="submit" className="btn-submit"><Plus size={16} /> Add Room</button>
+              <button type="submit" className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-teal-600 text-white font-semibold text-sm hover:bg-teal-700 transition-colors shadow-sm shadow-teal-200">
+                <Plus size={16} /> Add Room
+              </button>
             </form>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 24, paddingBottom: 16, borderTop: '1px solid #f0f2f0' }}>
-              <h2 style={{ margin: 0, fontSize: 18, color: '#0d1f0d' }}>Active Clinical Rooms</h2>
+            <div className="flex justify-between items-center py-4 border-t border-slate-100">
+              <h2 className="text-lg font-bold text-slate-800">Active Clinical Rooms</h2>
               <select 
-                style={{ width: 'auto', padding: '6px 12px', fontSize: 13, borderRadius: 6 }}
+                className="px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500/20 bg-white"
                 value={roomFilter} 
                 onChange={e => setRoomFilter(e.target.value)}
               >
@@ -285,78 +234,102 @@ export default function LabManagementPanel() {
                 <option value="Not-Alloted">Not-alloted Only</option>
               </select>
             </div>
-            <table>
-              <thead>
-                <tr>
-                  <th>Room No</th>
-                  <th>Status</th>
-                  <th style={{ width: 80, textAlign: 'center' }}>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rooms
-                  .filter(r => {
-                    if (roomFilter === 'All') return true;
-                    if (roomFilter === 'Alloted') return r.Status === 'Alloted';
-                    if (roomFilter === 'Not-Alloted') return r.Status !== 'Alloted';
-                    return true;
-                  })
-                  .map(r => (
-                  <tr key={r.Id}>
-                    <td style={{ fontWeight: 600 }}>{r.RoomNo}</td>
-                    <td>
-                      <span style={{ 
-                        background: r.Status === 'Alloted' ? '#e1f5ee' : '#f0f2f0',
-                        color: r.Status === 'Alloted' ? '#0f6e56' : '#607060',
-                        padding: '4px 10px', 
-                        borderRadius: 20, 
-                        fontSize: 12, 
-                        fontWeight: 600 
-                      }}>
-                        {r.Status === 'Alloted' ? 'Alloted' : 'Not-alloted'}
-                      </span>
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <button className="btn-del" onClick={() => handleDeleteRoom(r.Id)} title="Delete Room">
-                        <Trash2 size={16} />
-                      </button>
-                    </td>
+            
+            <div className="overflow-x-auto rounded-xl border border-slate-100">
+              <table className="w-full text-sm text-left">
+                <thead className="bg-slate-50 border-b border-slate-100">
+                  <tr>
+                    <th className="px-6 py-4 font-bold text-slate-500 text-xs uppercase tracking-wider">Room No</th>
+                    <th className="px-6 py-4 font-bold text-slate-500 text-xs uppercase tracking-wider">Status</th>
+                    <th className="px-6 py-4 font-bold text-slate-500 text-xs uppercase tracking-wider text-center w-24">Action</th>
                   </tr>
-                ))}
-                {rooms.length === 0 && <tr><td colSpan="3" style={{ textAlign: 'center', color: '#a0aba0' }}>No rooms configured</td></tr>}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {rooms
+                    .filter(r => {
+                      if (roomFilter === 'All') return true;
+                      if (roomFilter === 'Alloted') return r.Status === 'Alloted';
+                      if (roomFilter === 'Not-Alloted') return r.Status !== 'Alloted';
+                      return true;
+                    })
+                    .map(r => (
+                    <tr key={r.Id} className="hover:bg-slate-50/50 transition-colors">
+                      <td className="px-6 py-4 font-bold text-slate-800">{r.RoomNo}</td>
+                      <td className="px-6 py-4">
+                        <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-bold tracking-wide ${
+                          r.Status === 'Alloted' 
+                            ? 'bg-emerald-50 text-emerald-700' 
+                            : 'bg-slate-100 text-slate-600'
+                        }`}>
+                          {r.Status === 'Alloted' ? 'Alloted' : 'Not-alloted'}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-center">
+                        <button 
+                          className="p-2 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                          onClick={() => setDeleteConfirm({ id: r.Id, type: 'room' })} 
+                          title="Delete Room"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {rooms.length === 0 && (
+                    <tr>
+                      <td colSpan="3" className="px-6 py-12 text-center text-slate-400 font-medium">No rooms configured</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
 
         {/* AUTOFILL TAB */}
         {activeTab === 'autofill' && (
-          <div style={{ padding: 24 }}>
-            <div style={{ background: '#f8fafc', padding: '12px 16px', borderRadius: 8, marginBottom: 24, border: '1px solid #e2e8f0', fontSize: 13, color: '#475569' }}>
-              <strong>How it works:</strong> When a doctor selects a test from the mapped category, the system will automatically pre-select the designated Room in the dropdown.
+          <div className="p-6">
+            <div className="bg-slate-50 p-4 rounded-xl mb-6 border border-slate-200 text-sm text-slate-600 flex items-start gap-3">
+              <AlertTriangle size={18} className="text-teal-600 flex-shrink-0 mt-0.5" />
+              <p><strong>How it works:</strong> When a doctor selects a test from the mapped category, the system will automatically pre-select the designated Room in the dropdown.</p>
             </div>
 
-            <h2 style={{ margin: '0 0 16px', fontSize: 18, color: '#0d1f0d' }}>Create Suggestion Rule</h2>
-            <form onSubmit={handleAddRule} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 150px', gap: 16, alignItems: 'flex-end', marginBottom: 32 }}>
-              <div>
-                <label style={{ display: 'block', marginBottom: 6, fontSize: 13, color: '#3a4a3a', fontWeight: 500 }}>Lab Test</label>
-                <select style={{ width: '100%' }} required value={ruleForm.testCategory} onChange={e => setRuleForm({ ...ruleForm, testCategory: e.target.value })}>
+            <h2 className="text-lg font-bold text-slate-800 mb-4">Create Suggestion Rule</h2>
+            <form onSubmit={handleAddRule} className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-5 gap-4 items-end mb-8">
+              <div className="lg:col-span-2">
+                <label className="block text-xs font-semibold text-slate-600 mb-2 uppercase tracking-wide">Lab Test</label>
+                <select 
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 transition-all text-sm appearance-none" 
+                  required 
+                  value={ruleForm.testCategory} 
+                  onChange={e => setRuleForm({ ...ruleForm, testCategory: e.target.value })}
+                >
                   <option value="">Select Lab Test...</option>
                   {tests.map(t => <option key={t.Id} value={t.Name}>{t.Name}</option>)}
                 </select>
               </div>
               <div>
-                <label style={{ display: 'block', marginBottom: 6, fontSize: 13, color: '#3a4a3a', fontWeight: 500 }}>Place</label>
-                <select style={{ width: '100%' }} required value={ruleForm.place} onChange={e => setRuleForm({ ...ruleForm, place: e.target.value, roomId: '', labId: '' })}>
-                  <option value="Indoor">Indoor (Clinic/Room)</option>
-                  <option value="Outdoor">Outdoor (External Lab)</option>
+                <label className="block text-xs font-semibold text-slate-600 mb-2 uppercase tracking-wide">Place</label>
+                <select 
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 transition-all text-sm appearance-none" 
+                  required 
+                  value={ruleForm.place} 
+                  onChange={e => setRuleForm({ ...ruleForm, place: e.target.value, roomId: '', labId: '' })}
+                >
+                  <option value="Indoor">Indoor (Clinic)</option>
+                  <option value="Outdoor">Outdoor (External)</option>
                 </select>
               </div>
               
               {ruleForm.place === 'Indoor' ? (
                 <div>
-                  <label style={{ display: 'block', marginBottom: 6, fontSize: 13, color: '#3a4a3a', fontWeight: 500 }}>Target Room</label>
-                  <select style={{ width: '100%' }} required value={ruleForm.roomId} onChange={e => setRuleForm({ ...ruleForm, roomId: e.target.value })}>
+                  <label className="block text-xs font-semibold text-slate-600 mb-2 uppercase tracking-wide">Target Room</label>
+                  <select 
+                    className="w-full px-4 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 transition-all text-sm appearance-none" 
+                    required 
+                    value={ruleForm.roomId} 
+                    onChange={e => setRuleForm({ ...ruleForm, roomId: e.target.value })}
+                  >
                     <option value="">Select Room...</option>
                     {rooms.map(r => (
                       <option key={r.Id} value={r.Id}>{r.RoomNo}</option>
@@ -365,8 +338,12 @@ export default function LabManagementPanel() {
                 </div>
               ) : (
                 <div>
-                  <label style={{ display: 'block', marginBottom: 6, fontSize: 13, color: '#3a4a3a', fontWeight: 500 }}>External Lab (Optional)</label>
-                  <select style={{ width: '100%' }} value={ruleForm.labId} onChange={e => setRuleForm({ ...ruleForm, labId: e.target.value })}>
+                  <label className="block text-xs font-semibold text-slate-600 mb-2 uppercase tracking-wide">External Lab</label>
+                  <select 
+                    className="w-full px-4 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 transition-all text-sm appearance-none" 
+                    value={ruleForm.labId} 
+                    onChange={e => setRuleForm({ ...ruleForm, labId: e.target.value })}
+                  >
                     <option value="">None / Manual</option>
                     {labs.map(l => (
                       <option key={l.Id} value={l.Id}>{l.Name} ({l.Type})</option>
@@ -375,100 +352,153 @@ export default function LabManagementPanel() {
                 </div>
               )}
               
-              <button type="submit" className="btn-submit"><Plus size={16} /> Save Rule</button>
+              <button type="submit" className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-teal-600 text-white font-semibold text-sm hover:bg-teal-700 transition-colors shadow-sm shadow-teal-200 w-full h-11">
+                <Plus size={16} /> Save
+              </button>
             </form>
 
-            <h2 style={{ margin: '0 0 16px', fontSize: 18, color: '#0d1f0d', paddingTop: 24, borderTop: '1px solid #f0f2f0' }}>Configured Autofill Rules</h2>
-            <table>
-              <thead>
-                <tr>
-                  <th>Lab Test</th>
-                  <th>Type</th>
-                  <th>Autofill Target</th>
-                  <th style={{ width: 80, textAlign: 'center' }}>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rules.map(r => (
-                  <tr key={r.Id}>
-                    <td style={{ fontWeight: 500 }}>{r.TestCategory}</td>
-                    <td>
-                      <span style={{ 
-                        background: r.Place === 'Indoor' ? '#f0f9ff' : '#fff7ed',
-                        color: r.Place === 'Indoor' ? '#0369a1' : '#9a3412',
-                        padding: '4px 10px', borderRadius: 20, fontSize: 11, fontWeight: 700, textTransform: 'uppercase'
-                      }}>
-                        {r.Place}
-                      </span>
-                    </td>
-                    <td>
-                      {r.Place === 'Indoor' ? (
-                        <span style={{ background: '#e1f5ee', color: '#0f6e56', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>
-                          Room: {r.RoomNo}
-                        </span>
-                      ) : (
-                        <span style={{ background: '#fef3c7', color: '#92400e', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>
-                          Lab: {r.LabName || 'Manual Selection'}
-                        </span>
-                      )}
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <button className="btn-del" onClick={() => handleDeleteRule(r.Id)} title="Delete Rule">
-                        <Trash2 size={16} />
-                      </button>
-                    </td>
+            <h2 className="text-lg font-bold text-slate-800 mb-4 pt-6 border-t border-slate-100">Configured Autofill Rules</h2>
+            <div className="overflow-x-auto rounded-xl border border-slate-100">
+              <table className="w-full text-sm text-left">
+                <thead className="bg-slate-50 border-b border-slate-100">
+                  <tr>
+                    <th className="px-6 py-4 font-bold text-slate-500 text-xs uppercase tracking-wider">Lab Test</th>
+                    <th className="px-6 py-4 font-bold text-slate-500 text-xs uppercase tracking-wider">Type</th>
+                    <th className="px-6 py-4 font-bold text-slate-500 text-xs uppercase tracking-wider">Autofill Target</th>
+                    <th className="px-6 py-4 font-bold text-slate-500 text-xs uppercase tracking-wider text-center w-24">Action</th>
                   </tr>
-                ))}
-                {rules.length === 0 && <tr><td colSpan="3" style={{ textAlign: 'center', color: '#a0aba0' }}>No autofill rules established</td></tr>}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {rules.map(r => (
+                    <tr key={r.Id} className="hover:bg-slate-50/50 transition-colors">
+                      <td className="px-6 py-4 font-semibold text-slate-800">{r.TestCategory}</td>
+                      <td className="px-6 py-4">
+                        <span className={`inline-flex px-2.5 py-1 rounded-full text-[11px] font-bold tracking-wider uppercase ${
+                          r.Place === 'Indoor' ? 'bg-sky-50 text-sky-700' : 'bg-orange-50 text-orange-700'
+                        }`}>
+                          {r.Place}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        {r.Place === 'Indoor' ? (
+                          <span className="inline-flex px-2.5 py-1 rounded-full text-xs font-bold tracking-wide bg-emerald-50 text-emerald-700">
+                            Room: {r.RoomNo}
+                          </span>
+                        ) : (
+                          <span className="inline-flex px-2.5 py-1 rounded-full text-xs font-bold tracking-wide bg-amber-50 text-amber-700">
+                            Lab: {r.LabName || 'Manual Selection'}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 text-center">
+                        <button 
+                          className="p-2 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors" 
+                          onClick={() => setDeleteConfirm({ id: r.Id, type: 'rule' })} 
+                          title="Delete Rule"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {rules.length === 0 && (
+                    <tr>
+                      <td colSpan="4" className="px-6 py-12 text-center text-slate-400 font-medium">No autofill rules established</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
 
         {/* LAB TESTS TAB */}
         {activeTab === 'tests' && (
-          <div style={{ padding: 24 }}>
-            <h2 style={{ margin: '0 0 16px', fontSize: 18, color: '#0d1f0d' }}>Add New Lab Test</h2>
-            <form onSubmit={handleAddTest} style={{ display: 'flex', gap: 16, alignItems: 'flex-end', marginBottom: 32 }}>
-              <div style={{ flex: 1 }}>
-                <label style={{ display: 'block', marginBottom: 6, fontSize: 13, color: '#3a4a3a', fontWeight: 500 }}>Test Name (Auto-Capitalized)</label>
+          <div className="p-6">
+            <h2 className="text-lg font-bold text-slate-800 mb-4">Add New Lab Test</h2>
+            <form onSubmit={handleAddTest} className="flex gap-4 items-end mb-8 max-w-2xl">
+              <div className="flex-1">
+                <label className="block text-xs font-semibold text-slate-600 mb-2 uppercase tracking-wide">Test Name (Auto-Capitalized)</label>
                 <input 
-                  style={{ width: '100%', textTransform: 'uppercase' }} 
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 transition-all text-sm uppercase" 
                   required 
                   placeholder="e.g. LIVER FUNCTION TEST" 
                   value={testForm.name} 
                   onChange={e => setTestForm({ ...testForm, name: e.target.value.toUpperCase() })} 
                 />
               </div>
-              <button type="submit" className="btn-submit"><Plus size={16} /> Add Test</button>
+              <button type="submit" className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-teal-600 text-white font-semibold text-sm hover:bg-teal-700 transition-colors shadow-sm shadow-teal-200">
+                <Plus size={16} /> Add Test
+              </button>
             </form>
 
-            <h2 style={{ margin: '0 0 16px', fontSize: 18, color: '#0d1f0d', paddingTop: 24, borderTop: '1px solid #f0f2f0' }}>Configured Lab Tests</h2>
-            <table>
-              <thead>
-                <tr>
-                  <th>Test Name</th>
-                  <th style={{ width: 80, textAlign: 'center' }}>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {tests.map(t => (
-                  <tr key={t.Id}>
-                    <td style={{ fontWeight: 600 }}>{t.Name}</td>
-                    <td style={{ textAlign: 'center' }}>
-                      <button className="btn-del" onClick={() => handleDeleteTest(t.Id)} title="Delete Test">
-                        <Trash2 size={16} />
-                      </button>
-                    </td>
+            <h2 className="text-lg font-bold text-slate-800 mb-4 pt-6 border-t border-slate-100">Configured Lab Tests</h2>
+            <div className="overflow-x-auto rounded-xl border border-slate-100 max-w-3xl">
+              <table className="w-full text-sm text-left">
+                <thead className="bg-slate-50 border-b border-slate-100">
+                  <tr>
+                    <th className="px-6 py-4 font-bold text-slate-500 text-xs uppercase tracking-wider">Test Name</th>
+                    <th className="px-6 py-4 font-bold text-slate-500 text-xs uppercase tracking-wider text-center w-24">Action</th>
                   </tr>
-                ))}
-                {tests.length === 0 && <tr><td colSpan="2" style={{ textAlign: 'center', color: '#a0aba0' }}>No tests configured</td></tr>}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {tests.map(t => (
+                    <tr key={t.Id} className="hover:bg-slate-50/50 transition-colors">
+                      <td className="px-6 py-4 font-bold text-slate-800">{t.Name}</td>
+                      <td className="px-6 py-4 text-center">
+                        <button 
+                          className="p-2 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors" 
+                          onClick={() => setDeleteConfirm({ id: t.Id, type: 'test' })} 
+                          title="Delete Test"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {tests.length === 0 && (
+                    <tr>
+                      <td colSpan="2" className="px-6 py-12 text-center text-slate-400 font-medium">No tests configured</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
 
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="p-6">
+              <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center mb-4 text-red-600">
+                <AlertTriangle size={24} />
+              </div>
+              <h3 className="text-lg font-bold text-slate-800 mb-2">Confirm Deletion</h3>
+              <p className="text-slate-500 text-sm">
+                Are you sure you want to delete this {deleteConfirm.type}? This action cannot be undone.
+              </p>
+            </div>
+            <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex justify-end gap-3">
+              <button 
+                onClick={() => setDeleteConfirm(null)} 
+                className="px-4 py-2 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-200 transition-colors"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={confirmDelete} 
+                className="px-4 py-2 rounded-xl text-sm font-semibold text-white bg-red-600 hover:bg-red-700 transition-colors"
+              >
+                Delete {deleteConfirm.type}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

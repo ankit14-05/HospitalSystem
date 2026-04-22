@@ -5,7 +5,7 @@ const bcrypt  = require('bcryptjs');
 const crypto  = require('crypto');
 const multer  = require('multer');
 const { query, sql } = require('../config/database');
-const { authenticate, authorize } = require('../middleware/auth.middleware');
+const { authenticate, authorize, isAdmin } = require('../middleware/auth.middleware');
 const { body } = require('express-validator');
 const { validationResult } = require('express-validator');
 const { success, created } = require('../utils/apiResponse');
@@ -628,19 +628,22 @@ router.post('/verify-email-otp', [
 // ═══════════════════════════════════════════════════════════════════════════════
 // POST /register/patient
 // ═══════════════════════════════════════════════════════════════════════════════
-router.post('/patient', [
-  body('hospitalId').isInt({ min: 1 }).withMessage('Hospital ID required'),
-  body('firstName').trim().isLength({ min: 1, max: 100 }).withMessage('First name required'),
-  body('lastName').trim().isLength({ min: 1, max: 100 }).withMessage('Last name required'),
-  body('phone').trim().notEmpty().withMessage('Phone number required')
-    .custom(v => { if (/^0/.test(v.replace(/\D/g,''))) throw new Error('Phone cannot start with 0'); return true; }),
-  body('email').optional({ checkFalsy: true }).isEmail().withMessage('Invalid email'),
-  body('gender').optional({ checkFalsy: true }).isIn(['Male', 'Female', 'Other', 'PreferNot']),
-  body('dateOfBirth').optional({ checkFalsy: true }).isDate().withMessage('Invalid date of birth'),
-  body('bloodGroup').optional({ checkFalsy: true }).isIn(['A+','A-','B+','B-','AB+','AB-','O+','O-']),
-  body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
-    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/).withMessage('Password needs uppercase, lowercase and number'),
-], async (req, res, next) => {
+router.post('/patient',
+  upload.any(),
+  [
+    body('hospitalId').isInt({ min: 1 }).withMessage('Hospital ID required'),
+    body('firstName').trim().isLength({ min: 1, max: 100 }).withMessage('First name required'),
+    body('lastName').trim().isLength({ min: 1, max: 100 }).withMessage('Last name required'),
+    body('phone').trim().notEmpty().withMessage('Phone number required')
+      .custom(v => { if (/^0/.test(v.replace(/\D/g,''))) throw new Error('Phone cannot start with 0'); return true; }),
+    body('email').optional({ checkFalsy: true }).isEmail().withMessage('Invalid email'),
+    body('gender').optional({ checkFalsy: true }).isIn(['Male', 'Female', 'Other', 'PreferNot']),
+    body('dateOfBirth').optional({ checkFalsy: true }).isDate().withMessage('Invalid date of birth'),
+    body('bloodGroup').optional({ checkFalsy: true }).isIn(['A+','A-','B+','B-','AB+','AB-','O+','O-']),
+    body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
+      .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/).withMessage('Password needs uppercase, lowercase and number'),
+  ],
+  async (req, res, next) => {
   try {
     handleV(req);
 
@@ -662,7 +665,8 @@ router.post('/patient', [
     const phone = sanitizePhone(req.body.phone);
 
     const dobValue = parseDate(dateOfBirth, 'Date of birth', { mustBePast: true });
-    const hid      = parseInt(hospitalId);
+    const hid = parseInt(hospitalId, 10);
+    if (!hid) throw new AppError('Hospital ID required', 400);
 
     let insExpDate = null;
     if (insuranceValidUntil) {
@@ -872,6 +876,8 @@ router.post('/patient', [
 // are still nullable in the DB and can be filled in later by admin.
 // ═══════════════════════════════════════════════════════════════════════════════
 router.post('/doctor',
+  authenticate,
+  isAdmin,
   upload.any(),
   [
     body('hospitalId').isInt({ min: 1 }).withMessage('Hospital ID required'),
@@ -905,7 +911,9 @@ router.post('/doctor',
       const phone = sanitizePhone(req.body.phone);
 
       const dobValue = parseDate(dateOfBirth, 'Date of birth', { mustBePast: true });
-      const hid      = parseInt(hospitalId);
+      const requestedHospitalId = parseInt(hospitalId);
+      const hid = req.user.role === 'superadmin' ? requestedHospitalId : req.user.hospitalId;
+      if (!hid) throw new AppError('Hospital context is required for registration.', 400);
 
       // ── Verify email OTP ─────────────────────────────────────────────────
       const otpCheck = await query(
@@ -1054,6 +1062,8 @@ router.post('/doctor',
 // POST /register/staff
 // ═══════════════════════════════════════════════════════════════════════════════
 router.post('/staff',
+  authenticate,
+  isAdmin,
   upload.any(),
   [
     body('hospitalId').isInt({ min: 1 }).withMessage('Hospital ID required'),
@@ -1086,7 +1096,9 @@ router.post('/staff',
 
       const phone = sanitizePhone(req.body.phone);
 
-      const hid      = parseInt(hospitalId);
+      const requestedHospitalId = parseInt(hospitalId);
+      const hid = req.user.role === 'superadmin' ? requestedHospitalId : req.user.hospitalId;
+      if (!hid) throw new AppError('Hospital context is required for registration.', 400);
       const dobValue  = parseDate(dateOfBirth, 'Date of birth', { mustBePast: true });
       const joinValue = parseDate(joiningDate, 'Joining date');
 

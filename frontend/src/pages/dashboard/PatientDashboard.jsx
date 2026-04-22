@@ -5,7 +5,7 @@ import {
   Calendar, FileText, Pill, Receipt, Phone, Heart, Activity,
   User, Camera, X, Check, Clock, Download, Plus, Shield,
   CheckCircle, XCircle, RefreshCw, Loader, Edit2, Bell,
-  Thermometer, Droplets, Weight, ArrowRight, AlertCircle, FlaskConical
+  Thermometer, Droplets, Weight, ArrowRight, AlertCircle, FlaskConical, Eye
 } from 'lucide-react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -20,6 +20,7 @@ import {
 } from '../../components/ui';
 import DashboardTabs from '../../components/dashboard/DashboardTabs';
 import { getList, getPayload } from '../../utils/apiPayload';
+import TestDetailsModal from '../../components/lab/TestDetailsModal';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 // Safely parse a date — returns null for invalid/missing values instead of NaN
@@ -836,7 +837,7 @@ const PrescriptionsTab = ({ prescriptions, loading, onRefresh }) => (
 );
 
 // ─── Reports Tab ──────────────────────────────────────────────────────────────
-const ReportsTab = ({ reports, loading, onRefresh }) => (
+const ReportsTab = ({ reports, loading, onRefresh, onViewReport }) => (
   <Card>
     <SectionHeader title="Medical Reports" icon={FileText}>
       <button onClick={onRefresh} className="p-2 hover:bg-slate-100 rounded-xl"><RefreshCw size={13} className="text-slate-400" /></button>
@@ -858,9 +859,9 @@ const ReportsTab = ({ reports, loading, onRefresh }) => (
                   <p className="text-xs text-slate-400">{getReportTests(r).slice(0, 2).map((test) => test.TestName || test.Name).join(', ') || 'Tests pending'}</p>
                 </div>
                 <StatusBadge status={r.Status || r.status || 'pending'} />
-                {(r.Status || r.status) === 'ready' && (
-                  <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-white text-sm font-semibold" style={{ background: BLUE }}>
-                    <Download size={12} /> Download
+                {((r.Status || r.status) === 'Completed' || (r.Status || r.status) === 'Reported') && (
+                  <button onClick={() => onViewReport(r)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-white text-sm font-semibold transition-colors" style={{ background: BLUE }}>
+                    <Eye size={12} /> View Report
                   </button>
                 )}
               </div>
@@ -968,6 +969,7 @@ export default function PatientDashboard() {
   const [activeTab,   setActiveTab]   = useState('overview');
   const [showBook,    setShowBook]    = useState(false);
   const [showProfile, setShowProfile] = useState(false);
+  const [selectedReport, setSelectedReport] = useState(null);
 
   const handleBook = () => navigate('/appointments/book');
   const setL = useCallback((k, v) => setLoading(l => ({ ...l, [k]: v })), []);
@@ -976,8 +978,22 @@ export default function PatientDashboard() {
     setLoading({ profile: true, appointments: true, prescriptions: true, reports: true, bills: true, vitals: true });
 
     api.get('/patients/profile')
-      .then(r => setProfile(getPayload(r) || {}))
-      .catch(() => {})
+      .then(r => {
+        const p = getPayload(r) || {};
+        setProfile(p);
+        const pid = p.Id || p.patientId || p.id;
+        if (pid) {
+          api.get(`/lab/orders/patient/${pid}`)
+            .then(res => setReports(res?.data?.orders || res?.data || res?.orders || []))
+            .catch(() => setReports([]))
+            .finally(() => setL('reports', false));
+        } else {
+          setL('reports', false);
+        }
+      })
+      .catch(() => {
+        setL('reports', false);
+      })
       .finally(() => setL('profile', false));
 
     api.get('/appointments/my')
@@ -989,11 +1005,6 @@ export default function PatientDashboard() {
       .then(r => setPrescriptions(getList(r)))
       .catch(() => setPrescriptions([]))
       .finally(() => setL('prescriptions', false));
-
-    api.get('/reports/my')
-      .then(r => setReports(getList(r)))
-      .catch(() => setReports([]))
-      .finally(() => setL('reports', false));
 
     api.get('/bills/my')
       .then(r => setBills(r?.data?.data || []))
@@ -1050,11 +1061,16 @@ export default function PatientDashboard() {
 
   const refreshReports = useCallback(() => {
     setL('reports', true);
-    api.get('/reports/my')
-      .then(r => setReports(getList(r)))
-      .catch(() => {})
-      .finally(() => setL('reports', false));
-  }, [setL]);
+    const pid = profile?.Id || profile?.patientId || profile?.id;
+    if (pid) {
+      api.get(`/lab/orders/patient/${pid}`)
+        .then(r => setReports(r?.data?.orders || r?.data || r?.orders || []))
+        .catch(() => setReports([]))
+        .finally(() => setL('reports', false));
+    } else {
+      setL('reports', false);
+    }
+  }, [setL, profile]);
 
   const refreshBills = useCallback(() => {
     setL('bills', true);
@@ -1124,7 +1140,7 @@ export default function PatientDashboard() {
     })(),
     reports: (
       <ReportsTab reports={reports} loading={loading.reports}
-        onRefresh={refreshReports} />
+        onRefresh={refreshReports} onViewReport={setSelectedReport} />
     ),
     billing: (
       <BillingTab bills={bills} loading={loading.bills}
@@ -1212,6 +1228,13 @@ export default function PatientDashboard() {
       {/* ── Modals ── */}
       {showBook    && <BookModal    onClose={() => setShowBook(false)}    onSuccess={() => { setShowBook(false);    fetchAll(); }} />}
       {showProfile && <ProfileModal profile={profile || user}            onClose={() => setShowProfile(false)} onSave={d => { setProfile(pr => ({ ...pr, ...d })); setShowProfile(false); }} />}
+      
+      {selectedReport && (
+        <TestDetailsModal
+          test={selectedReport}
+          onClose={() => setSelectedReport(null)}
+        />
+      )}
     </div>
   );
 }

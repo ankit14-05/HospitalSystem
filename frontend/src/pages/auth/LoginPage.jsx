@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   Eye, EyeOff, Activity, MapPin, Phone, ArrowRight,
-  Stethoscope, Users, Briefcase, Shield,
+  Users, Shield,
   Bed, TrendingUp, CheckCircle,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
@@ -354,29 +354,38 @@ export default function LoginPage() {
               </button>
             </form>
 
-            {/* Divider */}
-            <div className="flex items-center gap-3 my-5">
-              <div className="flex-1 h-px bg-slate-200" />
-              <span className="text-slate-300 text-xs font-semibold tracking-wide">NEW HERE?</span>
-              <div className="flex-1 h-px bg-slate-200" />
-            </div>
-
-            {/* Register cards */}
-            <div className="grid grid-cols-3 gap-3">
-              {[
-                { to:'/register/patient', label:'Patient', icon:Users },
-                { to:'/register/doctor',  label:'Doctor',  icon:Stethoscope },
-                { to:'/register/staff',   label:'Staff',   icon:Briefcase },
-              ].map(({ to, label, icon: Icon }) => (
-                <Link key={to} to={to}
-                  className="lp-reg flex flex-col items-center gap-2 py-3.5 rounded-2xl bg-white border border-slate-200 shadow-sm text-xs font-bold text-slate-600">
-                  <div className="w-8 h-8 rounded-xl flex items-center justify-center"
+            <div className="mt-5 space-y-3">
+              <Link
+                to="/register/patient"
+                className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm transition-colors hover:border-slate-300"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl"
                     style={{ background:`${primary}14` }}>
-                    <Icon size={14} style={{ color:primary }} />
+                    <Users size={16} style={{ color:primary }} />
                   </div>
-                  {label}
-                </Link>
-              ))}
+                  <div>
+                    <p className="text-sm font-bold text-slate-700">Patient Registration</p>
+                    <p className="mt-0.5 text-xs text-slate-400">Create a patient account and continue with booking or care.</p>
+                  </div>
+                </div>
+                <ArrowRight size={16} className="text-slate-300" />
+              </Link>
+
+              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                <div className="flex items-start gap-3">
+                  <div className="mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl"
+                    style={{ background:`${primary}14` }}>
+                    <Shield size={14} style={{ color:primary }} />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-slate-700">Doctor & Staff Accounts</p>
+                    <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                      New doctor and staff accounts are created by hospital administrators only.
+                    </p>
+                  </div>
+                </div>
+              </div>
             </div>
 
             {/* Dev credentials */}

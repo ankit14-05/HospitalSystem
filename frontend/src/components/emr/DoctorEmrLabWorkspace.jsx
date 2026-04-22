@@ -1,11 +1,22 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
+import JsBarcode from 'jsbarcode';
 import api from '../../services/api';
+import { useAuth } from '../../context/AuthContext';
 import { getList, getPayload } from '../../utils/apiPayload';
 import { buildServerFileUrl } from '../../utils/fileUrls';
 
-const LAB_OPTIONS = ['Apollo Diagnostics', 'SRL Diagnostics', 'Dr Lal PathLabs', 'Metropolis', 'Thyrocare'];
+const EXTERNAL_LAB_PARTNERS = [
+  { name: 'Dr Lal PathLabs', code: 'DLPL' },
+  { name: 'Max Lab', code: 'MAX' },
+];
+const LAB_OPTIONS = EXTERNAL_LAB_PARTNERS.map((partner) => partner.name);
+const PARTNER_CODES = EXTERNAL_LAB_PARTNERS.reduce((codes, partner) => {
+  codes[partner.name] = partner.code;
+  return codes;
+}, {});
 const COMPLETED_APPOINTMENT_STATUSES = new Set(['completed', 'done', 'served']);
+const ACTIVE_VISIT_STATUSES = new Set(['scheduled', 'confirmed', 'rescheduled', 'waiting', 'current', 'serving', 'active']);
 const initialForm = {
   testId: '',
   priority: 'Normal',
@@ -26,6 +37,7 @@ const resolvePatientName = (source = {}) =>
 
 const normalizeStatus = (value = '') => String(value || '').trim().toLowerCase();
 const isCompletedAppointmentStatus = (value) => COMPLETED_APPOINTMENT_STATUSES.has(normalizeStatus(value));
+const isActiveVisitStatus = (value) => ACTIVE_VISIT_STATUSES.has(normalizeStatus(value));
 
 const resolveCompletedAppointmentId = (source = {}) => {
   const latestCompletedAppointmentId = source.LatestCompletedAppointmentId || source.latestCompletedAppointmentId || null;
@@ -50,10 +62,91 @@ const resolveCompletedAppointmentId = (source = {}) => {
   return isCompletedAppointmentStatus(appointmentStatus) ? fallbackAppointmentId : null;
 };
 
+const resolveActiveAppointmentId = (source = {}) => {
+  const explicitActiveAppointmentId =
+    source.LatestActiveAppointmentId ||
+    source.latestActiveAppointmentId ||
+    source.ActiveOpdAppointmentId ||
+    source.activeOpdAppointmentId ||
+    null;
+  if (explicitActiveAppointmentId) return explicitActiveAppointmentId;
+
+  const appointmentStatus =
+    source.LatestActiveAppointmentStatus ||
+    source.latestActiveAppointmentStatus ||
+    source.AppointmentStatus ||
+    source.appointmentStatus ||
+    source.QueueStatus ||
+    source.queueStatus ||
+    source.Status ||
+    source.status ||
+    '';
+
+  const fallbackAppointmentId =
+    source.ActiveOpdAppointmentId ||
+    source.activeOpdAppointmentId ||
+    source.AppointmentId ||
+    source.appointmentId ||
+    ((source.PatientId || source.patientId) ? (source.Id || source.id) : null);
+
+  return isActiveVisitStatus(appointmentStatus) ? fallbackAppointmentId : null;
+};
+
+const resolveActiveOpdQueueId = (source = {}) =>
+  source.ActiveOpdQueueId ||
+  source.activeOpdQueueId ||
+  source.OpdQueueId ||
+  source.opdQueueId ||
+  null;
+
+const resolvePatientRoomNo = (source = {}) =>
+  source.RoomNo ||
+  source.roomNo ||
+  source.BedNumber ||
+  source.bedNumber ||
+  source.OpdRoomNo ||
+  source.opdRoomNo ||
+  '';
+
+const escapeHtml = (value = '') => String(value || '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+
+const buildPartnerBarcode = (labName, patientCode) => {
+  const partnerCode = PARTNER_CODES[labName] || 'EXT';
+  const patientToken = String(patientCode || 'PATIENT').replace(/[^a-z0-9]/gi, '').slice(-8).toUpperCase() || 'PATIENT';
+  return `${partnerCode}-${patientToken}-${Date.now().toString().slice(-6)}`;
+};
+
+const createBarcodeMarkup = (value, options = {}) => {
+  if (!value || typeof document === 'undefined') return '';
+
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  JsBarcode(svg, value, {
+    format: 'CODE128',
+    displayValue: false,
+    height: 40,
+    margin: 0,
+    width: 1.4,
+    ...options,
+  });
+
+  return svg.outerHTML;
+};
+
 const resolvePatientCandidate = (source = {}, bucket = 'queue') => {
   const patientId = source.PatientId || source.patientId || source.Id || source.id || null;
-  const appointmentId = resolveCompletedAppointmentId(source);
+  const completedAppointmentId = resolveCompletedAppointmentId(source);
+  const activeAppointmentId = resolveActiveAppointmentId(source);
+  const activeOpdQueueId = resolveActiveOpdQueueId(source);
+  const appointmentId = completedAppointmentId || activeAppointmentId;
+  const admissionId = source.ActiveAdmissionId || source.activeAdmissionId || source.AdmissionId || source.admissionId || null;
   const appointmentStatus =
+    source.LatestActiveAppointmentStatus ||
+    source.latestActiveAppointmentStatus ||
     source.LatestCompletedAppointmentStatus ||
     source.latestCompletedAppointmentStatus ||
     source.AppointmentStatus ||
@@ -68,16 +161,30 @@ const resolvePatientCandidate = (source = {}, bucket = 'queue') => {
     key: String(patientId || `${bucket}-${appointmentId || resolvePatientName(source)}`),
     patientId,
     appointmentId,
+    admissionId,
+    completedAppointmentId,
+    activeAppointmentId,
+    activeOpdQueueId,
+    activeOpdQueueStatus: source.ActiveOpdQueueStatus || source.activeOpdQueueStatus || source.QueueStatus || source.queueStatus || '',
     patientName: resolvePatientName(source),
     patientCode: source.UHID || source.uhid || `PT-${patientId || appointmentId || '0000'}`,
     phone: source.PatientPhone || source.Phone || source.phone || '',
     appointmentStatus,
+    place: source.Place || source.place || (admissionId ? 'Indoor' : 'Indoor'),
+    roomNo: resolvePatientRoomNo(source),
+    wardName: source.WardName || source.wardName || '',
+    admissionNo: source.AdmissionNo || source.admissionNo || '',
     latestCompletedAppointmentDate: source.LatestCompletedAppointmentDate || source.latestCompletedAppointmentDate || null,
-    bookingEligible: Boolean(patientId && appointmentId),
+    latestActiveAppointmentDate: source.LatestActiveAppointmentDate || source.latestActiveAppointmentDate || null,
+    bookingEligible: Boolean(patientId && (appointmentId || admissionId || activeOpdQueueId)),
   };
 };
 
-const isLabBookingEligible = (candidate) => Boolean(candidate?.patientId && candidate?.appointmentId);
+const isLabBookingEligible = (candidate, role = 'doctor') => {
+  if (!candidate?.patientId) return false;
+  if (role === 'doctor') return Boolean(candidate.completedAppointmentId || (candidate.appointmentId && isCompletedAppointmentStatus(candidate.appointmentStatus)));
+  return Boolean(candidate.admissionId || candidate.appointmentId || candidate.activeAppointmentId || candidate.activeOpdQueueId);
+};
 
 const buildPatientList = (queue = [], requests = []) => {
   const buckets = [
@@ -205,14 +312,43 @@ function ReportStatusBadge({ value }) {
   );
 }
 
+function BarcodePreview({ value }) {
+  const svgRef = useRef(null);
+
+  useEffect(() => {
+    if (!svgRef.current || !value) return;
+
+    JsBarcode(svgRef.current, value, {
+      format: 'CODE128',
+      displayValue: false,
+      height: 32,
+      margin: 0,
+      width: 1.2,
+    });
+  }, [value]);
+
+  if (!value) return null;
+
+  return (
+    <span style={{ display: 'block', marginTop: 4, maxWidth: 180 }}>
+      <svg ref={svgRef} style={{ display: 'block', width: '100%', height: 34 }} aria-label={`Barcode ${value}`} />
+      <span style={{ display: 'block', marginTop: 2, fontSize: 11, color: '#0f766e', fontWeight: 700 }}>{value}</span>
+    </span>
+  );
+}
+
 export default function DoctorEmrLabWorkspace({
   queue = [],
   requests = [],
   doctorName = 'Doctor',
   onViewPatient,
 }) {
+  const { user } = useAuth();
+  const actorRole = user?.role || 'doctor';
+  const isNursingStation = actorRole === 'nurse';
   const patientOptions = useMemo(() => buildPatientList(queue, requests), [queue, requests]);
   const [catalog, setCatalog] = useState([]);
+  const [testSearch, setTestSearch] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [searchTouched, setSearchTouched] = useState(false);
   const [searchResults, setSearchResults] = useState([]);
@@ -229,6 +365,14 @@ export default function DoctorEmrLabWorkspace({
   const [selectedReport, setSelectedReport] = useState(null);
   const [loadingSelectedReport, setLoadingSelectedReport] = useState(false);
   const [releasingReport, setReleasingReport] = useState(false);
+  const filteredCatalog = useMemo(() => {
+    const query = testSearch.trim().toLowerCase();
+    if (!query) return catalog;
+    return catalog.filter((test) => (
+      test.name.toLowerCase().includes(query) ||
+      String(test.category || '').toLowerCase().includes(query)
+    ));
+  }, [catalog, testSearch]);
 
   useEffect(() => {
     let active = true;
@@ -257,11 +401,11 @@ export default function DoctorEmrLabWorkspace({
 
   useEffect(() => {
     if (!selectedPatient && patientOptions.length) {
-      const defaultPatient = patientOptions.find(isLabBookingEligible) || patientOptions[0];
+      const defaultPatient = patientOptions.find((patient) => isLabBookingEligible(patient, actorRole)) || patientOptions[0];
       setSelectedPatient(defaultPatient);
       setSearchQuery(defaultPatient.patientCode);
     }
-  }, [patientOptions, selectedPatient]);
+  }, [actorRole, patientOptions, selectedPatient]);
 
   useEffect(() => {
     if (!selectedPatient?.patientId || !patientOptions.length) return;
@@ -273,7 +417,7 @@ export default function DoctorEmrLabWorkspace({
       ))
       || patientOptions.find((patient) => (
         String(patient.patientId) === String(selectedPatient.patientId)
-        && patient.bookingEligible
+        && isLabBookingEligible(patient, actorRole)
       ));
 
     if (!refreshedCandidate) return;
@@ -282,13 +426,18 @@ export default function DoctorEmrLabWorkspace({
       refreshedCandidate.appointmentId !== selectedPatient.appointmentId
       || refreshedCandidate.bookingEligible !== selectedPatient.bookingEligible
       || refreshedCandidate.latestCompletedAppointmentDate !== selectedPatient.latestCompletedAppointmentDate
+      || refreshedCandidate.latestActiveAppointmentDate !== selectedPatient.latestActiveAppointmentDate
       || refreshedCandidate.patientCode !== selectedPatient.patientCode
-      || refreshedCandidate.phone !== selectedPatient.phone;
+      || refreshedCandidate.phone !== selectedPatient.phone
+      || refreshedCandidate.roomNo !== selectedPatient.roomNo
+      || refreshedCandidate.admissionId !== selectedPatient.admissionId
+      || refreshedCandidate.activeOpdQueueId !== selectedPatient.activeOpdQueueId
+      || refreshedCandidate.activeOpdQueueStatus !== selectedPatient.activeOpdQueueStatus;
 
     if (changed) {
       setSelectedPatient((current) => ({ ...current, ...refreshedCandidate }));
     }
-  }, [patientOptions, selectedPatient]);
+  }, [actorRole, patientOptions, selectedPatient]);
 
   useEffect(() => {
     if (!searchTouched) {
@@ -428,6 +577,17 @@ export default function DoctorEmrLabWorkspace({
     setSearchResults([]);
   };
 
+  useEffect(() => {
+    if (!selectedPatient) return;
+
+    setForm((current) => ({
+      ...current,
+      place: selectedPatient.place || current.place || 'Indoor',
+      roomNo: selectedPatient.roomNo || current.roomNo,
+    }));
+    setErrors((current) => ({ ...current, roomNo: '' }));
+  }, [selectedPatient]);
+
   const handleFormChange = (field, value) => {
     setForm((current) => {
       const next = { ...current, [field]: value };
@@ -440,9 +600,9 @@ export default function DoctorEmrLabWorkspace({
     setErrors((current) => ({ ...current, [field]: '' }));
   };
 
-  const validateForm = () => {
+  const validateForm = (testId = form.testId) => {
     const nextErrors = {};
-    if (!form.testId) nextErrors.testId = 'Test type is required.';
+    if (!testId) nextErrors.testId = 'Test type is required.';
     if (!form.priority) nextErrors.priority = 'Priority is required.';
     if (!form.place) nextErrors.place = 'Place is required.';
 
@@ -457,23 +617,27 @@ export default function DoctorEmrLabWorkspace({
     return nextErrors;
   };
 
-  const handleAddTest = () => {
-    const nextErrors = validateForm();
+  const handleAddTest = (testId = form.testId) => {
+    const nextErrors = validateForm(testId);
     if (Object.keys(nextErrors).length) {
       setErrors(nextErrors);
       return;
     }
 
-    const selectedTest = catalog.find((test) => String(test.id) === String(form.testId));
+    const selectedTest = catalog.find((test) => String(test.id) === String(testId));
     if (!selectedTest) {
       toast.error('Please choose a valid test type');
       return;
     }
 
-    if (tests.some((test) => String(test.testId) === String(form.testId))) {
+    if (tests.some((test) => String(test.testId) === String(testId))) {
       toast.error('This test is already added.');
       return;
     }
+
+    const partnerBarcode = form.place === 'Outside'
+      ? buildPartnerBarcode(form.labName, selectedPatient?.patientCode || selectedPatient?.patientId)
+      : '';
 
     setTests((current) => [
       ...current,
@@ -481,15 +645,23 @@ export default function DoctorEmrLabWorkspace({
         id: Date.now(),
         testId: selectedTest.id,
         testType: selectedTest.name,
+        category: selectedTest.category || 'General',
         priority: form.priority,
         place: form.place,
         roomNo: form.roomNo,
         labName: form.labName,
+        partnerBarcode,
         criteria: form.criteria,
         additionalDetails: form.additionalDetails,
       },
     ]);
-    setForm(initialForm);
+    setForm((current) => ({
+      ...initialForm,
+      priority: current.priority,
+      place: selectedPatient?.place || current.place || initialForm.place,
+      roomNo: selectedPatient?.roomNo || current.roomNo,
+    }));
+    setTestSearch('');
     setErrors({});
     toast.success(`${selectedTest.name} added successfully.`);
   };
@@ -532,14 +704,94 @@ export default function DoctorEmrLabWorkspace({
     }
   };
 
+  const handlePrintLabels = () => {
+    const printableTests = tests.filter((test) => test.partnerBarcode);
+
+    if (!selectedPatient?.patientId || !printableTests.length) {
+      toast.error('Add an external partner test before printing labels.');
+      return;
+    }
+
+    const printWindow = window.open('', '_blank', 'noopener,noreferrer');
+    if (!printWindow) {
+      toast.error('Allow pop-ups to print barcode labels.');
+      return;
+    }
+
+    const nowLabel = new Date().toLocaleString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    const labelsMarkup = printableTests.map((test) => `
+      <section class="label">
+        <div class="top">
+          <div>
+            <div class="partner">${escapeHtml(test.labName || 'External Partner')}</div>
+            <div class="test">${escapeHtml(test.testType)}</div>
+          </div>
+          <div class="priority">${escapeHtml(test.priority)}</div>
+        </div>
+        <div class="patient">${escapeHtml(selectedPatient.patientName || 'Patient')}</div>
+        <div class="meta">${escapeHtml(selectedPatient.patientCode || '')}${selectedPatient.patientId ? ` · ID ${escapeHtml(selectedPatient.patientId)}` : ''}</div>
+        <div class="meta">${escapeHtml(selectedPatient.roomNo ? `Room ${selectedPatient.roomNo}` : (selectedPatient.place || ''))}</div>
+        <div class="meta">Printed ${escapeHtml(nowLabel)}</div>
+        <div class="barcode">${createBarcodeMarkup(test.partnerBarcode, { height: 52, width: 1.6 })}</div>
+        <div class="barcode-text">${escapeHtml(test.partnerBarcode)}</div>
+      </section>
+    `).join('');
+
+    printWindow.document.write(`
+      <!doctype html>
+      <html lang="en">
+        <head>
+          <meta charset="utf-8" />
+          <title>Lab Labels</title>
+          <style>
+            * { box-sizing: border-box; }
+            body { margin: 0; padding: 18px; font-family: Arial, sans-serif; background: #fff; color: #111827; }
+            .sheet { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+            .label { border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px; break-inside: avoid; }
+            .top { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+            .partner { font-size: 13px; font-weight: 700; text-transform: uppercase; color: #0f766e; }
+            .test { margin-top: 4px; font-size: 18px; font-weight: 700; }
+            .priority { border: 1px solid #cbd5e1; border-radius: 999px; padding: 4px 8px; font-size: 11px; font-weight: 700; text-transform: uppercase; }
+            .patient { margin-top: 10px; font-size: 16px; font-weight: 700; }
+            .meta { margin-top: 3px; font-size: 12px; color: #475569; }
+            .barcode { margin-top: 14px; }
+            .barcode svg { width: 100%; height: 62px; display: block; }
+            .barcode-text { margin-top: 8px; font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-align: center; }
+            @page { margin: 10mm; }
+            @media print {
+              body { padding: 0; }
+            }
+          </style>
+        </head>
+        <body>
+          <main class="sheet">${labelsMarkup}</main>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+    printWindow.focus();
+    window.setTimeout(() => {
+      printWindow.print();
+    }, 250);
+  };
+
   const handleConfirmBooking = async () => {
     if (!selectedPatient?.patientId) {
       toast.error('Please select a patient first.');
       return;
     }
 
-    if (!isLabBookingEligible(selectedPatient)) {
-      toast.error('Complete the appointment / OPD session first before booking lab tests.');
+    if (!isLabBookingEligible(selectedPatient, actorRole)) {
+      toast.error(isNursingStation
+        ? 'Booking unlocks only when an active visit, OPD record, or indoor admission is found.'
+        : 'Complete the appointment / OPD session first before booking lab tests.');
       return;
     }
 
@@ -557,7 +809,8 @@ export default function DoctorEmrLabWorkspace({
 
       const response = getPayload(await api.post('/reports', {
         patientId: selectedPatient.patientId,
-        appointmentId: selectedPatient.appointmentId,
+        appointmentId: selectedPatient.appointmentId || null,
+        admissionId: selectedPatient.admissionId || null,
         priority: getOrderPriority(tests),
         clinicalIndication: criteriaSummary || null,
         doctorInstructions: locationSummary || null,
@@ -566,7 +819,8 @@ export default function DoctorEmrLabWorkspace({
           testId: test.testId,
           criteriaText: test.criteria || null,
           additionalDetails: [
-            test.place === 'Indoor' ? `Indoor - ${test.roomNo}` : `Outside - ${test.labName}`,
+            test.place === 'Indoor' ? `Indoor - ${test.roomNo}` : `External Lab - ${test.labName}`,
+            test.partnerBarcode ? `Barcode: ${test.partnerBarcode}` : null,
             test.additionalDetails || null,
           ].filter(Boolean).join(' | '),
         })),
@@ -583,17 +837,34 @@ export default function DoctorEmrLabWorkspace({
     }
   };
 
-  const selectedPatientEligible = isLabBookingEligible(selectedPatient);
+  const selectedPatientEligible = isLabBookingEligible(selectedPatient, actorRole);
   const selectedPatientEligibilityMessage = !selectedPatient
-    ? 'Search for a patient with a completed appointment or OPD visit to continue.'
+    ? (isNursingStation
+      ? 'Enter a patient ID, UHID, phone, or name to detect an active visit, OPD record, or indoor admission.'
+      : 'Search for a patient with a completed appointment or OPD visit to continue.')
     : selectedPatientEligible
-      ? `Booking is enabled from the completed appointment${selectedPatient?.latestCompletedAppointmentDate ? ` on ${formatDate(selectedPatient.latestCompletedAppointmentDate, 'recent visit')}` : ''}.`
-      : 'Complete the appointment / OPD session first to enable lab booking for this patient.';
+      ? (selectedPatient.admissionId
+        ? `Booking is enabled for indoor patient${selectedPatient.roomNo ? ` in room ${selectedPatient.roomNo}` : ''}.`
+        : selectedPatient.activeOpdQueueId
+          ? `Booking is enabled from the active OPD queue${selectedPatient.activeOpdQueueStatus ? ` (${selectedPatient.activeOpdQueueStatus})` : ''}.`
+        : `Booking is enabled from ${selectedPatient.latestActiveAppointmentDate ? `the OPD visit on ${formatDate(selectedPatient.latestActiveAppointmentDate, 'recent visit')}` : 'an active OPD/appointment record'}.`)
+      : (isNursingStation
+        ? 'Booking locked. Active visit, OPD record, or indoor admission was not found for this patient.'
+        : 'Complete the appointment / OPD session first to enable lab booking for this patient.');
   const isAddDisabled = !selectedPatientEligible || !form.testId || !form.priority || !form.place || (form.place === 'Indoor' && !form.roomNo.trim()) || (form.place === 'Outside' && !form.labName);
   const isConfirmDisabled = !selectedPatient?.patientId || !selectedPatientEligible || tests.length === 0 || submitting;
+  const canPrintLabels = tests.some((test) => test.partnerBarcode);
   const selectedWorkflowStage = normalizeStatus(selectedReport?.WorkflowStage || selectedReport?.Status || selectedReport?.status);
   const selectedReportApproved = Boolean(selectedReport?.VerifiedAt || selectedReport?.verifiedAt || ['doctorreview', 'reviewed', 'released'].includes(selectedWorkflowStage));
   const selectedReportReleased = selectedWorkflowStage === 'released' || Boolean(selectedReport?.ReleasedToPatientAt || selectedReport?.releasedToPatientAt);
+  const workspaceTitle = isNursingStation ? 'Nursing Station - Lab Booking' : 'Book Lab Test';
+  const workspaceSubtitle = isNursingStation
+    ? 'Search a patient, confirm active visit details, and book internal or external partner investigations.'
+    : `${doctorName} can schedule diagnostic procedures and review technician-uploaded PDF/video reports from the same workspace.`;
+  const reportsHeading = isNursingStation ? 'Recent Lab Bookings & Reports' : 'Recent Lab Orders & Reports';
+  const reportsSubtitle = isNursingStation
+    ? 'Nursing bookings, external partner barcodes, and uploaded reports appear here after result submission.'
+    : 'Doctor can review technician-uploaded report PDFs, images, and videos here.';
 
   return (
     <div className="doctor-lab-page">
@@ -622,6 +893,11 @@ export default function DoctorEmrLabWorkspace({
         .patient-dropdown { position:absolute; top:calc(100% + 4px); left:0; right:0; background:#fff; border:1.5px solid #dde3dd; border-radius:8px; z-index:100; box-shadow:0 4px 16px rgba(0,0,0,0.08); overflow:hidden; }
         .patient-item { padding:10px 14px; cursor:pointer; font-size:14px; border-bottom:1px solid #f0f2f0; display:flex; justify-content:space-between; gap:12px; }
         .patient-item:hover { background:#e1f5ee; }
+        .test-catalog { max-height:260px; overflow:auto; display:grid; gap:8px; padding-right:4px; }
+        .catalog-row { width:100%; border:1px solid #e7ece7; border-radius:10px; background:#fbfcfb; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 12px; text-align:left; }
+        .catalog-row.added { background:#ecfdf5; border-color:#a7f3d0; }
+        .catalog-add { width:32px; height:32px; border-radius:8px; border:0; background:#0f766e; color:#fff; font-size:18px; line-height:1; font-weight:800; cursor:pointer; flex-shrink:0; }
+        .catalog-add:disabled { background:#bbd5ce; cursor:not-allowed; }
         .eligibility-banner { margin:0 0 20px; border-radius:12px; padding:12px 16px; font-size:13px; line-height:1.5; border:1px solid transparent; }
         .eligibility-banner.ready { background:#ecfdf5; border-color:#a7f3d0; color:#166534; }
         .eligibility-banner.blocked { background:#fff7ed; border-color:#fdba74; color:#9a3412; }
@@ -639,10 +915,8 @@ export default function DoctorEmrLabWorkspace({
         @media (max-width: 900px) { .blt-grid-3,.blt-grid-2,.report-layout { grid-template-columns:1fr; } }
       `}</style>
 
-      <h1 className="blt-title">Book Lab Test</h1>
-      <p className="blt-subtitle">
-        {doctorName} can schedule diagnostic procedures and review technician-uploaded PDF/video reports from the same workspace.
-      </p>
+      <h1 className="blt-title">{workspaceTitle}</h1>
+      <p className="blt-subtitle">{workspaceSubtitle}</p>
 
       <div className="blt-grid-3">
         <div style={{ position: 'relative' }}>
@@ -677,14 +951,50 @@ export default function DoctorEmrLabWorkspace({
 
       <div className="blt-grid-2">
         <section className="blt-card">
-          <h2 style={{ margin: '0 0 20px', fontSize: 17, fontWeight: 700 }}>Test Type and Details</h2>
+          <h2 style={{ margin: '0 0 20px', fontSize: 17, fontWeight: 700 }}>Search Tests and Details</h2>
           <div className="blt-field">
-            <label className="blt-label">Test Type</label>
-            <select className={`blt-select${errors.testId ? ' field-error' : ''}`} value={form.testId} onChange={(event) => handleFormChange('testId', event.target.value)} disabled={loadingCatalog}>
-              <option value="">{loadingCatalog ? 'Loading Test Catalog...' : 'Select Test Type'}</option>
-              {catalog.map((test) => <option key={test.id} value={test.id}>{test.name}</option>)}
-            </select>
+            <label className="blt-label">Find Test</label>
+            <input
+              className={`blt-input${errors.testId ? ' field-error' : ''}`}
+              value={testSearch}
+              onChange={(event) => {
+                setTestSearch(event.target.value);
+                setErrors((current) => ({ ...current, testId: '' }));
+              }}
+              placeholder="Search hematology, CBC, thyroid..."
+              disabled={loadingCatalog}
+            />
             {errors.testId ? <p className="err-msg">{errors.testId}</p> : null}
+          </div>
+          <div className="blt-field">
+            <div className="test-catalog">
+              {loadingCatalog ? (
+                <div className="catalog-row" style={{ color: '#607060' }}>Loading test catalog...</div>
+              ) : filteredCatalog.length === 0 ? (
+                <div className="catalog-row" style={{ color: '#a0aba0' }}>No tests matched your search.</div>
+              ) : (
+                filteredCatalog.map((test) => {
+                  const alreadyAdded = tests.some((item) => String(item.testId) === String(test.id));
+                  return (
+                    <div key={test.id} className={`catalog-row${alreadyAdded ? ' added' : ''}`}>
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 800, color: '#1a2e1a' }}>{test.name}</div>
+                        <div style={{ marginTop: 2, fontSize: 11, color: '#607060' }}>{test.category || 'General'}</div>
+                      </div>
+                      <button
+                        type="button"
+                        className="catalog-add"
+                        disabled={alreadyAdded || !selectedPatientEligible}
+                        onClick={() => handleAddTest(test.id)}
+                        title={alreadyAdded ? 'Already selected' : 'Add test'}
+                      >
+                        +
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
           </div>
           <div className="blt-field">
             <label className="blt-label">Priority</label>
@@ -699,7 +1009,7 @@ export default function DoctorEmrLabWorkspace({
               <label className="blt-label">Place</label>
               <select className="blt-select" value={form.place} onChange={(event) => handleFormChange('place', event.target.value)}>
                 <option value="Indoor">Indoor</option>
-                <option value="Outside">Outside</option>
+                <option value="Outside">External Lab</option>
               </select>
             </div>
             <div className="blt-field">
@@ -711,7 +1021,7 @@ export default function DoctorEmrLabWorkspace({
                 </>
               ) : (
                 <>
-                  <label className="blt-label">Lab Name</label>
+                  <label className="blt-label">External Partner</label>
                   <select className={`blt-select${errors.labName ? ' field-error' : ''}`} value={form.labName} onChange={(event) => handleFormChange('labName', event.target.value)}>
                     <option value="">Select Lab</option>
                     {LAB_OPTIONS.map((lab) => <option key={lab} value={lab}>{lab}</option>)}
@@ -733,12 +1043,11 @@ export default function DoctorEmrLabWorkspace({
             <div className="char-count">{form.additionalDetails.length}/500</div>
             {errors.additionalDetails ? <p className="err-msg">{errors.additionalDetails}</p> : null}
           </div>
-          <button className="btn-add" disabled={isAddDisabled} onClick={handleAddTest}>+ Add Test</button>
         </section>
 
         <section className="blt-card tests-card">
           <div className="tests-head">
-            <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700 }}>Total Tests</h2>
+            <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700 }}>Selected Tests</h2>
             {tests.length ? <span style={{ background: '#0f766e', color: '#fff', fontSize: 12, fontWeight: 700, padding: '4px 12px', borderRadius: 20 }}>{tests.length} added</span> : null}
           </div>
           <div style={{ flex: 1 }}>
@@ -746,13 +1055,17 @@ export default function DoctorEmrLabWorkspace({
               <div style={{ height: '100%', minHeight: 260, display: 'grid', placeItems: 'center', color: '#a0aba0', padding: 32, textAlign: 'center' }}>
                 <div>
                   <p style={{ margin: 0, fontSize: 14 }}>No tests added yet</p>
-                  <p style={{ margin: '6px 0 0', fontSize: 12 }}>Fill the form and click + Add Test</p>
+                  <p style={{ margin: '6px 0 0', fontSize: 12 }}>Search on the left and click + to add tests</p>
                 </div>
               </div>
             ) : (
               tests.map((test) => (
                 <div key={test.id} className="test-row">
-                  <span style={{ fontSize: 14, fontWeight: 700 }}>{test.testType}</span>
+                  <span>
+                    <span style={{ display: 'block', fontSize: 14, fontWeight: 700 }}>{test.testType}</span>
+                    <span style={{ display: 'block', marginTop: 2, fontSize: 11, color: '#607060' }}>{test.category || 'General'}</span>
+                    {test.partnerBarcode ? <BarcodePreview value={test.partnerBarcode} /> : null}
+                  </span>
                   <PriorityBadge type={test.priority} />
                   <span style={{ fontSize: 13, color: '#607060' }}>{test.place}</span>
                   <button onClick={() => setTests((current) => current.filter((item) => item.id !== test.id))} style={{ background: 'none', border: 'none', color: '#e24b4a', cursor: 'pointer', fontSize: 18 }}>×</button>
@@ -761,6 +1074,7 @@ export default function DoctorEmrLabWorkspace({
             )}
           </div>
           <div className="tests-foot">
+            {canPrintLabels ? <button className="btn-light" onClick={handlePrintLabels}>Print Labels</button> : null}
             <button className="btn-draft" onClick={() => toast.success('Draft saved locally for now.')}>Save as Draft</button>
             <button className="btn-confirm" disabled={isConfirmDisabled} onClick={handleConfirmBooking}>{submitting ? 'Saving...' : 'Confirm Booking'}</button>
           </div>
@@ -775,15 +1089,15 @@ export default function DoctorEmrLabWorkspace({
       <section className="report-shell">
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
           <div>
-            <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800 }}>Recent Lab Orders & Reports</h2>
-            <p style={{ margin: '6px 0 0', fontSize: 13, color: '#607060' }}>Doctor can review technician-uploaded report PDFs, images, and videos here.</p>
+            <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800 }}>{reportsHeading}</h2>
+            <p style={{ margin: '6px 0 0', fontSize: 13, color: '#607060' }}>{reportsSubtitle}</p>
           </div>
           <button className="btn-light" onClick={() => refreshDoctorReports()}>Refresh Reports</button>
         </div>
 
         <div className="report-layout">
           <div className="report-box">
-            <div className="report-box-head">Doctor Orders</div>
+            <div className="report-box-head">{isNursingStation ? 'Lab Bookings' : 'Doctor Orders'}</div>
             {loadingReports ? (
               <div style={{ padding: 24, color: '#607060' }}>Loading lab orders...</div>
             ) : doctorReports.length === 0 ? (

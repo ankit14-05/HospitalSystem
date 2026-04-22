@@ -20,6 +20,7 @@ import StaffRegisterPage   from './pages/register/StaffRegisterPage';
 // Dashboards
 import AdminDashboard   from './pages/dashboard/AdminDashboard';
 import DoctorDashboard  from './pages/dashboard/DoctorDashboard';
+import ConsultationPage from './pages/dashboard/ConsultationPage';
 import NurseDashboard   from './pages/dashboard/NurseDashboard';
 import ReceptionistDashboard from './pages/dashboard/ReceptionistDashboard';
 import PharmacistDashboard   from './pages/dashboard/PharmacistDashboard';
@@ -64,6 +65,7 @@ import AddFamilyMemberPage from './pages/profile/AddFamilyMemberPage';
 
 // Lab Module
 import LabBookingPage from './pages/doctor/LabBookingPage';
+import NursingLabBookingPage from './pages/nursing/NursingLabBookingPage';
 import EMRPage from './pages/patient/EMRPage';
 
 import { APPOINTMENT_DESK_ROLES, STAFF_ROLES } from './config/roles';
@@ -138,6 +140,14 @@ function RedirectIfAuth({ children }) {
   return <Navigate to={getDashboard(user?.role)} replace />;
 }
 
+function PublicOrAdminPatientRegisterRoute({ children }) {
+  const { isAuthenticated, user, loading } = useAuth();
+  if (loading) return null;
+  if (!isAuthenticated) return children;
+  if (['superadmin', 'admin'].includes(user?.role)) return children;
+  return <Navigate to={getDashboard(user?.role)} replace />;
+}
+
 /**
  * Smart root redirect — sends each role to their own dashboard.
  * Replaces the old hardcoded <Navigate to="/dashboard/admin" />.
@@ -165,10 +175,35 @@ export default function App() {
           <Route path="/login"           element={<RedirectIfAuth><LoginPage /></RedirectIfAuth>} />
           <Route path="/forgot-password" element={<RedirectIfAuth><ForgotPasswordPage /></RedirectIfAuth>} />
 
-          {/* ── Public registration routes ── */}
-          <Route path="/register/patient" element={<RedirectIfAuth><PatientRegisterPage /></RedirectIfAuth>} />
-          <Route path="/register/doctor"  element={<RedirectIfAuth><DoctorRegisterPage /></RedirectIfAuth>} />
-          <Route path="/register/staff"   element={<RedirectIfAuth><StaffRegisterPage /></RedirectIfAuth>} />
+          {/* Public patient registration; doctor/staff remain admin-only */}
+          <Route
+            path="/register/patient"
+            element={
+              <PublicOrAdminPatientRegisterRoute>
+                  <PatientRegisterPage />
+              </PublicOrAdminPatientRegisterRoute>
+            }
+          />
+          <Route
+            path="/register/doctor"
+            element={
+              <RequireAuth>
+                <RequireRole roles={['superadmin', 'admin']}>
+                  <DoctorRegisterPage />
+                </RequireRole>
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/register/staff"
+            element={
+              <RequireAuth>
+                <RequireRole roles={['superadmin', 'admin']}>
+                  <StaffRegisterPage />
+                </RequireRole>
+              </RequireAuth>
+            }
+          />
 
           {/* ── Custom Fullscreen Routes ── */}
           <Route
@@ -218,6 +253,14 @@ export default function App() {
               element={
                 <RequireRole roles={['doctor']}>
                   <DoctorDashboard />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="dashboard/doctor/consult/:id"
+              element={
+                <RequireRole roles={['doctor']}>
+                  <ConsultationPage />
                 </RequireRole>
               }
             />
@@ -320,9 +363,17 @@ export default function App() {
               }
             />
             <Route
+              path="nursing/lab-booking"
+              element={
+                <RequireRole roles={['nurse', 'admin', 'superadmin']}>
+                  <NursingLabBookingPage />
+                </RequireRole>
+              }
+            />
+            <Route
               path="patient/emr/:patientId?"
               element={
-                <RequireRole roles={['patient', 'doctor', 'admin', 'superadmin']}>
+                <RequireRole roles={['patient', 'doctor', 'nurse', 'admin', 'superadmin']}>
                   <EMRPage />
                 </RequireRole>
               }

@@ -6,7 +6,7 @@ import {
   Calendar, Search, Filter, RefreshCw, Plus, CheckCircle, XCircle,
   Clock, Eye, RotateCcw, ChevronLeft, ChevronRight, AlertCircle,
   Stethoscope, User, Phone, Hash, Building2, ArrowUpRight, Bell,
-  Check, X, CalendarClock, ClipboardList, FileText
+  Check, X, CalendarClock, ClipboardList, FileText, UserPlus
 } from 'lucide-react';
 import api from '../../services/api';
 import toast from 'react-hot-toast';
@@ -302,7 +302,7 @@ export default function AppointmentsPage() {
   const [searchInput,   setSearchInput]   = useState('');
   const [search,        setSearch]        = useState('');
   const [filterStatus,  setFilterStatus]  = useState('');
-  const [filterDate,    setFilterDate]    = useState('');
+  const [filterDate,    setFilterDate]    = useState(new Date().toISOString().slice(0, 10));
   const [filterDoctor,  setFilterDoctor]  = useState('');
   const [filterDepartment, setFilterDepartment] = useState('');
   const [filterOptions, setFilterOptions] = useState({ doctors: [], departments: [] });
@@ -315,6 +315,7 @@ export default function AppointmentsPage() {
   const [actionLoading,  setActionLoading]= useState(null);
 
   const isPatientView = user?.role === 'patient';
+  const isDoctorView = user?.role === 'doctor';
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => setSearch(searchInput.trim()), 250);
@@ -459,6 +460,7 @@ export default function AppointmentsPage() {
   const totalPages = Math.ceil((total || 0) / LIMIT);
   const isDeskRole = APPOINTMENT_DESK_ROLES.includes(user?.role);
   const canComplete = user?.role === 'doctor';
+  const canRegisterPatient = ['superadmin', 'admin'].includes(user?.role);
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -522,19 +524,21 @@ export default function AppointmentsPage() {
                 </option>
               ))}
             </select>
-            <select
-              value={filterDoctor}
-              onChange={e => { setFilterDoctor(e.target.value); setPage(1); }}
-              disabled={filtersLoading}
-              className="px-3 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 bg-white min-w-48 disabled:bg-slate-50"
-            >
-              <option value="">All Doctors</option>
-              {filterOptions.doctors.map((doctor) => (
-                <option key={doctor.DoctorId} value={doctor.DoctorId}>
-                  Dr. {doctor.DoctorName}{doctor.DepartmentName ? ` • ${doctor.DepartmentName}` : ''}
-                </option>
-              ))}
-            </select>
+            {!isDoctorView && (
+              <select
+                value={filterDoctor}
+                onChange={e => { setFilterDoctor(e.target.value); setPage(1); }}
+                disabled={filtersLoading}
+                className="px-3 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 bg-white min-w-48 disabled:bg-slate-50"
+              >
+                <option value="">All Doctors</option>
+                {filterOptions.doctors.map((doctor) => (
+                  <option key={doctor.DoctorId} value={doctor.DoctorId}>
+                    Dr. {doctor.DoctorName}{doctor.DepartmentName ? ` • ${doctor.DepartmentName}` : ''}
+                  </option>
+                ))}
+              </select>
+            )}
           </>
         )}
         <input type="date" value={filterDate} onChange={e => { setFilterDate(e.target.value); setPage(1); }}
@@ -553,6 +557,14 @@ export default function AppointmentsPage() {
             <X size={13} /> Clear
           </button>
         )}
+        {canRegisterPatient && (
+          <button
+            onClick={() => navigate('/register/patient')}
+            className="px-4 py-2.5 rounded-xl bg-indigo-600 text-sm font-semibold text-white hover:bg-indigo-700 flex items-center gap-1.5 shadow-sm shadow-indigo-200 transition-colors"
+          >
+            <UserPlus size={14} /> NEW Registration
+          </button>
+        )}
       </div>
 
       {/* ── Table ──────────────────────────────────────────────────────────── */}
@@ -561,9 +573,12 @@ export default function AppointmentsPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-100">
-                {['Ref / Token', 'Patient', 'Doctor', 'Date & Time', 'Dept', 'Type', 'Status', 'Actions'].map(h => (
-                  <th key={h} className="px-4 py-3.5 text-left text-xs font-bold text-slate-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
-                ))}
+                {['Ref / Token', 'Patient', 'Doctor', 'Date & Time', 'Dept', 'Type', 'Status', 'Actions'].map(h => {
+                  if (isDoctorView && h === 'Doctor') return null;
+                  return (
+                    <th key={h} className="px-4 py-3.5 text-left text-xs font-bold text-slate-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
@@ -575,6 +590,14 @@ export default function AppointmentsPage() {
                       <ClipboardList size={32} className="mx-auto text-slate-200 mb-3" />
                       <p className="text-slate-400 font-medium">No appointments found</p>
                       <p className="text-slate-300 text-xs mt-1">Try adjusting your filters</p>
+                      {canRegisterPatient && searchInput.trim() ? (
+                        <button
+                          onClick={() => navigate('/register/patient')}
+                          className="mt-4 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-indigo-200 transition-colors hover:bg-indigo-700"
+                        >
+                          <UserPlus size={14} /> NEW Registration
+                        </button>
+                      ) : null}
                     </td></tr>
                   ) : filtered.map(a => {
                     const isActioning = actionLoading === a.Id;
@@ -608,18 +631,20 @@ export default function AppointmentsPage() {
                         </td>
 
                         {/* Doctor */}
-                        <td className="px-4 py-3.5">
-                          <p className="font-medium text-slate-700">Dr. {a.DoctorFirstName} {a.DoctorLastName}</p>
-                          {a.ConsultationFee && <p className="text-xs text-slate-400">₹{a.ConsultationFee}</p>}
-                          <div className="mt-2 flex flex-wrap gap-1.5">
-                            {getPrescriptionCount(a) > 0 ? (
-                              <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-700">Rx ready</span>
-                            ) : null}
-                            {getLabOrderCount(a) > 0 ? (
-                              <span className="rounded-full bg-cyan-50 px-2.5 py-1 text-[11px] font-bold text-cyan-700">Tests ordered</span>
-                            ) : null}
-                          </div>
-                        </td>
+                        {!isDoctorView && (
+                          <td className="px-4 py-3.5">
+                            <p className="font-medium text-slate-700">Dr. {a.DoctorFirstName} {a.DoctorLastName}</p>
+                            {a.ConsultationFee && <p className="text-xs text-slate-400">₹{a.ConsultationFee}</p>}
+                            <div className="mt-2 flex flex-wrap gap-1.5">
+                              {getPrescriptionCount(a) > 0 ? (
+                                <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-700">Rx ready</span>
+                              ) : null}
+                              {getLabOrderCount(a) > 0 ? (
+                                <span className="rounded-full bg-cyan-50 px-2.5 py-1 text-[11px] font-bold text-cyan-700">Tests ordered</span>
+                              ) : null}
+                            </div>
+                          </td>
+                        )}
 
                         {/* Date & Time */}
                         <td className="px-4 py-3.5 whitespace-nowrap">

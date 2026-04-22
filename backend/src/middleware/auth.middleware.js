@@ -87,6 +87,19 @@ const authorize = (...roles) => {
   };
 };
 
+const isAdmin = (req, res, next) => {
+  if (!req.user) {
+    return next(new AppError('Not authenticated.', 401));
+  }
+
+  const role = String(req.user.role || '').toLowerCase();
+  if (!['superadmin', 'admin'].includes(role)) {
+    return next(new AppError('Only administrators can create new accounts.', 403));
+  }
+
+  return next();
+};
+
 const hospitalScope = (req, res, next) => {
   if (req.user.role === 'superadmin') return next();
   const hospitalId = parseInt(req.headers['x-hospital-id'] || req.params.hospitalId || req.body.hospitalId, 10);
@@ -96,4 +109,4 @@ const hospitalScope = (req, res, next) => {
   return next();
 };
 
-module.exports = { authenticate, authorize, hospitalScope };
+module.exports = { authenticate, authorize, isAdmin, hospitalScope };
