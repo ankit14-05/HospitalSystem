@@ -164,6 +164,29 @@ const notifyReminder = (params) => createNotification({
   dataJson:    { appointmentNo: params.appointmentNo },
 });
 
+const notifyAdminOfTransferRequest = async ({ hospitalId, technicianName, roomNo, assignmentId }) => {
+  const pool = await getDb();
+  // Get all active admins
+  const admins = await pool.request().query(`
+    SELECT u.Id 
+    FROM dbo.Users u 
+    JOIN dbo.Roles r ON r.Id = u.RoleId 
+    WHERE r.Code IN ('admin', 'superadmin') AND u.IsActive = 1
+  `);
+  
+  const notifications = admins.recordset.map(admin => ({
+    hospitalId,
+    userId: admin.Id,
+    notifType: 'alert',
+    title: 'Lab Room Transfer Request',
+    body: `${technicianName} has requested to move to Room ${roomNo}.`,
+    link: `/dashboard/admin/lab-approvals`, // Placeholder for admin approval page
+    dataJson: { assignmentId, technicianName, roomNo }
+  }));
+
+  await createBulkNotifications(notifications);
+};
+
 module.exports = {
   createNotification,
   createBulkNotifications,
@@ -177,4 +200,5 @@ module.exports = {
   notifyCompleted,
   notifyMissed,
   notifyReminder,
+  notifyAdminOfTransferRequest,
 };

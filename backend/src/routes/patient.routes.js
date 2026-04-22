@@ -38,9 +38,17 @@ router.get('/search', async (req, res, next) => {
     const pool   = await getPool();
     const search = req.query.q || req.query.search || '';
     const limit  = Math.min(parseInt(req.query.limit) || 20, 100);
+    console.log(`[DEBUG] /patients/search - Query: "${search}", Limit: ${limit}`);
+    
     const result = await searchPatients(pool, search, limit);
+    console.log(`[DEBUG] /patients/search - Found ${result.recordset?.length || 0} rows`);
+    console.log(result.recordset);
+    
     res.json({ success: true, data: result.recordset });
-  } catch (err) { next(err); }
+  } catch (err) { 
+    console.error(`[DEBUG] /patients/search API Error:`, err);
+    next(err); 
+  }
 });
 
 // ── 2. GET /profile  ──────────────────────────────────────────────────────────

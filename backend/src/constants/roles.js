@@ -3,6 +3,8 @@ const ROLE_ALIASES = {
   lab_technician: 'labtech',
   'opd manager': 'opdmanager',
   opd_manager: 'opdmanager',
+  'lab incharge': 'lab_incharge',
+  lab_incharge: 'lab_incharge',
 };
 
 const normalizeRole = (value) => {
@@ -16,6 +18,7 @@ const STAFF_PROFILE_ROLES = [
   'pharmacist',
   'labtech',
   'lab_technician',
+  'lab_incharge',
   'ward_boy',
   'housekeeping',
   'security',
@@ -44,6 +47,7 @@ const DB_ALLOWED_ROLES = [
   'pharmacist',
   'labtech',
   'lab_technician',
+  'lab_incharge',
   'patient',
   'auditor',
   'ward_boy',

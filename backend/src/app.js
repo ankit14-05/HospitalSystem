@@ -29,6 +29,8 @@ const schedulingRoutes   = require('./routes/scheduling.routes');   // ← NEW
 const dashboardRoutes    = require('./routes/dashboard.routes');
 const profileRoutes      = require('./routes/profile.routes');
 const rolesRoutes        = require('./routes/roles.routes');
+const emrRoutes          = require('./routes/emr.routes');          // ← EMR module
+const labRoutes          = require('./routes/lab.routes');           // ← Lab module
 
 const app = express();
 const frontendDistPath = path.resolve(__dirname, '../../frontend/dist');
@@ -122,6 +124,11 @@ app.use(`${prefix}/scheduling`,    schedulingRoutes);               // ← NEW
 app.use(`${prefix}/dashboard`,     dashboardRoutes);
 app.use(`${prefix}/profile`,       profileRoutes);
 app.use(`${prefix}/roles`,         rolesRoutes);
+app.use(`${prefix}/emr`,           emrRoutes);            // ← EMR module
+app.use(`${prefix}/lab`,           labRoutes);            // ← Lab module
+
+// Serve static uploads
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 if (hasBuiltFrontend) {
   app.use(express.static(frontendDistPath));

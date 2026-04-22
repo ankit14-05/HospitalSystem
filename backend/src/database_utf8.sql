@@ -1,4 +1,4 @@
-﻿USE [Hospital_Database]
+USE [HospitalDB]
 GO
 /****** Object:  User [hms_user]    Script Date: 17-03-2026 22:01:35 ******/
 CREATE USER [hms_user] FOR LOGIN [hms_user] WITH DEFAULT_SCHEMA=[dbo]

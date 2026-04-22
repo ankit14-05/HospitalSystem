@@ -1,30 +1,11 @@
-import { useState, useCallback } from "react";
-
-const TEST_OPTIONS = [
-  "Complete Blood Count (CBC)",
-  "Lipid Panel",
-  "X-Ray Chest PA View",
-  "Blood Glucose (Fasting)",
-  "Thyroid Function Test (TFT)",
-  "Liver Function Test (LFT)",
-  "Urine Routine & Microscopy",
-  "HbA1c",
-  "Serum Creatinine",
-  "ECG / EKG",
-];
+import { useState, useCallback, useEffect } from "react";
+import api from "../../services/api";
 
 const LAB_OPTIONS = ["Apollo Diagnostics", "SRL Diagnostics", "Dr Lal PathLabs", "Metropolis", "Thyrocare"];
 
-const MOCK_PATIENTS = [
-  { id: "PT-1001", name: "Arjun Mehta", phone: "9876543210" },
-  { id: "PT-1002", name: "Priya Sharma", phone: "9123456780" },
-  { id: "PT-1003", name: "Rohan Verma", phone: "9988776655" },
-  { id: "PT-2045", name: "Sunita Patel", phone: "8765432109" },
-];
-
 const initialForm = {
-  testType: "",
-  priority: "Normal",
+  testId: "",
+  priority: "Routine",
   place: "Indoor",
   roomNo: "",
   labName: "",
@@ -34,8 +15,9 @@ const initialForm = {
 
 function Badge({ type }) {
   const styles = {
-    Normal: { background: "#e6f9f0", color: "#0f6e56", border: "1px solid #9fe1cb" },
+    Routine: { background: "#e6f9f0", color: "#0f6e56", border: "1px solid #9fe1cb" },
     Urgent: { background: "#faeeda", color: "#854f0b", border: "1px solid #fac775" },
+    STAT: { background: "#fcebeb", color: "#a32d2d", border: "1px solid #f09595" },
   };
   return (
     <span style={{ ...styles[type], fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 4, letterSpacing: "0.04em", textTransform: "uppercase" }}>
@@ -65,31 +47,86 @@ function Toast({ message, type, onClose }) {
 export default function BookLabTest() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState([]);
+  const [isSearching, setIsSearching] = useState(false);
   const [selectedPatient, setSelectedPatient] = useState(null);
   const [form, setForm] = useState(initialForm);
   const [errors, setErrors] = useState({});
   const [tests, setTests] = useState([]);
   const [toast, setToast] = useState(null);
   const [submitted, setSubmitted] = useState(false);
+  const [testDropdownOptions, setTestDropdownOptions] = useState([]);
+
+  const [labRooms, setLabRooms] = useState([]);
+  const [autofillRules, setAutofillRules] = useState([]);
+  const [externalLabs, setExternalLabs] = useState([]);
+
+  useEffect(() => {
+    // Fetch Tests
+    api.get("/lab/tests")
+      .then(res => {
+        if (res.success) {
+          setTestDropdownOptions(res.data);
+        }
+      })
+      .catch(err => console.error("Could not fetch test options:", err));
+
+    // Fetch Rooms
+    api.get("/lab/rooms")
+      .then(res => {
+        if (res.success) {
+          setLabRooms(res.data);
+        }
+      })
+      .catch(err => console.error("Could not fetch lab rooms:", err));
+      
+    // Fetch Autofill Rules
+    api.get("/lab/autofill-rules")
+      .then(res => {
+        if (res.success) setAutofillRules(res.data);
+      })
+      .catch(err => console.error("Could not fetch autofill rules:", err));
+
+    // Fetch External Labs
+    api.get("/lab/labs")
+      .then(res => {
+        if (res.success) setExternalLabs(res.data);
+      })
+      .catch(err => console.error("Could not fetch external labs:", err));
+  }, []);
 
   const showToast = (message, type = "success") => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
   };
 
-  const handleSearchChange = (e) => {
+  const handleSearchChange = async (e) => {
     const val = e.target.value;
     setSearchQuery(val);
     if (val.length >= 3) {
-      const results = MOCK_PATIENTS.filter(
-        (p) =>
-          p.id.toLowerCase().includes(val.toLowerCase()) ||
-          p.phone.includes(val) ||
-          p.name.toLowerCase().includes(val.toLowerCase())
-      );
-      setSearchResults(results);
+      setIsSearching(true);
+      try {
+        const res = await api.get(`/patients/search?q=${encodeURIComponent(val.trim())}`);
+        console.log("Search API Response:", res);
+        if (res.success) {
+          const formatted = (res.data || []).map(p => ({
+            id: p.UHID || p.Id?.toString() || "Unknown",
+            patientId: p.Id,
+            name: p.FullName || `${p.FirstName || ''} ${p.LastName || ''}`.trim() || 'No Name',
+            phone: p.Phone || ""
+          }));
+          console.log("Formatted options:", formatted);
+          setSearchResults(formatted);
+        }
+      } catch (err) {
+        console.error("Search failed:", err);
+        showToast("Search API failed: " + (err.response?.data?.message || err.message), "error");
+        setSearchResults([]);
+      } finally {
+        setIsSearching(false);
+      }
     } else {
       setSearchResults([]);
+      setIsSearching(false);
     }
   };
 
@@ -99,13 +136,26 @@ export default function BookLabTest() {
     setSearchResults([]);
   };
 
+  // Helper to map test category to room based on DB rules
+  const getAutoRoom = (testId, rules) => {
+    const selTest = testDropdownOptions.find(t => t.Id.toString() === testId);
+    if (!selTest || !rules) return null;
+    return rules.find(r => r.TestCategory === selTest.Category) || null;
+  };
+
   const handleFormChange = (field, value) => {
     setForm((prev) => {
       const next = { ...prev, [field]: value };
-      if (field === "place") {
-        next.roomNo = "";
-        next.labName = "";
+      
+      if (field === "testId") {
+        const rule = getAutoRoom(value, autofillRules);
+        if (rule) {
+          next.place = rule.Place;
+          next.roomNo = rule.RoomNo || "";
+          next.labName = rule.LabName || "";
+        }
       }
+
       return next;
     });
     setErrors((prev) => ({ ...prev, [field]: "" }));
@@ -113,14 +163,13 @@ export default function BookLabTest() {
 
   const validateForm = () => {
     const errs = {};
-    if (!form.testType) errs.testType = "Test type is required.";
+    if (!form.testId) errs.testId = "Test type is required.";
     if (!form.priority) errs.priority = "Priority is required.";
     if (!form.place) errs.place = "Place is required.";
-    if (form.place === "Indoor") {
-      if (!form.roomNo.trim()) errs.roomNo = "Room No is required for Indoor.";
-      else if (!/^[a-zA-Z0-9-]+$/.test(form.roomNo.trim())) errs.roomNo = "Only alphanumeric (e.g. 101A, ICU-3).";
+    if (form.place === "Indoor" && !form.roomNo) {
+      errs.roomNo = "Please select a clinical room.";
     }
-    if (form.place === "Outside" && !form.labName) errs.labName = "Lab name is required for Outside.";
+    if (form.place === "Outdoor" && !form.labName) errs.labName = "Lab name is required for Outdoor.";
     if (form.criteria.length > 150) errs.criteria = "Max 150 characters.";
     if (form.additionalDetails.length > 500) errs.additionalDetails = "Max 500 characters.";
     return errs;
@@ -132,21 +181,22 @@ export default function BookLabTest() {
       setErrors(errs);
       return;
     }
-    if (tests.some((t) => t.testType === form.testType)) {
+    if (tests.some((t) => t.testId === form.testId)) {
       showToast("This test is already added.", "error");
       return;
     }
-    setTests((prev) => [...prev, { ...form, id: Date.now() }]);
+    const selTest = testDropdownOptions.find(t => t.Id.toString() === form.testId);
+    setTests((prev) => [...prev, { ...form, id: Date.now(), testName: selTest?.Name || "Unknown Test" }]);
     setForm(initialForm);
     setErrors({});
-    showToast(`${form.testType} added successfully.`);
+    showToast(`${selTest?.Name} added successfully.`);
   };
 
   const handleDeleteTest = (id) => {
     setTests((prev) => prev.filter((t) => t.id !== id));
   };
 
-  const handleConfirmBooking = () => {
+  const handleConfirmBooking = async () => {
     if (!selectedPatient) {
       showToast("Please select a patient first.", "error");
       return;
@@ -155,8 +205,37 @@ export default function BookLabTest() {
       showToast("Add at least one test to confirm booking.", "error");
       return;
     }
-    setSubmitted(true);
-    showToast("Booking confirmed successfully!");
+    
+    const payload = {
+      patientId: selectedPatient.patientId,
+      tests: tests.map(t => ({ 
+        testId: Number(t.testId),
+        priority: t.priority,
+        placeType: t.place,
+        roomNo: t.roomNo || null,
+        externalLabName: t.labName || null,
+        criteria: t.criteria || null,
+        additionalDetails: t.additionalDetails || null
+      }))
+    };
+
+    try {
+      const res = await api.post("/lab/orders", payload);
+      if (res.success) {
+        setSubmitted(true);
+        showToast("Booking confirmed successfully!");
+        setTests([]);
+        setSelectedPatient(null);
+        setSearchQuery("");
+      }
+    } catch (error) {
+      console.error(error);
+      let msg = error.message || "Failed to confirm booking.";
+      if (error.errors && Array.isArray(error.errors)) {
+        msg = error.errors.map(e => e.msg || e.message).join(", ");
+      }
+      showToast(msg, "error");
+    }
   };
 
   const handleSaveDraft = () => {
@@ -168,11 +247,11 @@ export default function BookLabTest() {
   };
 
   const isAddDisabled =
-    !form.testType ||
+    !form.testId ||
     !form.priority ||
     !form.place ||
     (form.place === "Indoor" && !form.roomNo.trim()) ||
-    (form.place === "Outside" && !form.labName);
+    (form.place === "Outdoor" && !form.labName);
 
   const isConfirmDisabled = !selectedPatient || tests.length === 0;
 
@@ -275,14 +354,20 @@ export default function BookLabTest() {
             onChange={handleSearchChange}
             style={{ background: "#fff", border: "1.5px solid #dde3dd" }}
           />
-          {searchResults.length > 0 && (
+          {searchQuery.length >= 3 && (
             <div className="patient-dropdown">
-              {searchResults.map((p) => (
-                <div key={p.id} className="patient-item" onClick={() => handleSelectPatient(p)}>
-                  <span style={{ fontWeight: 500, color: "#1a2e1a" }}>{p.name}</span>
-                  <span style={{ fontSize: 12, color: "#607060" }}>{p.id} · {p.phone}</span>
-                </div>
-              ))}
+              {isSearching ? (
+                <div style={{ padding: "12px", fontSize: 13, color: "#607060", textAlign: "center" }}>Searching...</div>
+              ) : searchResults.length > 0 ? (
+                searchResults.map((p) => (
+                  <div key={p.id} className="patient-item" onClick={() => handleSelectPatient(p)}>
+                    <span style={{ fontWeight: 500, color: "#1a2e1a" }}>{p.name}</span>
+                    <span style={{ fontSize: 12, color: "#607060" }}>{p.id} · {p.phone}</span>
+                  </div>
+                ))
+              ) : (
+                <div style={{ padding: "12px", fontSize: 13, color: "#a32d2d", textAlign: "center" }}>No patients found for "{searchQuery}"</div>
+              )}
             </div>
           )}
         </div>
@@ -312,19 +397,20 @@ export default function BookLabTest() {
           {/* Test Type */}
           <div style={{ marginBottom: 16 }}>
             <label>Test Type</label>
-            <select className={`blt-select${errors.testType ? " field-error" : ""}`} value={form.testType} onChange={(e) => handleFormChange("testType", e.target.value)}>
+            <select className={`blt-select${errors.testId ? " field-error" : ""}`} value={form.testId || ""} onChange={(e) => handleFormChange("testId", e.target.value)}>
               <option value="">Select Test Type</option>
-              {TEST_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
+              {testDropdownOptions.map((t) => <option key={t.Id} value={t.Id}>{t.Name}</option>)}
             </select>
-            {errors.testType && <p className="err-msg">{errors.testType}</p>}
+            {errors.testId && <p className="err-msg">{errors.testId}</p>}
           </div>
 
           {/* Priority */}
           <div style={{ marginBottom: 16 }}>
             <label>Priority</label>
             <select className={`blt-select${errors.priority ? " field-error" : ""}`} value={form.priority} onChange={(e) => handleFormChange("priority", e.target.value)}>
-              <option value="Normal">Normal</option>
+              <option value="Routine">Routine</option>
               <option value="Urgent">Urgent</option>
+              <option value="STAT">STAT</option>
             </select>
           </div>
 
@@ -333,20 +419,27 @@ export default function BookLabTest() {
             <div>
               <label>Place</label>
               <select className={`blt-select${errors.place ? " field-error" : ""}`} value={form.place} onChange={(e) => handleFormChange("place", e.target.value)}>
-                <option value="Indoor">Indoor</option>
-                <option value="Outside">Outside</option>
+                <option value="">Select Place</option>
+                <option value="Indoor">Indoor (Rooms)</option>
+                <option value="Outdoor">Outdoor (External)</option>
               </select>
             </div>
             <div>
               {form.place === "Indoor" ? (
                 <>
                   <label>Room No</label>
-                  <input
-                    className={`blt-input${errors.roomNo ? " field-error" : ""}`}
-                    placeholder="e.g. 101A, ICU-3"
+                  <select
+                    className={`blt-select${errors.roomNo ? " field-error" : ""}`}
                     value={form.roomNo}
                     onChange={(e) => handleFormChange("roomNo", e.target.value)}
-                  />
+                  >
+                    <option value="">Select Room</option>
+                    {labRooms.filter(r => r.IsActive !== false).map((r) => (
+                      <option key={r.Id} value={r.RoomNo}>
+                        Room: {r.RoomNo}
+                      </option>
+                    ))}
+                  </select>
                   {errors.roomNo && <p className="err-msg">{errors.roomNo}</p>}
                 </>
               ) : (
@@ -354,7 +447,9 @@ export default function BookLabTest() {
                   <label>Lab Name</label>
                   <select className={`blt-select${errors.labName ? " field-error" : ""}`} value={form.labName} onChange={(e) => handleFormChange("labName", e.target.value)}>
                     <option value="">Select Lab</option>
-                    {LAB_OPTIONS.map((l) => <option key={l} value={l}>{l}</option>)}
+                    {externalLabs.map((l) => (
+                      <option key={l.Id} value={l.Name}>{l.Name} ({l.Type})</option>
+                    ))}
                   </select>
                   {errors.labName && <p className="err-msg">{errors.labName}</p>}
                 </>
@@ -431,7 +526,7 @@ export default function BookLabTest() {
               <div style={{ flex: 1, overflowY: "auto" }}>
                 {tests.map((t) => (
                   <div key={t.id} className="test-row" style={{ padding: "12px 24px", display: "grid", gridTemplateColumns: "3fr 1.2fr 1fr 0.5fr", alignItems: "center" }}>
-                    <span style={{ fontSize: 14, color: "#1a2e1a", fontWeight: 500 }}>{t.testType}</span>
+                    <span style={{ fontSize: 14, color: "#1a2e1a", fontWeight: 500 }}>{t.testName}</span>
                     <Badge type={t.priority} />
                     <span style={{ fontSize: 13, color: "#607060" }}>{t.place}</span>
                     <button className="del-btn" onClick={() => handleDeleteTest(t.id)} title="Remove test">

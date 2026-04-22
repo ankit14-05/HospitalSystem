@@ -53,9 +53,24 @@ export default function LoginPage() {
   const light   = shiftColor(primary, -20);
 
   const ROLE_ROUTES = {
-    superadmin:'admin', admin:'admin', doctor:'doctor',
-    nurse:'staff', receptionist:'staff', pharmacist:'staff',
-    labtech:'staff', patient:'patient', auditor:'admin',
+    superadmin:   'admin',
+    admin:        'admin',
+    auditor:      'admin',
+    doctor:       'doctor',
+    nurse:        'nurse',
+    receptionist: 'receptionist',
+    pharmacist:   'pharmacist',
+    labtech:      'labtech',
+    lab_technician: 'labtech',
+    'Lab Technician': 'labtech',
+    'Lab Assistant': 'labtech',
+    ward_boy:     'wardboy',
+    housekeeping: 'housekeeping',
+    security:     'security',
+    admin_staff:  'adminstaff',
+    opdmanager:   'opd',
+    opd_manager:  'opd',
+    patient:      'patient',
   };
 
   const handleSubmit = async (e) => {
@@ -205,13 +220,9 @@ export default function LoginPage() {
 
             {/* Stat cards */}
             <div className="space-y-2 mb-8">
-              {branding?.bedCapacity && (
-                <FloatCard icon={Bed}        value={`${branding.bedCapacity}+ Beds`} label="Total hospital capacity"  delay=".18s" />
-              )}
-              <FloatCard   icon={TrendingUp} value="Real-time Dashboards"           label="Live analytics & reports"  delay=".34s" />
-              {branding?.emergencyNumber && (
-                <FloatCard icon={Phone}      value={branding.emergencyNumber}       label="24/7 Emergency line"       delay=".42s" />
-              )}
+              <FloatCard icon={Bed}         value={branding?.bedsOccupied || "142"}      label="Beds Occupied"      delay=".18s" />
+              <FloatCard icon={CheckCircle} value={branding?.appointmentsToday || "89"} label="Appointments Today" delay=".34s" />
+              <FloatCard icon={Users}       value={branding?.activePatients || "304"}    label="Active Patients"    delay=".42s" />
             </div>
 
             {/* Role access */}
