@@ -50,6 +50,8 @@ function staffNav(dashboardPath) {
 const NAV = {
   superadmin: [
     { path:'/dashboard/admin',        label:'Dashboard',        icon: LayoutDashboard },
+    { path:'/register/doctor',       label:'Doctor Registration', icon: Stethoscope  },
+    { path:'/register/staff',        label:'Staff Registration',  icon: Briefcase    },
     { path:'/admin/doctor-approvals', label:'Doctor Approvals', icon: Stethoscope     },
     { path:'/admin/staff-approvals',  label:'Staff Approvals',  icon: Briefcase       },
     { path:'/admin/lab-approvals',    label:'Lab Approvals',    icon: FlaskConical    },
@@ -63,8 +65,6 @@ const NAV = {
   ],
   admin: [
     { path:'/dashboard/admin',        label:'Dashboard',        icon: LayoutDashboard },
-    { path:'/admin/doctor-approvals', label:'Doctor Approvals', icon: Stethoscope     },
-    { path:'/admin/staff-approvals',  label:'Staff Approvals',  icon: Briefcase       },
     { path:'/admin/lab-approvals',    label:'Lab Approvals',    icon: FlaskConical    },
     { path:'/admin/lab-management',   label:'Lab Management',   icon: Microscope      },
     { path:'/admin/people',           label:'Directory',        icon: Users           },

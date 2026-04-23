@@ -7,21 +7,6 @@ export default function StatusUpdateModal({ isOpen, onClose, currentStatus, next
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef(null);
 
-  if (!isOpen) return null;
-
-  // Determine Titles
-  const isProcess = currentStatus === "Pending";
-  const isUpload = nextStatus === "Completed" || nextStatus === "Pending Approval";
-  const title = isProcess ? "Process Sample" : "Finalize Sample & Submit for Approval";
-  
-  // Safe extraction of IDs
-  const displayId = (currentStatus === "Pending" && !testData?.sampleId) 
-    ? "System Generated" 
-    : (testData?.sampleId || testData?.id || "#SMP-XXXX");
-
-  const now = new Date();
-  const dateStr = now.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
-
   const handleFileChange = (e) => {
     const files = Array.from(e.target.files);
     setSelectedFiles(prev => {
@@ -44,6 +29,21 @@ export default function StatusUpdateModal({ isOpen, onClose, currentStatus, next
       setUploading(false);
     }
   }, [isOpen]);
+
+  if (!isOpen) return null;
+
+  // Determine Titles
+  const isProcess = currentStatus === "Pending";
+  const isUpload = nextStatus === "Completed" || nextStatus === "Pending Approval";
+  const title = isProcess ? "Process Sample" : "Finalize Sample & Submit for Approval";
+  
+  // Safe extraction of IDs
+  const displayId = (currentStatus === "Pending" && !testData?.sampleId) 
+    ? "System Generated" 
+    : (testData?.sampleId || testData?.id || "#SMP-XXXX");
+
+  const now = new Date();
+  const dateStr = now.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
 
   const handleSubmit = async () => {
     if (isUpload && selectedFiles.length === 0) {

@@ -808,7 +808,7 @@ export default function StaffRegisterPage() {
         </div>
         <h2 className="text-2xl font-bold text-slate-800 mb-2">Application Submitted!</h2>
         <p className="text-slate-500 text-sm mb-6 leading-relaxed">
-          Your staff registration is pending admin review. You'll receive an email once your account is activated.
+          Your staff registration is pending superadmin review. You'll receive an email once your account is activated.
         </p>
         <Link to="/login" className="flex items-center justify-center gap-2 w-full py-3 rounded-xl font-semibold text-white text-sm" style={{ background: primary }}>
           Back to Login

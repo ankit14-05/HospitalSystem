@@ -5,7 +5,7 @@ const bcrypt  = require('bcryptjs');
 const crypto  = require('crypto');
 const multer  = require('multer');
 const { query, sql } = require('../config/database');
-const { authenticate, authorize, isAdmin } = require('../middleware/auth.middleware');
+const { authenticate, authorize, isSuperAdmin } = require('../middleware/auth.middleware');
 const { body } = require('express-validator');
 const { validationResult } = require('express-validator');
 const { success, created } = require('../utils/apiResponse');
@@ -188,6 +188,20 @@ const getAdminRecipients = async (hospitalId) => {
   return result.recordset.map((row) => row.Id);
 };
 
+const getSuperAdminRecipients = async (hospitalId) => {
+  const result = await query(
+    `SELECT Id
+     FROM dbo.Users
+     WHERE DeletedAt IS NULL
+       AND IsActive = 1
+       AND HospitalId = @HospitalId
+       AND Role = 'superadmin'`,
+    { HospitalId: { type: sql.BigInt, value: hospitalId } }
+  );
+
+  return result.recordset.map((row) => row.Id);
+};
+
 const notifyHospitalAdmins = async ({ hospitalId, title, body, link = null, dataJson = null }) => {
   try {
     const recipients = await getAdminRecipients(hospitalId);
@@ -206,6 +220,27 @@ const notifyHospitalAdmins = async ({ hospitalId, title, body, link = null, data
     );
   } catch (error) {
     console.error('Admin notification failed (non-fatal):', error.message);
+  }
+};
+
+const notifyHospitalSuperAdmins = async ({ hospitalId, title, body, link = null, dataJson = null }) => {
+  try {
+    const recipients = await getSuperAdminRecipients(hospitalId);
+    if (!recipients.length) return;
+
+    await notificationService.createBulkNotifications(
+      recipients.map((userId) => ({
+        hospitalId,
+        userId,
+        notifType: 'system',
+        title,
+        body,
+        link,
+        dataJson,
+      }))
+    );
+  } catch (error) {
+    console.error('Superadmin notification failed (non-fatal):', error.message);
   }
 };
 
@@ -249,7 +284,7 @@ const sendDoctorSubmissionEmail = async ({ to, name, username }) => {
     </div>
     <h1 style="margin:0 0 8px;font-size:22px;font-weight:800;color:#0f172a;text-align:center;">Application Received!</h1>
     <p style="margin:0 0 28px;font-size:14px;color:#64748b;text-align:center;line-height:1.7;">
-      Hi <strong style="color:#1e293b;">Dr. ${name}</strong>, your registration has been submitted and is pending admin review.
+      Hi <strong style="color:#1e293b;">Dr. ${name}</strong>, your registration has been submitted and is pending superadmin review.
     </p>
     <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:20px 24px;margin-bottom:24px;">
       <p style="margin:0 0 4px;font-size:11px;font-weight:600;color:#94a3b8;letter-spacing:1px;text-transform:uppercase;">Login Username</p>
@@ -258,14 +293,14 @@ const sendDoctorSubmissionEmail = async ({ to, name, username }) => {
     <div style="background:#fffbeb;border-left:4px solid #f59e0b;border-radius:0 10px 10px 0;padding:16px 20px;margin-bottom:28px;">
       <p style="margin:0;font-size:13px;color:#92400e;line-height:1.6;font-weight:600;">What happens next?</p>
       <ul style="margin:8px 0 0;padding-left:18px;font-size:13px;color:#92400e;line-height:1.8;">
-        <li>An administrator will review your credentials</li>
+        <li>A superadmin will review your credentials</li>
         <li>You'll receive an email once a decision is made</li>
         <li>Typical review time: <strong>1–2 business days</strong></li>
       </ul>
     </div>
     <p style="margin:0;font-size:12px;color:#94a3b8;text-align:center;line-height:1.6;">
       Please do not attempt to log in until you receive an approval email.<br/>
-      If you have questions, contact your hospital administrator.
+      If you have questions, contact your hospital superadmin.
     </p>
   </td></tr>
   <tr><td style="background:#f8fafc;padding:20px 40px;border-top:1px solid #e2e8f0;text-align:center;">
@@ -275,7 +310,7 @@ const sendDoctorSubmissionEmail = async ({ to, name, username }) => {
 </td></tr></table></body></html>`;
   return sendEmail({
     to, subject, html,
-    text: `Hi Dr. ${name}, your doctor registration has been submitted and is pending admin review.\n\nUsername: ${username}\n\nYou will receive a decision email within 1–2 business days.\n\n© ${new Date().getFullYear()} MediCore HMS`,
+    text: `Hi Dr. ${name}, your doctor registration has been submitted and is pending superadmin review.\n\nUsername: ${username}\n\nYou will receive a decision email within 1–2 business days.\n\n© ${new Date().getFullYear()} MediCore HMS`,
   });
 };
 
@@ -877,7 +912,7 @@ router.post('/patient',
 // ═══════════════════════════════════════════════════════════════════════════════
 router.post('/doctor',
   authenticate,
-  isAdmin,
+  isSuperAdmin,
   upload.any(),
   [
     body('hospitalId').isInt({ min: 1 }).withMessage('Hospital ID required'),
@@ -1044,7 +1079,7 @@ router.post('/doctor',
       sendDoctorSubmissionEmail({ to: email, name: firstName.trim(), username })
         .catch(err => console.error('Doctor submission email failed (non-fatal):', err.message));
 
-      notifyHospitalAdmins({
+      notifyHospitalSuperAdmins({
         hospitalId: hid,
         title: 'New doctor approval request',
         body: `Dr. ${firstName.trim()} ${lastName.trim()} submitted registration and is awaiting review.`,
@@ -1053,7 +1088,7 @@ router.post('/doctor',
       });
 
       console.log(`✅ Doctor registered: ${username} | UserId: ${userId} | Status: pending`);
-      created(res, { username }, 'Doctor registration submitted. Awaiting admin approval.');
+      created(res, { username }, 'Doctor registration submitted. Awaiting superadmin approval.');
     } catch (err) { next(err); }
   }
 );
@@ -1063,7 +1098,7 @@ router.post('/doctor',
 // ═══════════════════════════════════════════════════════════════════════════════
 router.post('/staff',
   authenticate,
-  isAdmin,
+  isSuperAdmin,
   upload.any(),
   [
     body('hospitalId').isInt({ min: 1 }).withMessage('Hospital ID required'),
@@ -1166,7 +1201,7 @@ router.post('/staff',
 
       if (req.files?.length) console.log(`📎 ${req.files.length} file(s) for staff ${userId}`);
 
-      notifyHospitalAdmins({
+      notifyHospitalSuperAdmins({
         hospitalId: hid,
         title: 'New staff approval request',
         body: `${firstName.trim()} ${lastName.trim()} submitted staff registration and is awaiting review.`,
@@ -1174,13 +1209,13 @@ router.post('/staff',
         dataJson: { category: 'staff', username, userId, role: normalizedRole },
       });
 
-      created(res, { username }, 'Staff registration submitted. Awaiting admin approval.');
+      created(res, { username }, 'Staff registration submitted. Awaiting superadmin approval.');
     } catch (err) { next(err); }
   }
 );
 
 // ── Approval routes ───────────────────────────────────────────────────────────
-router.get('/pending-staff', authenticate, authorize('superadmin','admin'), async (req,res,next)=>{
+router.get('/pending-staff', authenticate, authorize('superadmin'), async (req,res,next)=>{
   try {
     const statusFilter=req.query.status||'pending';
     const hospitalId=req.user.role==='superadmin'?(parseInt(req.query.hospitalId)||null):req.user.hospitalId;
@@ -1189,7 +1224,7 @@ router.get('/pending-staff', authenticate, authorize('superadmin','admin'), asyn
   } catch(err){next(err);}
 });
 
-router.get('/pending-doctors', authenticate, authorize('superadmin','admin'), async (req,res,next)=>{
+router.get('/pending-doctors', authenticate, authorize('superadmin'), async (req,res,next)=>{
   try {
     const statusFilter=req.query.status||'pending';
     const hospitalId=req.user.role==='superadmin'?(parseInt(req.query.hospitalId)||null):req.user.hospitalId;
@@ -1201,7 +1236,7 @@ router.get('/pending-doctors', authenticate, authorize('superadmin','admin'), as
 // ═══════════════════════════════════════════════════════════════════════════════
 // PATCH /register/approve-doctor/:id
 // ═══════════════════════════════════════════════════════════════════════════════
-router.patch('/approve-doctor/:id', authenticate, authorize('superadmin','admin'),
+router.patch('/approve-doctor/:id', authenticate, authorize('superadmin'),
   [
     body('action').isIn(['approved','rejected','deferred']).withMessage('Invalid action'),
     body('rejectionReason').if(body('action').equals('rejected')).notEmpty().withMessage('Rejection reason required'),
@@ -1312,7 +1347,7 @@ router.patch('/approve-doctor/:id', authenticate, authorize('superadmin','admin'
   }
 );
 
-router.patch('/approve-staff/:id', authenticate, authorize('superadmin','admin'),
+router.patch('/approve-staff/:id', authenticate, authorize('superadmin'),
   [body('action').isIn(['approved','rejected']).withMessage('Invalid action'),body('rejectionReason').if(body('action').equals('rejected')).notEmpty().withMessage('Rejection reason required')],
   async(req,res,next)=>{
     try{

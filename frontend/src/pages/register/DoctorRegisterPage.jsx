@@ -732,7 +732,7 @@ export default function DoctorRegisterPage() {
         </div>
         <h2 className="text-2xl font-bold text-slate-800 mb-2">Application Submitted!</h2>
         <p className="text-slate-500 text-sm mb-6 leading-relaxed">
-          Your registration is pending admin review.<br/>
+          Your registration is pending superadmin review.<br/>
           You'll receive an email once approved — usually within 1–2 business days.
         </p>
         <Link to="/login" className="flex items-center justify-center gap-2 w-full py-3 rounded-xl font-semibold text-white text-sm" style={{background:primary}}>

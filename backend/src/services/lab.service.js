@@ -1,5 +1,6 @@
 const { query, withTransaction, sql } = require('../config/database');
 const notifService = require('./notificationService');
+const AppError = require('../utils/AppError');
 const path = require('path');
 const fs = require('fs');
 const { PDFDocument, rgb, StandardFonts, PageSizes, degrees } = require('pdf-lib');
@@ -902,11 +903,13 @@ async function getLabAttachments(labOrderId) {
 
 async function getAvailableLabRooms(hospitalId) {
   const res = await query(`
-    SELECT lr.Id, lr.RoomNo, 
+    SELECT lr.Id, lr.RoomNo, lr.LabId, l.Name AS LabName, l.Type AS LabType,
            CASE WHEN EXISTS(SELECT 1 FROM dbo.LabAutofillRules ar WHERE ar.RoomId = lr.Id AND ar.IsActive = 1) 
            THEN 'Alloted' ELSE 'Not-Alloted' END AS Status
     FROM dbo.LabRooms lr
+    LEFT JOIN dbo.Labs l ON l.Id = lr.LabId
     WHERE lr.IsActive = 1
+    ORDER BY l.Name, lr.RoomNo
   `);
   return res.recordset;
 }
@@ -914,16 +917,23 @@ async function getAvailableLabRooms(hospitalId) {
 async function assignTechnicianToRoom({ userId, roomId, assignedBy, assignmentType = 'Shift Duty', notes = null, status = 'Active', hospitalId = null }) {
   // 1. Get Technician Profile Id & Name
   const techRes = await query(`
-    SELECT tp.Id, u.FirstName + ' ' + u.LastName AS Name 
+    SELECT tp.Id, tp.RoomId, u.FirstName + ' ' + u.LastName AS Name 
     FROM dbo.LabTechnicianProfiles tp
     JOIN dbo.Users u ON u.Id = tp.UserId
     WHERE tp.UserId = @userId
   `, {
     userId: { type: sql.BigInt, value: userId }
   });
-  if (techRes.recordset.length === 0) throw new Error('Technician profile not found');
+  if (techRes.recordset.length === 0) {
+    throw new AppError('Technician profile not found', 404);
+  }
   const techId = techRes.recordset[0].Id;
+  const currentRoomId = Number(techRes.recordset[0].RoomId) || null;
   const techName = techRes.recordset[0].Name;
+
+  if (status === 'Active' && currentRoomId && currentRoomId === Number(roomId)) {
+    throw new AppError('This technician is already assigned to that room', 409);
+  }
 
   // 2. Prevent multiple pending requests
   if (status === 'Pending') {
@@ -931,7 +941,7 @@ async function assignTechnicianToRoom({ userId, roomId, assignedBy, assignmentTy
       techId: { type: sql.BigInt, value: techId }
     });
     if (pendingRes.recordset.length > 0) {
-      throw new Error('A transfer request is already pending approval');
+      throw new AppError('A transfer request is already pending approval', 409);
     }
   }
 
@@ -1024,11 +1034,14 @@ async function getPendingAssignments(hospitalId) {
     SELECT 
       tra.Id, tra.AssignedAt, tra.AssignmentType, tra.Notes,
       u.FirstName + ' ' + u.LastName AS TechnicianName,
-      lr.RoomNo
+      lr.RoomNo,
+      l.Name AS LabName,
+      l.Type AS RoomType
     FROM dbo.LabTechnicianRoomAssignments tra
     JOIN dbo.LabTechnicianProfiles tp ON tp.Id = tra.TechnicianId
     JOIN dbo.Users u ON u.Id = tp.UserId
     JOIN dbo.LabRooms lr ON lr.Id = tra.RoomId
+    LEFT JOIN dbo.Labs l ON l.Id = lr.LabId
     WHERE tra.Status = 'Pending'
     ORDER BY tra.AssignedAt ASC
   `);
@@ -1037,14 +1050,45 @@ async function getPendingAssignments(hospitalId) {
 
 async function getTechnicianAssignment(userId) {
   const res = await query(`
-    SELECT lt.RoomId, lr.RoomNo
+    SELECT lt.RoomId, lr.RoomNo, lr.LabId, l.Name AS LabName, l.Type AS LabType
     FROM dbo.LabTechnicianProfiles lt
     LEFT JOIN dbo.LabRooms lr ON lt.RoomId = lr.Id
+    LEFT JOIN dbo.Labs l ON l.Id = lr.LabId
     WHERE lt.UserId = @userId
   `, {
     userId: { type: sql.BigInt, value: userId }
   });
   return res.recordset[0] || null;
+}
+
+async function getLabTechnicians(hospitalId) {
+  const res = await query(`
+    SELECT
+      u.Id AS UserId,
+      u.Username,
+      u.FirstName,
+      u.LastName,
+      u.Email,
+      u.Phone,
+      u.IsActive,
+      tp.Id AS TechnicianProfileId,
+      tp.RoomId,
+      lr.RoomNo,
+      lr.LabId,
+      l.Name AS LabName,
+      l.Type AS LabType
+    FROM dbo.Users u
+    JOIN dbo.LabTechnicianProfiles tp ON tp.UserId = u.Id
+    LEFT JOIN dbo.LabRooms lr ON lr.Id = tp.RoomId
+    LEFT JOIN dbo.Labs l ON l.Id = lr.LabId
+    WHERE u.DeletedAt IS NULL
+      AND (@hospitalId IS NULL OR u.HospitalId = @hospitalId)
+      AND LOWER(REPLACE(u.Role, ' ', '_')) IN ('labtech', 'lab_technician', 'lab_assistant')
+    ORDER BY u.IsActive DESC, u.FirstName, u.LastName
+  `, {
+    hospitalId: { type: sql.BigInt, value: hospitalId || null }
+  });
+  return res.recordset;
 }
 
 async function addLabRoom({ labId, roomNo }) {
@@ -1227,6 +1271,7 @@ module.exports = {
   getAvailableLabRooms,
   assignTechnicianToRoom,
   getTechnicianAssignment,
+  getLabTechnicians,
   addLabRoom,
   removeLabRoom,
   getTransferHistory,

@@ -100,6 +100,19 @@ const isAdmin = (req, res, next) => {
   return next();
 };
 
+const isSuperAdmin = (req, res, next) => {
+  if (!req.user) {
+    return next(new AppError('Not authenticated.', 401));
+  }
+
+  const role = String(req.user.role || '').toLowerCase();
+  if (role !== 'superadmin') {
+    return next(new AppError('Only the superadmin can create or approve doctor and staff accounts.', 403));
+  }
+
+  return next();
+};
+
 const hospitalScope = (req, res, next) => {
   if (req.user.role === 'superadmin') return next();
   const hospitalId = parseInt(req.headers['x-hospital-id'] || req.params.hospitalId || req.body.hospitalId, 10);
@@ -109,4 +122,4 @@ const hospitalScope = (req, res, next) => {
   return next();
 };
 
-module.exports = { authenticate, authorize, isAdmin, hospitalScope };
+module.exports = { authenticate, authorize, isAdmin, isSuperAdmin, hospitalScope };

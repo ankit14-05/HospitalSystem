@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Users,
   UserCheck,
+  Stethoscope,
   Briefcase,
   Bed,
   IndianRupee,
@@ -159,6 +160,7 @@ const ListCard = ({ title, actionLabel, actionTo, navigate, rows, loading, empty
 export default function AdminDashboard() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const isSuperAdmin = user?.role === 'superadmin';
 
   // ── State variables ──
   const [loading, setLoading] = useState(true);
@@ -230,7 +232,7 @@ export default function AdminDashboard() {
   // ── Navigation Configuration ──
   const TABS = [
     { id: 'overview', label: 'Overview Metrics', icon: LayoutDashboard },
-    { id: 'approvals', label: 'Pending Approvals', icon: Clock3 },
+    ...(isSuperAdmin ? [{ id: 'approvals', label: 'Pending Approvals', icon: Clock3 }] : []),
     { id: 'departments', label: 'Departments', icon: Building2 },
     { id: 'queues', label: 'Queues & Schedules', icon: CalendarRange },
     { id: 'activity', label: 'Recent Activity', icon: Activity },
@@ -264,6 +266,10 @@ export default function AdminDashboard() {
         </div>
         <div className="card-body grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4 bg-slate-50/50">
           {[
+            ...(isSuperAdmin ? [
+              { label: 'Register Doctor', desc: 'Create a new doctor account', path: '/register/doctor', icon: Stethoscope },
+              { label: 'Register Staff', desc: 'Create a new staff account', path: '/register/staff', icon: Briefcase },
+            ] : []),
             { label: 'Directory', desc: 'Manage all internal users', path: '/admin/people', icon: Users },
             { label: 'Schedules', desc: 'Map out doctor availability', path: '/admin/schedule-manager', icon: ClipboardList },
             { label: 'Appointments', desc: 'Oversee daily bookings', path: '/admin/appointments', icon: CalendarRange },
@@ -470,24 +476,51 @@ export default function AdminDashboard() {
           <h1 className="text-2xl font-black text-slate-800 tracking-tight">Welcome back, {greetingName}!</h1>
           <p className="text-sm text-slate-500 mt-1 font-medium">Manage and monitor the hospital metrics continuously.</p>
         </div>
-        <button
-          onClick={loadOverview}
-          disabled={loading}
-          className="self-start sm:self-auto px-5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm font-bold text-slate-700 hover:bg-slate-100 hover:border-slate-300 transition-all focus:ring-4 focus:ring-slate-100 disabled:opacity-50 flex items-center gap-2"
-        >
-          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-          Sync Data
-        </button>
+        <div className="flex flex-wrap gap-3 self-start sm:self-auto">
+          {isSuperAdmin && (
+            <>
+              <button
+                onClick={() => navigate('/register/doctor')}
+                className="px-5 py-2.5 rounded-xl bg-indigo-600 text-sm font-bold text-white hover:bg-indigo-700 transition-all flex items-center gap-2 shadow-sm"
+              >
+                <Stethoscope size={14} />
+                Register Doctor
+              </button>
+              <button
+                onClick={() => navigate('/register/staff')}
+                className="px-5 py-2.5 rounded-xl bg-violet-600 text-sm font-bold text-white hover:bg-violet-700 transition-all flex items-center gap-2 shadow-sm"
+              >
+                <Briefcase size={14} />
+                Register Staff
+              </button>
+            </>
+          )}
+          <button
+            onClick={loadOverview}
+            disabled={loading}
+            className="px-5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm font-bold text-slate-700 hover:bg-slate-100 hover:border-slate-300 transition-all focus:ring-4 focus:ring-slate-100 disabled:opacity-50 flex items-center gap-2"
+          >
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+            Sync Data
+          </button>
+        </div>
       </div>
 
       {/* ── Optional Important Alert ── */}
-      {(stats.pendingDoctors || stats.pendingStaff || stats.pendingLeaves) ? (
+      {(isSuperAdmin
+        ? (stats.pendingDoctors || stats.pendingStaff || stats.pendingLeaves)
+        : stats.pendingLeaves) ? (
         <div className="rounded-2xl border-l-4 border-l-amber-500 bg-amber-50 px-5 py-4 flex flex-wrap items-center gap-3 shadow-sm">
           <div className="w-8 h-8 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center flex-shrink-0">
              <Clock3 size={16} />
           </div>
           <p className="text-sm text-amber-900 font-semibold">
-            Action Required: <span className="font-normal text-amber-700">{stats.pendingDoctors || 0} doctor approvals, {stats.pendingStaff || 0} staff approvals, and {stats.pendingLeaves || 0} leave requests await your review.</span>
+            Action Required:{' '}
+            <span className="font-normal text-amber-700">
+              {isSuperAdmin
+                ? `${stats.pendingDoctors || 0} doctor approvals, ${stats.pendingStaff || 0} staff approvals, and ${stats.pendingLeaves || 0} leave requests await your review.`
+                : `${stats.pendingLeaves || 0} leave requests await your review.`}
+            </span>
           </p>
         </div>
       ) : null}
@@ -502,7 +535,7 @@ export default function AdminDashboard() {
 
       <div className="w-full min-w-0 transition-all">
         {activeTab === 'overview' && renderOverview()}
-        {activeTab === 'approvals' && renderApprovals()}
+        {isSuperAdmin && activeTab === 'approvals' && renderApprovals()}
         {activeTab === 'departments' && renderDepartments()}
         {activeTab === 'queues' && renderQueues()}
         {activeTab === 'activity' && renderActivity()}

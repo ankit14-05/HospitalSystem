@@ -62,6 +62,10 @@ const ATTACHMENT_UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
 const sqlNullable = (condition, expression, sqlType) => (
   condition ? expression : `CAST(NULL AS ${sqlType})`
 );
+const hasSampleJoin = (schema) => Boolean(schema?.hasLabSamples && schema?.labSamples?.labOrderItemId);
+const sqlSampleNullable = (schema, expression, sqlType, key = null) => (
+  sqlNullable(Boolean(hasSampleJoin(schema) && (key ? schema?.labSamples?.[key] : true)), expression, sqlType)
+);
 const getLabOrderItemOrderBy = (schema, alias = 'loi') => (
   schema?.labOrderItems?.DisplaySequence ? `${alias}.DisplaySequence, ${alias}.Id` : `${alias}.Id`
 );
@@ -240,6 +244,20 @@ const getReportSchema = async (pool = null) => {
   const schemaResult = await activePool.request().query(`
     SELECT
       CASE WHEN OBJECT_ID('dbo.LabSamples', 'U') IS NULL THEN 0 ELSE 1 END AS HasLabSamples,
+      CASE WHEN COL_LENGTH('dbo.LabSamples', 'LabOrderItemId') IS NULL THEN 0 ELSE 1 END AS HasLabSamplesLabOrderItemId,
+      CASE WHEN COL_LENGTH('dbo.LabSamples', 'HospitalId') IS NULL THEN 0 ELSE 1 END AS HasLabSamplesHospitalId,
+      CASE WHEN COL_LENGTH('dbo.LabSamples', 'SampleCode') IS NULL THEN 0 ELSE 1 END AS HasLabSamplesSampleCode,
+      CASE WHEN COL_LENGTH('dbo.LabSamples', 'BarcodeValue') IS NULL THEN 0 ELSE 1 END AS HasLabSamplesBarcodeValue,
+      CASE WHEN COL_LENGTH('dbo.LabSamples', 'SpecimenType') IS NULL THEN 0 ELSE 1 END AS HasLabSamplesSpecimenType,
+      CASE WHEN COL_LENGTH('dbo.LabSamples', 'CollectionLocation') IS NULL THEN 0 ELSE 1 END AS HasLabSamplesCollectionLocation,
+      CASE WHEN COL_LENGTH('dbo.LabSamples', 'CollectedAt') IS NULL THEN 0 ELSE 1 END AS HasLabSamplesCollectedAt,
+      CASE WHEN COL_LENGTH('dbo.LabSamples', 'CollectedByUserId') IS NULL THEN 0 ELSE 1 END AS HasLabSamplesCollectedByUserId,
+      CASE WHEN COL_LENGTH('dbo.LabSamples', 'ReceivedAtLabAt') IS NULL THEN 0 ELSE 1 END AS HasLabSamplesReceivedAtLabAt,
+      CASE WHEN COL_LENGTH('dbo.LabSamples', 'ProcessingStartedAt') IS NULL THEN 0 ELSE 1 END AS HasLabSamplesProcessingStartedAt,
+      CASE WHEN COL_LENGTH('dbo.LabSamples', 'ProcessingCompletedAt') IS NULL THEN 0 ELSE 1 END AS HasLabSamplesProcessingCompletedAt,
+      CASE WHEN COL_LENGTH('dbo.LabSamples', 'SampleStatus') IS NULL THEN 0 ELSE 1 END AS HasLabSamplesSampleStatus,
+      CASE WHEN COL_LENGTH('dbo.LabSamples', 'TechnicianNotes') IS NULL THEN 0 ELSE 1 END AS HasLabSamplesTechnicianNotes,
+      CASE WHEN COL_LENGTH('dbo.LabSamples', 'UpdatedAt') IS NULL THEN 0 ELSE 1 END AS HasLabSamplesUpdatedAt,
       CASE WHEN OBJECT_ID('dbo.LabOrderStatusHistory', 'U') IS NULL THEN 0 ELSE 1 END AS HasLabOrderStatusHistory,
       CASE WHEN OBJECT_ID('dbo.LabResultAttachments', 'U') IS NULL THEN 0 ELSE 1 END AS HasLabResultAttachments,
       CASE WHEN OBJECT_ID('dbo.EmrLabReportReviews', 'U') IS NULL THEN 0 ELSE 1 END AS HasEmrLabReportReviews,
@@ -260,6 +278,22 @@ const getReportSchema = async (pool = null) => {
   const row = schemaResult.recordset?.[0] || {};
   const schema = {
     hasLabSamples: Boolean(row.HasLabSamples),
+    labSamples: {
+      labOrderItemId: Boolean(row.HasLabSamplesLabOrderItemId),
+      hospitalId: Boolean(row.HasLabSamplesHospitalId),
+      sampleCode: Boolean(row.HasLabSamplesSampleCode),
+      barcodeValue: Boolean(row.HasLabSamplesBarcodeValue),
+      specimenType: Boolean(row.HasLabSamplesSpecimenType),
+      collectionLocation: Boolean(row.HasLabSamplesCollectionLocation),
+      collectedAt: Boolean(row.HasLabSamplesCollectedAt),
+      collectedByUserId: Boolean(row.HasLabSamplesCollectedByUserId),
+      receivedAtLabAt: Boolean(row.HasLabSamplesReceivedAtLabAt),
+      processingStartedAt: Boolean(row.HasLabSamplesProcessingStartedAt),
+      processingCompletedAt: Boolean(row.HasLabSamplesProcessingCompletedAt),
+      sampleStatus: Boolean(row.HasLabSamplesSampleStatus),
+      technicianNotes: Boolean(row.HasLabSamplesTechnicianNotes),
+      updatedAt: Boolean(row.HasLabSamplesUpdatedAt),
+    },
     hasLabOrderStatusHistory: Boolean(row.HasLabOrderStatusHistory),
     hasLabResultAttachments: Boolean(row.HasLabResultAttachments),
     hasEmrLabReportReviews: Boolean(row.HasEmrLabReportReviews),
@@ -441,7 +475,7 @@ const getScopedOrderWhereClause = (alias = 'lo') => `
 
 const getScopedItemContext = async (request, itemId, hospitalId, schema = null) => {
   const effectiveSchema = schema || await getReportSchema();
-  const sampleJoin = effectiveSchema.hasLabSamples
+  const sampleJoin = hasSampleJoin(effectiveSchema)
     ? 'LEFT JOIN dbo.LabSamples ls ON ls.LabOrderItemId = loi.Id'
     : '';
 
@@ -454,7 +488,6 @@ const getScopedItemContext = async (request, itemId, hospitalId, schema = null) 
         loi.LabOrderId,
         loi.TestId,
         loi.Status AS ItemStatus,
-        loi.TechnicianNotes,
         loi.ResultValue,
         loi.ResultUnit,
         loi.NormalRange,
@@ -477,9 +510,9 @@ const getScopedItemContext = async (request, itemId, hospitalId, schema = null) 
         lt.NormalRangeChild,
         p.Gender,
         ${sqlNullable(effectiveSchema.labOrderItems.TechnicianNotes, 'loi.TechnicianNotes', 'NVARCHAR(1000)')} AS TechnicianNotes,
-        ${sqlNullable(effectiveSchema.hasLabSamples, 'ls.Id', 'BIGINT')} AS SampleId,
-        ${sqlNullable(effectiveSchema.hasLabSamples, 'ls.SampleCode', 'NVARCHAR(40)')} AS SampleCode,
-        ${sqlNullable(effectiveSchema.hasLabSamples, 'ls.SampleStatus', 'NVARCHAR(30)')} AS SampleStatus
+        ${sqlSampleNullable(effectiveSchema, 'ls.Id', 'BIGINT')} AS SampleId,
+        ${sqlSampleNullable(effectiveSchema, 'ls.SampleCode', 'NVARCHAR(40)', 'sampleCode')} AS SampleCode,
+        ${sqlSampleNullable(effectiveSchema, 'ls.SampleStatus', 'NVARCHAR(30)', 'sampleStatus')} AS SampleStatus
       FROM dbo.LabOrderItems loi
       JOIN dbo.LabOrders lo ON lo.Id = loi.LabOrderId
       JOIN dbo.LabTests lt ON lt.Id = loi.TestId
@@ -851,10 +884,10 @@ router.get('/worklist',
       const offset = (page - 1) * limit;
       const search = String(req.query.search || '').trim();
       const status = String(req.query.status || '').trim();
-      const sampleJoin = schema.hasLabSamples
+      const sampleJoin = hasSampleJoin(schema)
         ? 'LEFT JOIN dbo.LabSamples ls ON ls.LabOrderItemId = loi.Id'
         : '';
-      const sampleSearch = schema.hasLabSamples
+      const sampleSearch = hasSampleJoin(schema) && schema.labSamples?.sampleCode
         ? "OR ISNULL(ls.SampleCode, '') LIKE '%' + @Search + '%'"
         : '';
 
@@ -899,15 +932,15 @@ router.get('/worklist',
             ${sqlNullable(schema.labOrderItems.CriteriaText, 'loi.CriteriaText', 'NVARCHAR(500)')} AS CriteriaText,
             ${sqlNullable(schema.labOrderItems.AdditionalDetails, 'loi.AdditionalDetails', 'NVARCHAR(1000)')} AS AdditionalDetails,
             ${sqlNullable(schema.labOrderItems.TechnicianNotes, 'loi.TechnicianNotes', 'NVARCHAR(1000)')} AS TechnicianNotes,
-            ${sqlNullable(schema.hasLabSamples, 'ls.Id', 'BIGINT')} AS SampleId,
-            ${sqlNullable(schema.hasLabSamples, 'ls.SampleCode', 'NVARCHAR(40)')} AS SampleCode,
-            ${sqlNullable(schema.hasLabSamples, 'ls.BarcodeValue', 'NVARCHAR(80)')} AS BarcodeValue,
-            ${sqlNullable(schema.hasLabSamples, 'ls.CollectionLocation', 'NVARCHAR(120)')} AS CollectionLocation,
-            ${sqlNullable(schema.hasLabSamples, 'ls.CollectedAt', 'DATETIME2(0)')} AS CollectedAt,
-            ${sqlNullable(schema.hasLabSamples, 'ls.ReceivedAtLabAt', 'DATETIME2(0)')} AS ReceivedAtLabAt,
-            ${sqlNullable(schema.hasLabSamples, 'ls.ProcessingStartedAt', 'DATETIME2(0)')} AS ProcessingStartedAt,
-            ${sqlNullable(schema.hasLabSamples, 'ls.ProcessingCompletedAt', 'DATETIME2(0)')} AS ProcessingCompletedAt,
-            ${sqlNullable(schema.hasLabSamples, 'ls.SampleStatus', 'NVARCHAR(30)')} AS SampleStatus
+            ${sqlSampleNullable(schema, 'ls.Id', 'BIGINT')} AS SampleId,
+            ${sqlSampleNullable(schema, 'ls.SampleCode', 'NVARCHAR(40)', 'sampleCode')} AS SampleCode,
+            ${sqlSampleNullable(schema, 'ls.BarcodeValue', 'NVARCHAR(80)', 'barcodeValue')} AS BarcodeValue,
+            ${sqlSampleNullable(schema, 'ls.CollectionLocation', 'NVARCHAR(120)', 'collectionLocation')} AS CollectionLocation,
+            ${sqlSampleNullable(schema, 'ls.CollectedAt', 'DATETIME2(0)', 'collectedAt')} AS CollectedAt,
+            ${sqlSampleNullable(schema, 'ls.ReceivedAtLabAt', 'DATETIME2(0)', 'receivedAtLabAt')} AS ReceivedAtLabAt,
+            ${sqlSampleNullable(schema, 'ls.ProcessingStartedAt', 'DATETIME2(0)', 'processingStartedAt')} AS ProcessingStartedAt,
+            ${sqlSampleNullable(schema, 'ls.ProcessingCompletedAt', 'DATETIME2(0)', 'processingCompletedAt')} AS ProcessingCompletedAt,
+            ${sqlSampleNullable(schema, 'ls.SampleStatus', 'NVARCHAR(30)', 'sampleStatus')} AS SampleStatus
           FROM dbo.LabOrderItems loi
           JOIN dbo.LabOrders lo ON lo.Id = loi.LabOrderId
           JOIN dbo.LabTests lt ON lt.Id = loi.TestId
@@ -993,7 +1026,7 @@ router.get('/items/:itemId',
       const pool = await getPool();
       const schema = await getReportSchema(pool);
       const hospitalId = resolveHospitalId(req);
-      const sampleJoin = schema.hasLabSamples
+      const sampleJoin = hasSampleJoin(schema)
         ? 'LEFT JOIN dbo.LabSamples ls ON ls.LabOrderItemId = loi.Id'
         : '';
       const historyQuery = schema.hasLabOrderStatusHistory
@@ -1102,15 +1135,15 @@ router.get('/items/:itemId',
             lt.NormalRangeMale,
             lt.NormalRangeFemale,
             lt.NormalRangeChild,
-            ${sqlNullable(schema.hasLabSamples, 'ls.Id', 'BIGINT')} AS SampleId,
-            ${sqlNullable(schema.hasLabSamples, 'ls.SampleCode', 'NVARCHAR(40)')} AS SampleCode,
-            ${sqlNullable(schema.hasLabSamples, 'ls.BarcodeValue', 'NVARCHAR(80)')} AS BarcodeValue,
-            ${sqlNullable(schema.hasLabSamples, 'ls.CollectionLocation', 'NVARCHAR(120)')} AS CollectionLocation,
-            ${sqlNullable(schema.hasLabSamples, 'ls.CollectedAt', 'DATETIME2(0)')} AS SampleCollectedAt,
-            ${sqlNullable(schema.hasLabSamples, 'ls.ReceivedAtLabAt', 'DATETIME2(0)')} AS ReceivedAtLabAt,
-            ${sqlNullable(schema.hasLabSamples, 'ls.ProcessingStartedAt', 'DATETIME2(0)')} AS ProcessingStartedAt,
-            ${sqlNullable(schema.hasLabSamples, 'ls.ProcessingCompletedAt', 'DATETIME2(0)')} AS ProcessingCompletedAt,
-            ${sqlNullable(schema.hasLabSamples, 'ls.SampleStatus', 'NVARCHAR(30)')} AS SampleStatus
+            ${sqlSampleNullable(schema, 'ls.Id', 'BIGINT')} AS SampleId,
+            ${sqlSampleNullable(schema, 'ls.SampleCode', 'NVARCHAR(40)', 'sampleCode')} AS SampleCode,
+            ${sqlSampleNullable(schema, 'ls.BarcodeValue', 'NVARCHAR(80)', 'barcodeValue')} AS BarcodeValue,
+            ${sqlSampleNullable(schema, 'ls.CollectionLocation', 'NVARCHAR(120)', 'collectionLocation')} AS CollectionLocation,
+            ${sqlSampleNullable(schema, 'ls.CollectedAt', 'DATETIME2(0)', 'collectedAt')} AS SampleCollectedAt,
+            ${sqlSampleNullable(schema, 'ls.ReceivedAtLabAt', 'DATETIME2(0)', 'receivedAtLabAt')} AS ReceivedAtLabAt,
+            ${sqlSampleNullable(schema, 'ls.ProcessingStartedAt', 'DATETIME2(0)', 'processingStartedAt')} AS ProcessingStartedAt,
+            ${sqlSampleNullable(schema, 'ls.ProcessingCompletedAt', 'DATETIME2(0)', 'processingCompletedAt')} AS ProcessingCompletedAt,
+            ${sqlSampleNullable(schema, 'ls.SampleStatus', 'NVARCHAR(30)', 'sampleStatus')} AS SampleStatus
           FROM dbo.LabOrderItems loi
           JOIN dbo.LabOrders lo ON lo.Id = loi.LabOrderId
           JOIN dbo.LabTests lt ON lt.Id = loi.TestId
@@ -1847,28 +1880,86 @@ router.patch('/items/:itemId/collect',
         const sampleCode = context.SampleCode || generateSampleCode(context.ItemId);
         let sampleId = context.SampleId;
 
-        if (schema.hasLabSamples && sampleId) {
-          await request()
-            .input('SampleId', sql.BigInt, sampleId)
-            .input('BarcodeValue', sql.NVarChar(80), barcodeValue)
-            .input('CollectionLocation', sql.NVarChar(120), collectionLocation)
-            .input('TechnicianNotes', sql.NVarChar(1000), technicianNote)
-            .input('CollectedByUserId', sql.BigInt, actorUserId)
-            .query(`
-              UPDATE dbo.LabSamples
-              SET
-                BarcodeValue = COALESCE(@BarcodeValue, BarcodeValue),
-                CollectionLocation = COALESCE(@CollectionLocation, CollectionLocation),
-                CollectedAt = COALESCE(CollectedAt, SYSUTCDATETIME()),
-                CollectedByUserId = COALESCE(CollectedByUserId, @CollectedByUserId),
-                ReceivedAtLabAt = COALESCE(ReceivedAtLabAt, SYSUTCDATETIME()),
-                ProcessingStartedAt = COALESCE(ProcessingStartedAt, SYSUTCDATETIME()),
-                SampleStatus = 'Processing',
-                TechnicianNotes = @TechnicianNotes,
-                UpdatedAt = SYSUTCDATETIME()
-              WHERE Id = @SampleId
-            `);
-        } else if (schema.hasLabSamples) {
+        if (hasSampleJoin(schema) && sampleId) {
+          const sampleUpdateAssignments = [
+            schema.labSamples.barcodeValue ? 'BarcodeValue = COALESCE(@BarcodeValue, BarcodeValue)' : null,
+            schema.labSamples.collectionLocation ? 'CollectionLocation = COALESCE(@CollectionLocation, CollectionLocation)' : null,
+            schema.labSamples.collectedAt ? 'CollectedAt = COALESCE(CollectedAt, SYSUTCDATETIME())' : null,
+            schema.labSamples.collectedByUserId ? 'CollectedByUserId = COALESCE(CollectedByUserId, @CollectedByUserId)' : null,
+            schema.labSamples.receivedAtLabAt ? 'ReceivedAtLabAt = COALESCE(ReceivedAtLabAt, SYSUTCDATETIME())' : null,
+            schema.labSamples.processingStartedAt ? 'ProcessingStartedAt = COALESCE(ProcessingStartedAt, SYSUTCDATETIME())' : null,
+            schema.labSamples.sampleStatus ? "SampleStatus = 'Processing'" : null,
+            schema.labSamples.technicianNotes ? 'TechnicianNotes = @TechnicianNotes' : null,
+            schema.labSamples.updatedAt ? 'UpdatedAt = SYSUTCDATETIME()' : null,
+          ].filter(Boolean).join(',\n                ');
+
+          if (sampleUpdateAssignments) {
+            await request()
+              .input('SampleId', sql.BigInt, sampleId)
+              .input('BarcodeValue', sql.NVarChar(80), barcodeValue)
+              .input('CollectionLocation', sql.NVarChar(120), collectionLocation)
+              .input('TechnicianNotes', sql.NVarChar(1000), technicianNote)
+              .input('CollectedByUserId', sql.BigInt, actorUserId)
+              .query(`
+                UPDATE dbo.LabSamples
+                SET
+                  ${sampleUpdateAssignments}
+                WHERE Id = @SampleId
+              `);
+          }
+        } else if (hasSampleJoin(schema)) {
+          const sampleInsertColumns = [];
+          const sampleInsertValues = [];
+
+          if (schema.labSamples.labOrderItemId) {
+            sampleInsertColumns.push('LabOrderItemId');
+            sampleInsertValues.push('@LabOrderItemId');
+          }
+          if (schema.labSamples.hospitalId) {
+            sampleInsertColumns.push('HospitalId');
+            sampleInsertValues.push('@HospitalId');
+          }
+          if (schema.labSamples.sampleCode) {
+            sampleInsertColumns.push('SampleCode');
+            sampleInsertValues.push('@SampleCode');
+          }
+          if (schema.labSamples.barcodeValue) {
+            sampleInsertColumns.push('BarcodeValue');
+            sampleInsertValues.push('@BarcodeValue');
+          }
+          if (schema.labSamples.specimenType) {
+            sampleInsertColumns.push('SpecimenType');
+            sampleInsertValues.push('@SpecimenType');
+          }
+          if (schema.labSamples.collectionLocation) {
+            sampleInsertColumns.push('CollectionLocation');
+            sampleInsertValues.push('@CollectionLocation');
+          }
+          if (schema.labSamples.collectedAt) {
+            sampleInsertColumns.push('CollectedAt');
+            sampleInsertValues.push('SYSUTCDATETIME()');
+          }
+          if (schema.labSamples.collectedByUserId) {
+            sampleInsertColumns.push('CollectedByUserId');
+            sampleInsertValues.push('@CollectedByUserId');
+          }
+          if (schema.labSamples.receivedAtLabAt) {
+            sampleInsertColumns.push('ReceivedAtLabAt');
+            sampleInsertValues.push('SYSUTCDATETIME()');
+          }
+          if (schema.labSamples.processingStartedAt) {
+            sampleInsertColumns.push('ProcessingStartedAt');
+            sampleInsertValues.push('SYSUTCDATETIME()');
+          }
+          if (schema.labSamples.sampleStatus) {
+            sampleInsertColumns.push('SampleStatus');
+            sampleInsertValues.push("'Processing'");
+          }
+          if (schema.labSamples.technicianNotes) {
+            sampleInsertColumns.push('TechnicianNotes');
+            sampleInsertValues.push('@TechnicianNotes');
+          }
+
           const insertedSample = await request()
             .input('LabOrderItemId', sql.BigInt, context.ItemId)
             .input('HospitalId', sql.BigInt, context.HospitalId)
@@ -1880,12 +1971,10 @@ router.patch('/items/:itemId/collect',
             .input('TechnicianNotes', sql.NVarChar(1000), technicianNote)
             .query(`
               INSERT INTO dbo.LabSamples
-                (LabOrderItemId, HospitalId, SampleCode, BarcodeValue, SpecimenType, CollectionLocation,
-                 CollectedAt, CollectedByUserId, ReceivedAtLabAt, ProcessingStartedAt, SampleStatus, TechnicianNotes)
+                (${sampleInsertColumns.join(', ')})
               OUTPUT INSERTED.Id
               VALUES
-                (@LabOrderItemId, @HospitalId, @SampleCode, @BarcodeValue, @SpecimenType, @CollectionLocation,
-                 SYSUTCDATETIME(), @CollectedByUserId, SYSUTCDATETIME(), SYSUTCDATETIME(), 'Processing', @TechnicianNotes)
+                (${sampleInsertValues.join(', ')})
             `);
 
           sampleId = insertedSample.recordset[0].Id;
@@ -1937,7 +2026,7 @@ router.patch('/items/:itemId/collect',
           note: technicianNote || 'Sample collected and moved to processing',
         }, schema);
 
-        if (schema.hasLabSamples && sampleId) {
+        if (hasSampleJoin(schema) && sampleId) {
           await insertStatusHistory(request(), {
             labOrderId: context.LabOrderId,
             labOrderItemId: context.ItemId,
@@ -2039,22 +2128,76 @@ router.patch('/items/:itemId/result',
           `);
 
         let sampleId = context.SampleId;
-        if (schema.hasLabSamples && sampleId) {
-          await request()
-            .input('SampleId', sql.BigInt, sampleId)
-            .input('TechnicianNotes', sql.NVarChar(1000), technicianNote)
-            .query(`
-              UPDATE dbo.LabSamples
-              SET
-                ProcessingCompletedAt = COALESCE(ProcessingCompletedAt, SYSUTCDATETIME()),
-                ProcessingStartedAt = COALESCE(ProcessingStartedAt, SYSUTCDATETIME()),
-                ReceivedAtLabAt = COALESCE(ReceivedAtLabAt, SYSUTCDATETIME()),
-                SampleStatus = 'Completed',
-                TechnicianNotes = @TechnicianNotes,
-                UpdatedAt = SYSUTCDATETIME()
-              WHERE Id = @SampleId
-            `);
-        } else if (schema.hasLabSamples) {
+        if (hasSampleJoin(schema) && sampleId) {
+          const sampleUpdateAssignments = [
+            schema.labSamples.processingCompletedAt ? 'ProcessingCompletedAt = COALESCE(ProcessingCompletedAt, SYSUTCDATETIME())' : null,
+            schema.labSamples.processingStartedAt ? 'ProcessingStartedAt = COALESCE(ProcessingStartedAt, SYSUTCDATETIME())' : null,
+            schema.labSamples.receivedAtLabAt ? 'ReceivedAtLabAt = COALESCE(ReceivedAtLabAt, SYSUTCDATETIME())' : null,
+            schema.labSamples.sampleStatus ? "SampleStatus = 'Completed'" : null,
+            schema.labSamples.technicianNotes ? 'TechnicianNotes = @TechnicianNotes' : null,
+            schema.labSamples.updatedAt ? 'UpdatedAt = SYSUTCDATETIME()' : null,
+          ].filter(Boolean).join(',\n                ');
+
+          if (sampleUpdateAssignments) {
+            await request()
+              .input('SampleId', sql.BigInt, sampleId)
+              .input('TechnicianNotes', sql.NVarChar(1000), technicianNote)
+              .query(`
+                UPDATE dbo.LabSamples
+                SET
+                  ${sampleUpdateAssignments}
+                WHERE Id = @SampleId
+              `);
+          }
+        } else if (hasSampleJoin(schema)) {
+          const sampleInsertColumns = [];
+          const sampleInsertValues = [];
+
+          if (schema.labSamples.labOrderItemId) {
+            sampleInsertColumns.push('LabOrderItemId');
+            sampleInsertValues.push('@LabOrderItemId');
+          }
+          if (schema.labSamples.hospitalId) {
+            sampleInsertColumns.push('HospitalId');
+            sampleInsertValues.push('@HospitalId');
+          }
+          if (schema.labSamples.sampleCode) {
+            sampleInsertColumns.push('SampleCode');
+            sampleInsertValues.push('@SampleCode');
+          }
+          if (schema.labSamples.specimenType) {
+            sampleInsertColumns.push('SpecimenType');
+            sampleInsertValues.push('@SpecimenType');
+          }
+          if (schema.labSamples.collectedAt) {
+            sampleInsertColumns.push('CollectedAt');
+            sampleInsertValues.push('SYSUTCDATETIME()');
+          }
+          if (schema.labSamples.collectedByUserId) {
+            sampleInsertColumns.push('CollectedByUserId');
+            sampleInsertValues.push('@CollectedByUserId');
+          }
+          if (schema.labSamples.receivedAtLabAt) {
+            sampleInsertColumns.push('ReceivedAtLabAt');
+            sampleInsertValues.push('SYSUTCDATETIME()');
+          }
+          if (schema.labSamples.processingStartedAt) {
+            sampleInsertColumns.push('ProcessingStartedAt');
+            sampleInsertValues.push('SYSUTCDATETIME()');
+          }
+          if (schema.labSamples.processingCompletedAt) {
+            sampleInsertColumns.push('ProcessingCompletedAt');
+            sampleInsertValues.push('SYSUTCDATETIME()');
+          }
+          if (schema.labSamples.sampleStatus) {
+            sampleInsertColumns.push('SampleStatus');
+            sampleInsertValues.push("'Completed'");
+          }
+          if (schema.labSamples.technicianNotes) {
+            sampleInsertColumns.push('TechnicianNotes');
+            sampleInsertValues.push('@TechnicianNotes');
+          }
+
           const createdSample = await request()
             .input('LabOrderItemId', sql.BigInt, context.ItemId)
             .input('HospitalId', sql.BigInt, context.HospitalId)
@@ -2064,12 +2207,10 @@ router.patch('/items/:itemId/result',
             .input('TechnicianNotes', sql.NVarChar(1000), technicianNote)
             .query(`
               INSERT INTO dbo.LabSamples
-                (LabOrderItemId, HospitalId, SampleCode, SpecimenType, CollectedAt, CollectedByUserId,
-                 ReceivedAtLabAt, ProcessingStartedAt, ProcessingCompletedAt, SampleStatus, TechnicianNotes)
+                (${sampleInsertColumns.join(', ')})
               OUTPUT INSERTED.Id
               VALUES
-                (@LabOrderItemId, @HospitalId, @SampleCode, @SpecimenType, SYSUTCDATETIME(), @CollectedByUserId,
-                 SYSUTCDATETIME(), SYSUTCDATETIME(), SYSUTCDATETIME(), 'Completed', @TechnicianNotes)
+                (${sampleInsertValues.join(', ')})
             `);
 
           sampleId = createdSample.recordset[0].Id;
@@ -2094,7 +2235,7 @@ router.patch('/items/:itemId/result',
           note: technicianNote || remarks || 'Result entered and completed',
         }, schema);
 
-        if (schema.hasLabSamples && sampleId) {
+        if (hasSampleJoin(schema) && sampleId) {
           await insertStatusHistory(request(), {
             labOrderId: context.LabOrderId,
             labOrderItemId: context.ItemId,

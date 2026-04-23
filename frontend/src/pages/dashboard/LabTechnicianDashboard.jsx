@@ -42,6 +42,13 @@ function getAvatarColor(name) {
   return AVATAR_PALETTE[Math.abs(h) % AVATAR_PALETTE.length];
 }
 
+function formatDisplayDate(value) {
+  if (!value) return "the selected date";
+  const dt = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(dt.getTime())) return value;
+  return dt.toLocaleDateString([], { day: "2-digit", month: "short", year: "numeric" });
+}
+
 // ── UI Components ──────────────────────────────────────────────────────────
 const Icons = {
   Microscope: (props) => <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" {...props}><path d="M7 3l2 3-2 2-2-3z" /><path d="M9 6l2 3" /><path d="M3 15h12" /><path d="M9 10v5" /><path d="M6 15a3 3 0 0 1 3-3" /></svg>,
@@ -167,6 +174,8 @@ export default function LabTechnicianDashboard() {
       }
     } catch (err) {
       console.error("Error changing room:", err);
+      fetchRoomsInfo();
+      fetchTransferHistory();
       toast.error(err.message || "Failed to request room change");
     }
   };
@@ -220,6 +229,35 @@ export default function LabTechnicianDashboard() {
   const pageData = filteredData.slice(startIdx, startIdx + ROWS_PER_PAGE);
   const startItem = filteredData.length === 0 ? 0 : startIdx + 1;
   const endItem = Math.min(startIdx + ROWS_PER_PAGE, filteredData.length);
+  const latestTransfer = transferHistory.data[0] || null;
+  const hasPendingTransfer = latestTransfer?.Status === "Pending";
+  const selectedDateLabel = formatDisplayDate(selectedDate);
+  const activeStationLabel = currentAssignment?.RoomNo || "your active station";
+  const pendingRoomLabel = latestTransfer?.RoomNo ? ` to ${latestTransfer.RoomNo}` : "";
+  const emptyState = (() => {
+    if (hasPendingTransfer && !currentAssignment?.RoomId) {
+      return {
+        title: "Waiting for station approval",
+        detail: `Your room request${pendingRoomLabel} is still pending admin approval. Samples will appear here after the station becomes active.`,
+      };
+    }
+    if (hasPendingTransfer) {
+      return {
+        title: "No samples for this date",
+        detail: `No samples are assigned to ${activeStationLabel} on ${selectedDateLabel}. Your transfer request${pendingRoomLabel} is still waiting for admin approval.`,
+      };
+    }
+    if (!currentAssignment?.RoomId) {
+      return {
+        title: "No active station assigned",
+        detail: "This technician account does not have an active lab station yet. Ask an admin to assign or approve a station first.",
+      };
+    }
+    return {
+      title: "No samples for this date",
+      detail: `No samples are assigned to ${activeStationLabel} on ${selectedDateLabel}. Try another date to view older orders.`,
+    };
+  })();
 
   // Actions
   const handleActionClick = async (test) => {
@@ -461,7 +499,8 @@ export default function LabTechnicianDashboard() {
 
           {pageData.length === 0 ? (
             <div style={{ padding: "60px 20px", textAlign: "center", color: "#888780", fontSize: 14 }}>
-              No records found.
+              <div style={{ fontSize: 17, fontWeight: 700, color: "#1f2937", marginBottom: 10 }}>{emptyState.title}</div>
+              <div style={{ maxWidth: 520, margin: "0 auto", lineHeight: 1.6 }}>{emptyState.detail}</div>
             </div>
           ) : (
             pageData.map((row) => {

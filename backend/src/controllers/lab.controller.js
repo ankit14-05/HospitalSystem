@@ -1,6 +1,10 @@
 const { validationResult } = require('express-validator');
 const labService = require('../services/lab.service');
 const { getPool, sql } = require('../config/database');
+const { normalizeRole } = require('../constants/roles');
+const AppError = require('../utils/AppError');
+
+const isLabTechRole = (role) => normalizeRole(role) === 'labtech';
 
 function validationFail(req, res) {
   const errors = validationResult(req);
@@ -72,7 +76,7 @@ exports.getLabOrders = async (req, res, next) => {
         .query('SELECT Id FROM dbo.DoctorProfiles WHERE UserId = @uid');
       if (dr.recordset.length > 0) orderedBy = dr.recordset[0].Id;
       else orderedBy = -1; // doctor with no profile shouldn't see others
-    } else if (['labtech'].includes(req.user.role)) {
+    } else if (isLabTechRole(req.user.role)) {
       const pool = await getPool();
       const techRes = await pool.request()
         .input('uid', sql.BigInt, req.user.id)
@@ -264,29 +268,47 @@ exports.getLabRooms = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+exports.getLabTechnicians = async (req, res, next) => {
+  try {
+    const technicians = await labService.getLabTechnicians(req.user.hospitalId);
+    res.json({ success: true, data: technicians });
+  } catch (err) { next(err); }
+};
+
 // POST /api/v1/lab/assign-room
 exports.changeRoom = async (req, res, next) => {
   try {
     const { roomId, userId, assignmentType, notes } = req.body;
     const isAdmin = ['admin', 'superadmin'].includes(req.user.role);
-    
-    // If labtech, status is 'Pending'. If admin, status is 'Active' (override).
-    const status = isAdmin ? 'Active' : 'Pending';
-    const targetUserId = (isAdmin && userId) ? Number(userId) : req.user.id;
+
+    if (!isAdmin) {
+      throw new AppError('Only admin can assign lab technician rooms.', 403);
+    }
+
+    const parsedRoomId = Number(roomId);
+    const targetUserId = Number(userId);
+
+    if (!parsedRoomId) {
+      throw new AppError('Lab room selection is required.', 400);
+    }
+
+    if (!targetUserId) {
+      throw new AppError('Lab technician selection is required.', 400);
+    }
     
     await labService.assignTechnicianToRoom({
       userId: targetUserId,
-      roomId: Number(roomId),
+      roomId: parsedRoomId,
       assignedBy: req.user.id,
-      assignmentType: assignmentType || (isAdmin ? 'Admin Override' : 'Formal Transfer'),
+      assignmentType: assignmentType || 'Admin Room Assignment',
       notes,
-      status,
+      status: 'Active',
       hospitalId: req.user.hospitalId
     });
     
     res.json({ 
       success: true, 
-      message: status === 'Pending' ? 'Transfer request sent for Admin approval' : 'Room assignment updated' 
+      message: 'Lab technician room assignment updated' 
     });
   } catch (err) { next(err); }
 };

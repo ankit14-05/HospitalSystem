@@ -175,7 +175,7 @@ export default function App() {
           <Route path="/login"           element={<RedirectIfAuth><LoginPage /></RedirectIfAuth>} />
           <Route path="/forgot-password" element={<RedirectIfAuth><ForgotPasswordPage /></RedirectIfAuth>} />
 
-          {/* Public patient registration; doctor/staff remain admin-only */}
+          {/* Public patient registration; doctor/staff remain superadmin-only */}
           <Route
             path="/register/patient"
             element={
@@ -188,7 +188,7 @@ export default function App() {
             path="/register/doctor"
             element={
               <RequireAuth>
-                <RequireRole roles={['superadmin', 'admin']}>
+                <RequireRole roles={['superadmin']}>
                   <DoctorRegisterPage />
                 </RequireRole>
               </RequireAuth>
@@ -198,7 +198,7 @@ export default function App() {
             path="/register/staff"
             element={
               <RequireAuth>
-                <RequireRole roles={['superadmin', 'admin']}>
+                <RequireRole roles={['superadmin']}>
                   <StaffRegisterPage />
                 </RequireRole>
               </RequireAuth>
@@ -401,7 +401,7 @@ export default function App() {
             <Route
               path="admin/doctor-approvals"
               element={
-                <RequireRole roles={['superadmin', 'admin']}>
+                <RequireRole roles={['superadmin']}>
                   <DoctorApprovalPanel />
                 </RequireRole>
               }
@@ -409,7 +409,7 @@ export default function App() {
             <Route
               path="admin/staff-approvals"
               element={
-                <RequireRole roles={['superadmin', 'admin']}>
+                <RequireRole roles={['superadmin']}>
                   <StaffApprovalPanel />
                 </RequireRole>
               }

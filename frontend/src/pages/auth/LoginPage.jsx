@@ -381,7 +381,7 @@ export default function LoginPage() {
                   <div>
                     <p className="text-sm font-bold text-slate-700">Doctor & Staff Accounts</p>
                     <p className="mt-1 text-xs leading-relaxed text-slate-400">
-                      New doctor and staff accounts are created by hospital administrators only.
+                      New doctor and staff accounts are created by the superadmin only.
                     </p>
                   </div>
                 </div>

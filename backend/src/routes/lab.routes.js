@@ -156,6 +156,11 @@ router.get('/rooms',
   ctrl.getLabRooms,
 );
 
+router.get('/technicians',
+  authorize('superadmin', 'admin'),
+  ctrl.getLabTechnicians,
+);
+
 router.get('/my-assignment',
   authorize(...LAB_TECH_ROLES),
   ctrl.getMyAssignment,
@@ -183,7 +188,7 @@ router.post('/reject-transfer',
 );
 
 router.post('/assign-room',
-  authorize('superadmin', 'admin', 'labtech'),
+  authorize('superadmin', 'admin'),
   ctrl.changeRoom,
 );
 
