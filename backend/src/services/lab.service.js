@@ -936,11 +936,11 @@ async function getNurseBookableOrders({ hospitalId, search = '' } = {}) {
       lo.PatientId, lo.AppointmentId,
       p.UHID, p.FirstName + ' ' + p.LastName AS PatientName, p.Phone AS PatientPhone,
       COALESCE(
-        CASE WHEN dp.Id IS NOT NULL THEN 'Dr. ' + du.FirstName + ' ' + du.LastName END,
+        'Dr. ' + adu.FirstName + ' ' + adu.LastName,
         CASE WHEN u.Role = 'doctor' THEN 'Dr. ' + u.FirstName + ' ' + u.LastName END,
         u.FirstName + ' ' + u.LastName
       ) AS DoctorName,
-      COALESCE(dp.Specialization, '') AS DoctorSpecialization,
+      COALESCE(sp.Name, '') AS DoctorSpecialization,
       CASE WHEN EXISTS (
         SELECT 1 FROM dbo.LabOrderItems li WHERE li.LabOrderId = lo.Id AND li.RoomId IS NOT NULL
       ) THEN 1 ELSE 0 END AS IsAlreadyBooked,
@@ -956,8 +956,10 @@ async function getNurseBookableOrders({ hospitalId, search = '' } = {}) {
     FROM dbo.LabOrders lo
     JOIN dbo.PatientProfiles p ON p.Id = lo.PatientId
     LEFT JOIN dbo.Users u ON u.Id = lo.OrderedBy
-    LEFT JOIN dbo.DoctorProfiles dp ON dp.UserId = lo.OrderedBy
-    LEFT JOIN dbo.Users du ON du.Id = dp.UserId
+    LEFT JOIN dbo.Appointments a ON a.Id = lo.AppointmentId
+    LEFT JOIN dbo.DoctorProfiles adp ON adp.Id = a.DoctorId
+    LEFT JOIN dbo.Users adu ON adu.Id = adp.UserId
+    LEFT JOIN dbo.Specializations sp ON sp.Id = adp.SpecializationId
     WHERE lo.HospitalId = @hospitalId
       AND lo.Status = 'Pending'
       AND lo.OrderedBy IS NOT NULL
