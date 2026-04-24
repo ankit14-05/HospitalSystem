@@ -63,4 +63,36 @@ const enterResultRules = [
   body('remarks').optional().isLength({ max: 2000 }),
 ];
 
-module.exports = { createLabOrderRules, updateOrderStatusRules, enterResultRules };
+const nurseBookOrderRules = [
+  param('orderId').isInt({ gt: 0 }).withMessage('orderId must be a positive integer'),
+  body('itemBookings')
+    .isArray({ min: 1 }).withMessage('itemBookings is required'),
+  body('itemBookings.*.itemId')
+    .isInt({ gt: 0 }).withMessage('itemId must be positive'),
+  body('itemBookings.*.roomId')
+    .isInt({ gt: 0 }).withMessage('roomId must be positive'),
+  body('slotAt')
+    .optional({ checkFalsy: true })
+    .isISO8601().withMessage('slotAt must be valid datetime'),
+  body('note')
+    .optional({ checkFalsy: true })
+    .isLength({ max: 500 }).withMessage('note max 500 chars'),
+];
+
+const labDecisionRules = [
+  param('orderId').isInt({ gt: 0 }).withMessage('orderId must be a positive integer'),
+  body('decision')
+    .isIn(['accept', 'reject']).withMessage("decision must be 'accept' or 'reject'"),
+  body('reason')
+    .if(body('decision').equals('reject'))
+    .notEmpty().withMessage('reason is required for reject')
+    .isLength({ max: 1000 }).withMessage('reason max 1000 chars'),
+];
+
+module.exports = {
+  createLabOrderRules,
+  updateOrderStatusRules,
+  enterResultRules,
+  nurseBookOrderRules,
+  labDecisionRules,
+};

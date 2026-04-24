@@ -338,12 +338,39 @@ function ReportDetailModal({ report, loading = false, onClose }) {
   );
 }
 
-function ReportTable({ reports = [], onViewReport = null }) {
+function ReportTable({ reports = [], onViewReport = null, onUploadComplete = null }) {
   const [page, setPage] = useState(1);
+  const [uploadingId, setUploadingId] = useState(null);
   const perPage = 4;
   const totalPages = Math.max(1, Math.ceil(reports.length / perPage));
   const start = (page - 1) * perPage;
   const rows = reports.slice(start, start + perPage);
+
+  const isOutsideUploadAllowed = (report) => {
+    const status = String(report?.Status || report?.status || '').toLowerCase();
+    return status === 'cancelled' || status === 'rejected';
+  };
+
+  const handleOutsideUpload = async (report, event) => {
+    const files = Array.from(event.target.files || []);
+    const orderId = report?.OrderId || report?.Id || report?.id;
+    if (!files.length || !orderId) return;
+    try {
+      setUploadingId(orderId);
+      const formData = new FormData();
+      files.forEach((file) => formData.append('files', file));
+      const res = await api.post(`/lab/orders/${orderId}/patient-uploads`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      toast.success(res?.message || 'Outside report uploaded successfully.');
+      onUploadComplete?.();
+    } catch (error) {
+      toast.error(error?.message || 'Failed to upload outside report');
+    } finally {
+      setUploadingId(null);
+      event.target.value = '';
+    }
+  };
 
   return (
     <>
@@ -369,9 +396,24 @@ function ReportTable({ reports = [], onViewReport = null }) {
                 <td style={{ padding: '14px 16px', fontSize: 14, color: '#374151' }}>{formatDate(report.OrderDate || report.Date || report.date)}</td>
                 <td style={{ padding: '14px 16px' }}><StatusPill status={report.Status || report.status} /></td>
                 <td style={{ padding: '14px 16px' }}>
-                  <button onClick={() => onViewReport?.(report)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: BLUE, padding: 2, fontWeight: 700 }}>
-                    View Files
-                  </button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <button onClick={() => onViewReport?.(report)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: BLUE, padding: 2, fontWeight: 700 }}>
+                      View Files
+                    </button>
+                    {isOutsideUploadAllowed(report) ? (
+                      <label style={{ fontSize: 12, fontWeight: 700, color: '#b45309', border: '1px solid #f59e0b', borderRadius: 6, padding: '4px 8px', cursor: uploadingId === (report?.OrderId || report?.Id || report?.id) ? 'not-allowed' : 'pointer', opacity: uploadingId === (report?.OrderId || report?.Id || report?.id) ? 0.6 : 1 }}>
+                        {uploadingId === (report?.OrderId || report?.Id || report?.id) ? 'Uploading...' : 'Upload Outside'}
+                        <input
+                          type="file"
+                          accept=".pdf,.jpg,.jpeg,.png,.mp4,.mp3,.wav"
+                          multiple
+                          disabled={uploadingId === (report?.OrderId || report?.Id || report?.id)}
+                          onChange={(event) => handleOutsideUpload(report, event)}
+                          style={{ display: 'none' }}
+                        />
+                      </label>
+                    ) : null}
+                  </div>
                 </td>
               </tr>
             ))}
@@ -849,7 +891,7 @@ export function PatientEmrLabWorkspace({
     history: <MedicalHistorySection appointments={appointments} reports={reports} encounters={emr?.encounters || []} />,
     diagnosis: <DiagnosisReportSection profile={profile} appointments={appointments} diagnoses={emr?.diagnoses || []} />,
     prescriptions: <PrescriptionsSection prescriptions={prescriptions} />,
-    lab: <div><h2 style={{ fontSize: 18, fontWeight: 700, margin: '0 0 20px' }}>Laboratory Records</h2><ReportTable reports={reports} onViewReport={openReportModal} /></div>,
+    lab: <div><h2 style={{ fontSize: 18, fontWeight: 700, margin: '0 0 20px' }}>Laboratory Records</h2><ReportTable reports={reports} onViewReport={openReportModal} onUploadComplete={onOpenReports} /></div>,
     notes: <ClinicalNotesSection appointments={appointments} reports={reports} notes={emr?.notes || []} />,
     allergies: <AllergyInfoSection profile={profile} />,
     medication: <MedicationHistorySection prescriptions={prescriptions} />,
@@ -937,7 +979,7 @@ export function PatientLabReportsWorkspace({
         {loading ? (
           <div style={{ padding: '2rem', color: '#6b7280' }}>Loading lab reports...</div>
         ) : (
-          <ReportTable reports={reports} onViewReport={openReportModal} />
+          <ReportTable reports={reports} onViewReport={openReportModal} onUploadComplete={onRefresh} />
         )}
       </div>
       {reportModal.open ? (

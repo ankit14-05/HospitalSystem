@@ -6,6 +6,14 @@ const AppError = require('../utils/AppError');
 
 const isLabTechRole = (role) => normalizeRole(role) === 'labtech';
 
+const getPatientLoginUserId = async (patientId) => {
+  const pool = await getPool();
+  const res = await pool.request()
+    .input('patientId', sql.BigInt, patientId)
+    .query('SELECT UserId FROM dbo.PatientProfiles WHERE Id = @patientId');
+  return res.recordset[0]?.UserId || null;
+};
+
 function validationFail(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -31,16 +39,17 @@ exports.getLabTests = async (req, res, next) => {
 exports.createLabOrder = async (req, res, next) => {
   if (validationFail(req, res)) return;
   try {
+    // Workflow policy: nurse cannot create own tests; only book doctor-prescribed ones.
+    if (['nurse'].includes(normalizeRole(req.user.role))) {
+      return res.status(403).json({
+        success: false,
+        message: 'Nurse can only book tests prescribed by doctor after consultation.',
+      });
+    }
+
     const hospitalId = req.user.hospitalId;
     let orderedBy = null;
-    
-    if (req.user.role === 'doctor') {
-      const pool = await getPool();
-      const dr = await pool.request()
-        .input('uid', sql.BigInt, req.user.id)
-        .query('SELECT Id FROM dbo.DoctorProfiles WHERE UserId = @uid');
-      if (dr.recordset.length > 0) orderedBy = dr.recordset[0].Id;
-    }
+    if (req.user.role === 'doctor') orderedBy = req.user.id;
 
     const {
       patientId, appointmentId, notes, tests,
@@ -53,9 +62,98 @@ exports.createLabOrder = async (req, res, next) => {
       appointmentId: appointmentId ? Number(appointmentId) : null,
       notes,
       tests,
+      requestedByRole: normalizeRole(req.user.role),
     });
 
+    // Notify Patient & Nurses
+    const patientUserId = await getPatientLoginUserId(Number(patientId));
+    if (patientUserId) {
+      await notificationService.createNotification({
+        hospitalId,
+        userId: patientUserId,
+        notifType: 'appointment',
+        title: 'New lab test prescribed',
+        body: `Dr. ${req.user.lastName || ''} has prescribed new lab tests for you.`,
+        link: '/appointments',
+        dataJson: { orderId: result.Id },
+      });
+    }
+
+    // Notify all nurses in this hospital
+    const pool = await getPool();
+    const nurses = await pool.request()
+      .input('hid', sql.BigInt, hospitalId)
+      .query("SELECT Id FROM dbo.Users WHERE Role = 'nurse' AND HospitalId = @hid AND DeletedAt IS NULL AND IsActive = 1");
+    
+    if (nurses.recordset.length > 0) {
+      const nurseNotifs = nurses.recordset.map(n => ({
+        hospitalId,
+        userId: n.Id,
+        notifType: 'appointment',
+        title: 'New lab order awaiting booking',
+        body: `A new lab order (#${result.OrderNumber}) has been prescribed and needs room assignment.`,
+        link: '/nursing/lab-booking',
+        dataJson: { orderId: result.Id },
+      }));
+      await notificationService.createBulkNotifications(nurseNotifs);
+    }
+
     res.status(201).json({ success: true, message: 'Lab order created', data: result });
+  } catch (err) { next(err); }
+};
+
+exports.getNurseBookableOrders = async (req, res, next) => {
+  try {
+    const orders = await labService.getNurseBookableOrders({
+      hospitalId: req.user.hospitalId,
+      search: req.query.search || '',
+    });
+    res.json({ success: true, data: orders, total: orders.length });
+  } catch (err) { next(err); }
+};
+
+exports.bookOrderByNurse = async (req, res, next) => {
+  if (validationFail(req, res)) return;
+  try {
+    const result = await labService.nurseBookOrder({
+      hospitalId: req.user.hospitalId,
+      orderId: Number(req.params.orderId),
+      itemBookings: Array.isArray(req.body.itemBookings) ? req.body.itemBookings : [],
+      slotAt: req.body.slotAt || null,
+      note: req.body.note || null,
+      nurseUserId: req.user.id,
+    });
+
+    // Notify patient (if account linked) and doctor.
+    const patientUserId = await getPatientLoginUserId(result.PatientId);
+    if (patientUserId) {
+      const notificationService = require('../services/notificationService');
+      await notificationService.createNotification({
+        hospitalId: req.user.hospitalId,
+        userId: patientUserId,
+        notifType: 'appointment',
+        title: 'Lab test booked by nurse',
+        body: `Your prescribed lab test (${result.OrderNumber}) is booked in hospital lab.`,
+        link: '/appointments',
+        dataJson: { orderId: result.Id },
+      });
+    }
+
+    res.json({ success: true, message: 'Lab booking saved for selected doctor-prescribed order.' });
+  } catch (err) { next(err); }
+};
+
+exports.labDecisionOnBookedOrder = async (req, res, next) => {
+  if (validationFail(req, res)) return;
+  try {
+    const decision = await labService.labDecisionOnBookedOrder({
+      orderId: Number(req.params.orderId),
+      hospitalId: req.user.hospitalId,
+      decision: req.body.decision,
+      reason: req.body.reason || null,
+      actedByUserId: req.user.id,
+    });
+    res.json({ success: true, data: decision });
   } catch (err) { next(err); }
 };
 
@@ -70,12 +168,7 @@ exports.getLabOrders = async (req, res, next) => {
     let allowedRooms = undefined;
     
     if (['doctor'].includes(req.user.role)) {
-      const pool = await getPool();
-      const dr = await pool.request()
-        .input('uid', sql.BigInt, req.user.id)
-        .query('SELECT Id FROM dbo.DoctorProfiles WHERE UserId = @uid');
-      if (dr.recordset.length > 0) orderedBy = dr.recordset[0].Id;
-      else orderedBy = -1; // doctor with no profile shouldn't see others
+      orderedBy = req.user.id;
     } else if (isLabTechRole(req.user.role)) {
       const pool = await getPool();
       const techRes = await pool.request()
@@ -177,22 +270,6 @@ exports.getPatientOrders = async (req, res, next) => {
 // ─────────────────────────────────────────────────────────────
 
 
-// POST /api/v1/lab/orders/:id/reject
-exports.rejectLabOrder = async (req, res, next) => {
-  try {
-    const { reason } = req.body;
-    if (!reason) {
-      return res.status(400).json({ success: false, message: 'Rejection reason is required.' });
-    }
-    const result = await labService.rejectLabTest(
-      Number(req.params.id),
-      reason,
-      req.user.id,
-      req.user.hospitalId
-    );
-    res.json(result);
-  } catch (err) { next(err); }
-};
 
 // GET /api/v1/lab/results/:patientId
 exports.getPatientLabResults = async (req, res, next) => {
@@ -249,6 +326,35 @@ exports.uploadAttachments = async (req, res, next) => {
     }
 
     res.json({ success: true, message: 'Files uploaded successfully', data: savedFiles });
+  } catch (err) { next(err); }
+};
+
+exports.uploadPatientOutsideLabFiles = async (req, res, next) => {
+  try {
+    const orderId = Number(req.params.orderId);
+    if (!req.files?.length) {
+      return res.status(400).json({ success: false, message: 'No files uploaded' });
+    }
+
+    const savedFiles = [];
+    for (const file of req.files) {
+      const relativePath = file.path.replace(/\\/g, '/');
+      await labService.addLabAttachment({
+        labOrderId: orderId,
+        fileName: file.originalname,
+        filePath: '/' + relativePath,
+        fileType: file.mimetype,
+        fileSize: file.size,
+        uploadedBy: req.user.id,
+      });
+      savedFiles.push({ name: file.originalname, url: '/' + relativePath });
+    }
+
+    res.json({
+      success: true,
+      message: 'Outside lab files uploaded. Hospital team will review them.',
+      data: savedFiles,
+    });
   } catch (err) { next(err); }
 };
 
@@ -482,6 +588,21 @@ exports.rejectLabOrder = async (req, res, next) => {
     const orderId = Number(req.params.id);
     const { reason } = req.body;
     const result = await labService.rejectLabTest(orderId, reason, req.user.id, req.user.hospitalId);
+
+    // Notify Patient to take test externally
+    const patientUserId = await getPatientLoginUserId(result.PatientId);
+    if (patientUserId) {
+      await notificationService.createNotification({
+        hospitalId: req.user.hospitalId,
+        userId: patientUserId,
+        notifType: 'alert',
+        title: 'Lab Test Rejected — Take Externally',
+        body: `Your lab test (${result.OrderNumber}) was rejected by the hospital lab. Reason: ${reason || 'Slot unavailable'}. Please take the test from an outside lab and upload the report here.`,
+        link: '/dashboard/patient',
+        dataJson: { orderId, reason },
+      });
+    }
+
     res.json(result);
   } catch (err) { next(err); }
 };

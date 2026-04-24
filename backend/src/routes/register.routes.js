@@ -664,6 +664,8 @@ router.post('/verify-email-otp', [
 // POST /register/patient
 // ═══════════════════════════════════════════════════════════════════════════════
 router.post('/patient',
+  authenticate,
+  authorize('admin', 'superadmin', 'receptionist'),
   upload.any(),
   [
     body('hospitalId').isInt({ min: 1 }).withMessage('Hospital ID required'),
@@ -912,7 +914,7 @@ router.post('/patient',
 // ═══════════════════════════════════════════════════════════════════════════════
 router.post('/doctor',
   authenticate,
-  isSuperAdmin,
+  authorize('admin', 'superadmin'),
   upload.any(),
   [
     body('hospitalId').isInt({ min: 1 }).withMessage('Hospital ID required'),
@@ -1098,7 +1100,7 @@ router.post('/doctor',
 // ═══════════════════════════════════════════════════════════════════════════════
 router.post('/staff',
   authenticate,
-  isSuperAdmin,
+  authorize('admin', 'superadmin'),
   upload.any(),
   [
     body('hospitalId').isInt({ min: 1 }).withMessage('Hospital ID required'),
@@ -1108,6 +1110,9 @@ router.post('/staff',
     body('phone').trim().notEmpty().withMessage('Phone required')
       .custom(v => { if (/^0/.test(v.replace(/\D/g,''))) throw new Error('Phone cannot start with 0'); return true; }),
     body('role').trim().notEmpty().withMessage('Role required'),
+    body('labRoomId')
+      .optional({ nullable: true, checkFalsy: true })
+      .isInt({ min: 1 }).withMessage('labRoomId must be a valid room id'),
     body('password').isLength({ min: 8 }).matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/)
       .withMessage('Password needs uppercase, lowercase and number'),
   ],
@@ -1126,7 +1131,7 @@ router.post('/staff',
         aadhaar, pan, passportNo, voterId, abhaNumber,
         street1, street2, city, countryId, stateId, pincode,
         languagesSpoken, previousEmployer, experienceYears,
-        bankAccountNo, ifscCode, knownAllergies, bloodDonor,
+        bankAccountNo, ifscCode, knownAllergies, bloodDonor, labRoomId,
       } = req.body;
 
       const phone = sanitizePhone(req.body.phone);
@@ -1157,6 +1162,9 @@ router.post('/staff',
       if (dupPhone.recordset.length) throw new AppError('An account with this phone number already exists.', 409);
 
       const normalizedRole = normalizeRole(role);
+      if (normalizedRole === 'labtech' && !labRoomId) {
+        throw new AppError('Lab room is mandatory for lab technician registration.', 400);
+      }
       const username = (reqUsername||'').trim().toLowerCase() ||
         `${normalizedRole.replace(/[^a-z]/g,'').slice(0,4)}_${phone.slice(-8)}_${Date.now().toString().slice(-4)}`;
 
@@ -1198,6 +1206,34 @@ router.post('/staff',
          VALUES (@uid,@hid,@did,@empid,@shift,@join,@contract,@manager,@wstart,@wend,@weekoff,@blood,@nation,@alt,@aadhaar,@pan,@passport,@voter,@abha,@s1,@s2,@city,@cid,@sid,@ptext,@qual,@langs,@prevEmp,@exp,@bank,@ifsc,@allergies,@donor,@marital,@religion,@tongue,@ename,@erel,@ephone,'pending',NULL)`,
         {uid:{type:sql.BigInt,value:userId},hid:{type:sql.BigInt,value:hid},did:{type:sql.BigInt,value:departmentId||null},empid:{type:sql.NVarChar(60),value:employeeId||null},shift:{type:sql.NVarChar(20),value:shiftType||null},join:{type:sql.Date,value:joinValue},contract:{type:sql.NVarChar(30),value:contractType||null},manager:{type:sql.NVarChar(150),value:reportingManager||null},...(fromValue!==undefined?{wstart:{type:sql.Time,value:fromValue}}:{wstart:{type:sql.NVarChar(10),value:null}}),...(toValue!==undefined?{wend:{type:sql.Time,value:toValue}}:{wend:{type:sql.NVarChar(10),value:null}}),weekoff:{type:sql.NVarChar(100),value:weeklyOff||null},blood:{type:sql.NVarChar(5),value:bloodGroup||null},nation:{type:sql.NVarChar(80),value:nationality||'Indian'},alt:{type:sql.NVarChar(20),value:altPhone||null},aadhaar:{type:sql.NVarChar(12),value:cleanAadhaar},pan:{type:sql.NVarChar(10),value:cleanPan},passport:{type:sql.NVarChar(30),value:passportNo||null},voter:{type:sql.NVarChar(30),value:voterId||null},abha:{type:sql.NVarChar(30),value:abhaNumber||null},s1:{type:sql.NVarChar(255),value:street1||null},s2:{type:sql.NVarChar(255),value:street2||null},city:{type:sql.NVarChar(100),value:city||null},cid:{type:sql.Int,value:safeCountryId},sid:{type:sql.Int,value:safeStateId},ptext:{type:sql.NVarChar(20),value:pincode||null},qual:{type:sql.NVarChar(200),value:qualification||null},langs:{type:sql.NVarChar(300),value:languagesSpoken||null},prevEmp:{type:sql.NVarChar(200),value:previousEmployer||null},exp:{type:sql.SmallInt,value:experienceYears?parseInt(experienceYears):null},bank:{type:sql.NVarChar(30),value:bankAccountNo||null},ifsc:{type:sql.NVarChar(15),value:ifscCode||null},allergies:{type:sql.NVarChar(sql.MAX),value:knownAllergies||null},donor:{type:sql.NVarChar(10),value:bloodDonor||null},marital:{type:sql.NVarChar(20),value:maritalStatus||null},religion:{type:sql.NVarChar(80),value:religion||null},tongue:{type:sql.NVarChar(80),value:motherTongue||null},ename:{type:sql.NVarChar(200),value:emergencyName||null},erel:{type:sql.NVarChar(80),value:emergencyRelation||null},ephone:{type:sql.NVarChar(20),value:emergencyPhone||null}}
       );
+
+      if (normalizedRole === 'labtech') {
+        const roomRes = await query(
+          `SELECT Id FROM dbo.LabRooms
+           WHERE Id = @rid AND IsActive = 1 AND (HospitalId = @hid OR HospitalId IS NULL)`,
+          {
+            rid: { type: sql.BigInt, value: Number(labRoomId) },
+            hid: { type: sql.BigInt, value: hid },
+          }
+        );
+        if (!roomRes.recordset.length) {
+          throw new AppError('Selected lab room is invalid for this hospital.', 400);
+        }
+
+        await query(
+          `IF NOT EXISTS (SELECT 1 FROM dbo.LabTechnicianProfiles WHERE UserId = @uid)
+             INSERT INTO dbo.LabTechnicianProfiles (UserId, RoomId, CreatedAt, UpdatedAt)
+             VALUES (@uid, @rid, SYSUTCDATETIME(), SYSUTCDATETIME())
+           ELSE
+             UPDATE dbo.LabTechnicianProfiles
+             SET RoomId = @rid, UpdatedAt = SYSUTCDATETIME()
+             WHERE UserId = @uid`,
+          {
+            uid: { type: sql.BigInt, value: userId },
+            rid: { type: sql.BigInt, value: Number(labRoomId) },
+          }
+        );
+      }
 
       if (req.files?.length) console.log(`📎 ${req.files.length} file(s) for staff ${userId}`);
 

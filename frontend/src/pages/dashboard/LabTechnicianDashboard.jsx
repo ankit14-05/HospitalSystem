@@ -341,6 +341,34 @@ export default function LabTechnicianDashboard() {
     }
   };
 
+  const handleLabDecision = async (row, decision) => {
+    const orderId = row?.raw?.Id;
+    if (!orderId) return;
+
+    let reason = '';
+    if (decision === 'reject') {
+      reason = window.prompt('Enter reject reason (e.g. slots unavailable):', 'No slot available in selected room.') || '';
+      if (!reason.trim()) {
+        toast.error('Reject reason is required.');
+        return;
+      }
+    }
+
+    try {
+      setActionLoading((prev) => ({ ...prev, [orderId]: true }));
+      const res = await api.post(`/lab/orders/${orderId}/lab-decision`, {
+        decision,
+        reason: reason.trim() || undefined,
+      });
+      toast.success(res?.message || `Order ${decision}ed successfully.`);
+      fetchOrders();
+    } catch (err) {
+      toast.error(err?.message || `Failed to ${decision} order`);
+    } finally {
+      setActionLoading((prev) => ({ ...prev, [orderId]: false }));
+    }
+  };
+
   // Table Configuration Based on Tab
   const getTableConfig = () => {
     if (activeTab === "Pending") {
@@ -544,7 +572,26 @@ export default function LabTechnicianDashboard() {
                     <button onClick={() => handleViewDetails(row)} style={{ background: "none", border: "none", cursor: "pointer", color: "#64748b", padding: "6px" }} title="View Details">
                       <Icons.Eye />
                     </button>
-                    {row.status === "Pending" && <button className="action-btn" onClick={() => handleActionClick(row)}>Collect Sample</button>}
+                    {row.status === "Pending" && (
+                      <>
+                        <button
+                          className="action-btn"
+                          style={{ background: "#0f6e56" }}
+                          disabled={!!actionLoading[row.raw.Id]}
+                          onClick={() => handleLabDecision(row, 'accept')}
+                        >
+                          Accept Slot
+                        </button>
+                        <button
+                          className="view-btn"
+                          disabled={!!actionLoading[row.raw.Id]}
+                          onClick={() => handleLabDecision(row, 'reject')}
+                        >
+                          Reject Slot
+                        </button>
+                        <button className="action-btn" onClick={() => handleActionClick(row)}>Collect Sample</button>
+                      </>
+                    )}
                     {row.status === "Processing" && <button className="action-btn" style={{ background: "#185FA5" }} onClick={() => handleActionClick(row)}>Upload Result</button>}
                     {row.status === "Completed" && <button className="view-btn" onClick={() => handleViewDetails(row, true)}>Download Result</button>}
                   </div>

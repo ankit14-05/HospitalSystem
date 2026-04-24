@@ -80,6 +80,7 @@ async function createLabOrder({
   appointmentId,
   notes,
   tests = [],      // [{ testId, priority, placeType, roomNo, externalLabName, criteria, additionalDetails }]
+  requestedByRole = null,
 }) {
   const result = await withTransaction(async (transaction) => {
     const orderNumber = generateOrderNumber();
@@ -89,15 +90,15 @@ async function createLabOrder({
                          : tests.some(t => t.priority === 'Urgent') ? 'Urgent' 
                          : 'Routine';
 
-    // 1. Insert ONE Parent Order
+    // 1. Insert ONE Parent Order (doctor prescribed in consultation flow)
     const orderQ = `
       INSERT INTO dbo.LabOrders
         (HospitalId, PatientId, OrderedBy, AppointmentId, OrderNumber, OrderDate,
-         Status, Priority, Notes, CreatedAt, UpdatedAt, CreatedBy)
+         Status, Priority, Notes, CreatedAt, UpdatedAt, CreatedBy, RejectionReason)
       OUTPUT INSERTED.Id
       VALUES
         (@hospitalId, @patientId, @orderedBy, @appointmentId, @orderNumber, GETUTCDATE(),
-         'Pending', @priority, @notes, GETUTCDATE(), GETUTCDATE(), @orderedBy)
+         'Pending', @priority, @notes, GETUTCDATE(), GETUTCDATE(), @orderedBy, @requestedByRole)
     `;
 
     const txRequest = transaction.request();
@@ -108,6 +109,7 @@ async function createLabOrder({
     txRequest.input('orderNumber',       sql.NVarChar(30),   orderNumber);
     txRequest.input('priority',          sql.NVarChar(20),   globalPriority);
     txRequest.input('notes',             sql.NVarChar(sql.MAX), notes || null);
+    txRequest.input('requestedByRole',   sql.NVarChar(100), requestedByRole || null);
 
     const orderResult = await txRequest.query(orderQ);
     const labOrderId = orderResult.recordset[0].Id;
@@ -172,7 +174,13 @@ async function getLabOrders({ hospitalId, patientId, orderedBy, status, priority
     params.patientId = { type: sql.BigInt, value: patientId };
   }
   if (orderedBy) {
-    where += ` AND lo.OrderedBy = @orderedBy`;
+    where += ` AND (
+      lo.OrderedBy = @orderedBy
+      OR EXISTS (
+        SELECT 1 FROM dbo.DoctorProfiles dp
+        WHERE dp.Id = lo.OrderedBy AND dp.UserId = @orderedBy
+      )
+    )`;
     params.orderedBy = { type: sql.BigInt, value: orderedBy };
   }
   if (status) {
@@ -210,12 +218,14 @@ async function getLabOrders({ hospitalId, patientId, orderedBy, status, priority
       li.LabType AS PlaceType, rm.RoomNo, li.ExternalLabName, li.Criteria, lt.Name AS TestName,
       li.AdditionalDetails, lo.Notes, lo.CreatedAt, lo.ReportedAt,
       p.UHID, p.FirstName + ' ' + p.LastName AS PatientName, p.Phone AS PatientPhone,
-      u.FirstName + ' ' + u.LastName AS DoctorName,
+      COALESCE(u.FirstName + ' ' + u.LastName, du.FirstName + ' ' + du.LastName) AS DoctorName,
       COUNT(*) OVER() AS TotalCount,
       (SELECT COUNT(*) FROM dbo.LabOrderItems lit WHERE lit.LabOrderId = lo.Id) AS TestCount
     FROM dbo.LabOrders lo
     JOIN dbo.PatientProfiles p ON p.Id = lo.PatientId
     LEFT JOIN dbo.Users u       ON u.Id = lo.OrderedBy
+    LEFT JOIN dbo.DoctorProfiles dp ON dp.Id = lo.OrderedBy
+    LEFT JOIN dbo.Users du      ON du.Id = dp.UserId
     OUTER APPLY (
         SELECT TOP 1 * FROM dbo.LabOrderItems l_item WHERE l_item.LabOrderId = lo.Id
     ) li
@@ -240,10 +250,12 @@ async function getLabOrderById(orderId, hospitalId) {
       lo.*, lo.RejectionReason,
       p.UHID, p.FirstName + ' ' + p.LastName AS PatientName,
       p.DateOfBirth, p.Gender, p.Phone AS PatientPhone,
-      u.FirstName + ' ' + u.LastName AS DoctorName
+      COALESCE(u.FirstName + ' ' + u.LastName, du.FirstName + ' ' + du.LastName) AS DoctorName
     FROM dbo.LabOrders lo
     JOIN dbo.PatientProfiles p ON p.Id = lo.PatientId
     LEFT JOIN dbo.Users u       ON u.Id = lo.OrderedBy
+    LEFT JOIN dbo.DoctorProfiles dp ON dp.Id = lo.OrderedBy
+    LEFT JOIN dbo.Users du      ON du.Id = dp.UserId
     WHERE lo.Id = @orderId AND lo.HospitalId = @hospitalId
   `;
   const orderRes = await query(orderQ, {
@@ -909,9 +921,200 @@ async function getAvailableLabRooms(hospitalId) {
     FROM dbo.LabRooms lr
     LEFT JOIN dbo.Labs l ON l.Id = lr.LabId
     WHERE lr.IsActive = 1
+      AND (@hospitalId IS NULL OR lr.HospitalId = @hospitalId OR lr.HospitalId IS NULL)
     ORDER BY l.Name, lr.RoomNo
-  `);
+  `, {
+    hospitalId: { type: sql.BigInt, value: hospitalId || null },
+  });
   return res.recordset;
+}
+
+async function getNurseBookableOrders({ hospitalId, search = '' } = {}) {
+  const q = `
+    SELECT TOP 200
+      lo.Id, lo.OrderNumber, lo.OrderDate, lo.Priority, lo.Status,
+      lo.PatientId, lo.AppointmentId,
+      p.UHID, p.FirstName + ' ' + p.LastName AS PatientName, p.Phone AS PatientPhone,
+      COALESCE(
+        CASE WHEN dp.Id IS NOT NULL THEN 'Dr. ' + du.FirstName + ' ' + du.LastName END,
+        CASE WHEN u.Role = 'doctor' THEN 'Dr. ' + u.FirstName + ' ' + u.LastName END,
+        u.FirstName + ' ' + u.LastName
+      ) AS DoctorName,
+      COALESCE(dp.Specialization, '') AS DoctorSpecialization,
+      CASE WHEN EXISTS (
+        SELECT 1 FROM dbo.LabOrderItems li WHERE li.LabOrderId = lo.Id AND li.RoomId IS NOT NULL
+      ) THEN 1 ELSE 0 END AS IsAlreadyBooked,
+      (SELECT COUNT(*) FROM dbo.LabOrderItems li WHERE li.LabOrderId = lo.Id) AS TestCount,
+      (
+        SELECT li.Id AS ItemId, li.TestId, lt.Name AS TestName, lt.Category,
+               li.RoomId, lt.TurnaroundHrs
+        FROM dbo.LabOrderItems li
+        JOIN dbo.LabTests lt ON lt.Id = li.TestId
+        WHERE li.LabOrderId = lo.Id
+        FOR JSON PATH
+      ) AS ItemsJson
+    FROM dbo.LabOrders lo
+    JOIN dbo.PatientProfiles p ON p.Id = lo.PatientId
+    LEFT JOIN dbo.Users u ON u.Id = lo.OrderedBy
+    LEFT JOIN dbo.DoctorProfiles dp ON dp.UserId = lo.OrderedBy
+    LEFT JOIN dbo.Users du ON du.Id = dp.UserId
+    WHERE lo.HospitalId = @hospitalId
+      AND lo.Status = 'Pending'
+      AND lo.OrderedBy IS NOT NULL
+      AND (@search = '' OR
+          lo.OrderNumber LIKE '%' + @search + '%' OR
+          p.UHID LIKE '%' + @search + '%' OR
+          (p.FirstName + ' ' + p.LastName) LIKE '%' + @search + '%')
+    ORDER BY lo.OrderDate DESC
+  `;
+  const res = await query(q, {
+    hospitalId: { type: sql.BigInt, value: hospitalId },
+    search: { type: sql.NVarChar(150), value: (search || '').trim() },
+  });
+  return res.recordset.map((row) => ({
+    ...row,
+    Items: row.ItemsJson ? JSON.parse(row.ItemsJson) : [],
+  }));
+}
+
+async function nurseBookOrder({ hospitalId, orderId, itemBookings = [], slotAt = null, nurseUserId, note = null }) {
+  return withTransaction(async (transaction) => {
+    const check = await new sql.Request(transaction)
+      .input('orderId', sql.BigInt, orderId)
+      .input('hospitalId', sql.BigInt, hospitalId)
+      .query(`
+        SELECT lo.Id, lo.PatientId, lo.OrderNumber, lo.Status
+        FROM dbo.LabOrders lo
+        WHERE lo.Id = @orderId AND lo.HospitalId = @hospitalId
+      `);
+    if (!check.recordset.length) throw new AppError('Lab order not found', 404);
+    if (check.recordset[0].Status !== 'Pending') {
+      throw new AppError('Only pending doctor-prescribed orders can be booked by nurse', 409);
+    }
+
+    if (!Array.isArray(itemBookings) || !itemBookings.length) {
+      throw new AppError('At least one test booking is required', 422);
+    }
+
+    for (const booking of itemBookings) {
+      const itemId = Number(booking?.itemId);
+      const roomId = Number(booking?.roomId);
+      if (!itemId || !roomId) throw new AppError('Each test item must include room', 422);
+
+      const roomCheck = await new sql.Request(transaction)
+        .input('roomId', sql.BigInt, roomId)
+        .input('hospitalId', sql.BigInt, hospitalId)
+        .query(`
+          SELECT Id, LabId
+          FROM dbo.LabRooms
+          WHERE Id = @roomId AND IsActive = 1
+            AND (HospitalId = @hospitalId OR HospitalId IS NULL)
+        `);
+      if (!roomCheck.recordset.length) {
+        throw new AppError('Selected lab room is invalid for this hospital', 422);
+      }
+
+      await new sql.Request(transaction)
+        .input('itemId', sql.BigInt, itemId)
+        .input('orderId', sql.BigInt, orderId)
+        .input('roomId', sql.BigInt, roomId)
+        .input('labId', sql.BigInt, roomCheck.recordset[0].LabId || null)
+        .input('note', sql.NVarChar(500), note || null)
+        .query(`
+          UPDATE dbo.LabOrderItems
+          SET RoomId = @roomId,
+              LabId = @labId,
+              AdditionalDetails = COALESCE(@note, AdditionalDetails),
+              Status = 'Collecting',
+              UpdatedAt = GETUTCDATE()
+          WHERE Id = @itemId AND LabOrderId = @orderId
+        `);
+    }
+
+    await new sql.Request(transaction)
+      .input('orderId', sql.BigInt, orderId)
+      .input('nurseUserId', sql.BigInt, nurseUserId)
+      .query(`
+        UPDATE dbo.LabOrders
+        SET Status = 'Collecting',
+            UpdatedAt = GETUTCDATE(),
+            Notes = COALESCE(Notes + CHAR(10), '') + CONCAT('Nurse booking confirmed by user ', @nurseUserId)
+        WHERE Id = @orderId
+      `);
+
+    return check.recordset[0];
+  });
+}
+
+async function labDecisionOnBookedOrder({ orderId, hospitalId, decision, reason = null, actedByUserId }) {
+  const orderRes = await query(`
+    SELECT lo.Id, lo.PatientId, lo.OrderNumber, lo.Status, lo.OrderedBy
+    FROM dbo.LabOrders lo
+    WHERE lo.Id = @orderId AND lo.HospitalId = @hospitalId
+  `, {
+    orderId: { type: sql.BigInt, value: orderId },
+    hospitalId: { type: sql.BigInt, value: hospitalId },
+  });
+
+  if (!orderRes.recordset.length) throw new AppError('Order not found', 404);
+  const order = orderRes.recordset[0];
+
+  if (!['Collecting', 'Processing', 'Pending'].includes(order.Status)) {
+    throw new AppError('Order is not in a decision-ready stage', 409);
+  }
+
+  if (decision === 'accept') {
+    await query(`
+      UPDATE dbo.LabOrders
+      SET Status = 'Processing',
+          RejectionReason = NULL,
+          UpdatedAt = GETUTCDATE()
+      WHERE Id = @orderId
+    `, { orderId: { type: sql.BigInt, value: orderId } });
+
+    await notifService.createNotification({
+      hospitalId,
+      userId: order.OrderedBy,
+      notifType: 'system',
+      title: 'Lab accepted booking',
+      body: `Lab has accepted booking for ${order.OrderNumber}.`,
+      link: '/lab/orders',
+      dataJson: { orderId, decision: 'accept' },
+    });
+    return { success: true, status: 'Processing' };
+  }
+
+  await query(`
+    UPDATE dbo.LabOrders
+    SET Status = 'Cancelled',
+        RejectionReason = @reason,
+        UpdatedAt = GETUTCDATE()
+    WHERE Id = @orderId
+  `, {
+    orderId: { type: sql.BigInt, value: orderId },
+    reason: { type: sql.NVarChar(1000), value: reason || 'No slots available in hospital lab.' },
+  });
+
+  await query(`
+    UPDATE dbo.LabOrderItems
+    SET Status = 'Cancelled', UpdatedAt = GETUTCDATE()
+    WHERE LabOrderId = @orderId
+  `, { orderId: { type: sql.BigInt, value: orderId } });
+
+  // Notify doctor/nurse path + patient fallback
+  await notifService.createBulkNotifications([
+    {
+      hospitalId,
+      userId: order.OrderedBy,
+      notifType: 'alert',
+      title: 'Lab rejected booking (slots full)',
+      body: `${order.OrderNumber} rejected by lab. Patient can use outside lab and upload report.`,
+      link: '/lab/orders',
+      dataJson: { orderId, decision: 'reject', reason },
+    },
+  ]);
+
+  return { success: true, status: 'Cancelled' };
 }
 
 async function assignTechnicianToRoom({ userId, roomId, assignedBy, assignmentType = 'Shift Duty', notes = null, status = 'Active', hospitalId = null }) {
@@ -1279,6 +1482,9 @@ module.exports = {
   rejectRoomAssignment,
   getPendingAssignments,
   getLabs,
+  getNurseBookableOrders,
+  nurseBookOrder,
+  labDecisionOnBookedOrder,
   getLabAutofillRules,
   addLabAutofillRule,
   removeLabAutofillRule,

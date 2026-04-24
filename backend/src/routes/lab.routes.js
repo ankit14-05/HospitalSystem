@@ -7,6 +7,8 @@ const {
   createLabOrderRules,
   updateOrderStatusRules,
   enterResultRules,
+  nurseBookOrderRules,
+  labDecisionRules,
 } = require('../validators/lab.validator');
 const upload = require('../middleware/upload.middleware');
 const fs = require('fs');
@@ -81,6 +83,25 @@ router.post('/orders',
   ctrl.createLabOrder,
 );
 
+// Nurse workflow: book only doctor-prescribed tests
+router.get('/orders/nurse/queue',
+  authorize('nurse', 'superadmin', 'admin'),
+  ctrl.getNurseBookableOrders,
+);
+
+router.post('/orders/:orderId/nurse-book',
+  authorize('nurse', 'superadmin', 'admin'),
+  nurseBookOrderRules,
+  ctrl.bookOrderByNurse,
+);
+
+// Lab decision after nurse booking
+router.post('/orders/:orderId/lab-decision',
+  authorize(...LAB_TECH_ROLES, ...LAB_INCHARGE_ROLES),
+  labDecisionRules,
+  ctrl.labDecisionOnBookedOrder,
+);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Patient-scoped orders (used by EMR lab tab & patient dashboard)
 // GET /api/v1/lab/orders/patient/:patientId
@@ -141,6 +162,13 @@ router.post('/orders/:orderId/attachments',
   authorize(...LAB_TECH_ROLES),
   upload.array('files', 10),
   ctrl.uploadAttachments,
+);
+
+// Patient fallback upload (outside-lab reports) after lab reject
+router.post('/orders/:orderId/patient-uploads',
+  authorize('patient'),
+  upload.array('files', 10),
+  ctrl.uploadPatientOutsideLabFiles,
 );
 
 router.delete('/attachments/:id',

@@ -79,6 +79,7 @@ function ViewModal({ order, allRows, onClose }) {
   const [attachments, setAttachments] = useState([]);
   const [loadingAttach, setLoadingAttach] = useState(true);
   const [downloading, setDownloading] = useState(null);
+  const [uploading, setUploading] = useState(false);
 
   // Get all items for this order
   const items = allRows.filter(r => r.OrderId === order.OrderId);
@@ -108,6 +109,27 @@ function ViewModal({ order, allRows, onClose }) {
       toast.error('Download failed. Please try again.');
     } finally {
       setDownloading(null);
+    }
+  };
+
+  const handleOutsideUpload = async (event) => {
+    const files = Array.from(event.target.files || []);
+    if (!files.length) return;
+    try {
+      setUploading(true);
+      const formData = new FormData();
+      files.forEach((file) => formData.append('files', file));
+      const res = await api.post(`/lab/orders/${order.OrderId}/patient-uploads`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      toast.success(res?.message || 'Outside lab report uploaded.');
+      const refreshed = await api.get(`/lab/orders/${order.OrderId}/attachments`);
+      setAttachments(refreshed?.data || []);
+    } catch (err) {
+      toast.error(err?.message || 'Failed to upload outside report.');
+    } finally {
+      setUploading(false);
+      event.target.value = '';
     }
   };
 
@@ -174,6 +196,17 @@ function ViewModal({ order, allRows, onClose }) {
 
           {/* Attachments */}
           <h3 style={{ fontSize: 14, fontWeight: 700, margin: "0 0 10px" }}>Result Files</h3>
+          {String(order.Status || '').toLowerCase() === 'cancelled' && (
+            <div style={{ marginBottom: 12, padding: 12, borderRadius: 8, background: "#fffbeb", border: "1px solid #fde68a" }}>
+              <p style={{ margin: 0, fontSize: 12, color: "#92400e", fontWeight: 600 }}>
+                Hospital lab rejected this order. You can upload outside-lab reports here.
+              </p>
+              <label style={{ display: "inline-block", marginTop: 8, padding: "7px 12px", borderRadius: 6, border: "1px solid #d97706", color: "#b45309", fontSize: 12, fontWeight: 700, cursor: uploading ? "not-allowed" : "pointer", opacity: uploading ? 0.6 : 1 }}>
+                {uploading ? "Uploading..." : "Upload Outside Report"}
+                <input type="file" accept=".pdf,.jpg,.jpeg,.png,.mp4,.mp3,.wav" multiple onChange={handleOutsideUpload} disabled={uploading} style={{ display: "none" }} />
+              </label>
+            </div>
+          )}
           {loadingAttach ? <p style={{ color: "#9ca3af", fontSize: 13 }}>Loading attachments...</p>
           : attachments.length === 0 ? <p style={{ color: "#9ca3af", fontSize: 13, background: "#f9fafb", padding: 14, borderRadius: 8, textAlign: "center" }}>No files uploaded for this order.</p>
           : (

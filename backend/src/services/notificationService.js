@@ -196,6 +196,39 @@ const notifyAdminOfTransferRequest = async ({ hospitalId, technicianName, roomNo
   }
 };
 
+/**
+ * Notifies all users with given roles in a specific hospital.
+ */
+const notifyRoles = async ({ hospitalId, roles, notifType, title, body, link, dataJson }) => {
+  try {
+    const pool = await getDb();
+    const users = await pool.request()
+      .input('HospitalId', hospitalId || null)
+      .query(`
+        SELECT Id FROM dbo.Users
+        WHERE DeletedAt IS NULL AND IsActive = 1
+          AND (@HospitalId IS NULL OR HospitalId = @HospitalId)
+          AND Role IN (${roles.map(r => `'${r}'`).join(',')})
+      `);
+    
+    const notifications = users.recordset.map(u => ({
+      hospitalId,
+      userId: u.Id,
+      notifType,
+      title,
+      body,
+      link,
+      dataJson
+    }));
+
+    if (notifications.length) {
+      await createBulkNotifications(notifications);
+    }
+  } catch (error) {
+    console.error('notifyRoles failed (non-fatal):', error.message);
+  }
+};
+
 module.exports = {
   createNotification,
   createBulkNotifications,

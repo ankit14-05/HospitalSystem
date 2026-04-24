@@ -527,6 +527,7 @@ export default function StaffRegisterPage() {
   };
 
   const [depts, setDepts]                   = useState([]);
+  const [labRooms, setLabRooms]             = useState([]);
 
   // ── NEW: ISO3 countries + free states + pincode ──────────────────────────
   const [countries, setCountries]           = useState([]);
@@ -551,6 +552,7 @@ export default function StaffRegisterPage() {
     languagesSpoken:'', previousEmployer:'', experienceYears:'',
     bankAccountNo:'', ifscCode:'',
     username:'', password:'', confirmPassword:'',
+    labRoomId:'',
   });
 
   const set = useCallback((k, v) => { setForm(f => ({ ...f, [k]: v })); setErrors(e => ({ ...e, [k]: '' })); }, []);
@@ -564,6 +566,15 @@ export default function StaffRegisterPage() {
         setDepts(list);
       })
       .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    api.get('/lab/rooms')
+      .then((r) => {
+        const list = Array.isArray(r?.data) ? r.data : [];
+        setLabRooms(list);
+      })
+      .catch(() => setLabRooms([]));
   }, []);
 
   // ── Countries: restcountries.com with ISO 3-letter codes ─────────────────
@@ -727,7 +738,9 @@ export default function StaffRegisterPage() {
     }
     if (step === 2) {
       if (!form.role) e.role = 'Please select a role';
+      if (form.role === 'lab_technician' && !form.labRoomId) e.labRoomId = 'Lab room is required for Lab Technician';
       if (e.role) setTab2('role');
+      if (e.labRoomId) setTab2('employment');
     }
     if (step === 3) {
       if (!form.username.trim())         e.username = 'Required';
@@ -781,6 +794,7 @@ export default function StaffRegisterPage() {
         experienceYears:form.experienceYears ? Number(form.experienceYears) : undefined,
         bankAccountNo:orUndef(form.bankAccountNo), ifscCode:orUndef(form.ifscCode),
         username:form.username, password:form.password,
+        labRoomId: form.labRoomId ? Number(form.labRoomId) : undefined,
       };
       if (photoFile) {
         const fd = new FormData();
@@ -1349,6 +1363,18 @@ export default function StaffRegisterPage() {
                       onChange={e => set('reportingManager', lettersOnly(e.target.value))}
                       placeholder="Manager name (optional)"/>
                   </FL>
+                  {form.role === 'lab_technician' && (
+                    <FL label="Lab Room Number" required error={errors.labRoomId} hint="Mandatory for Lab Technician profile">
+                      <SelectField err={!!errors.labRoomId} value={form.labRoomId} onChange={e => set('labRoomId', e.target.value)}>
+                        <option value="">Select room</option>
+                        {labRooms.map((room) => (
+                          <option key={room.Id} value={room.Id}>
+                            {room.RoomNo} {room.LabName ? `- ${room.LabName}` : ''}
+                          </option>
+                        ))}
+                      </SelectField>
+                    </FL>
+                  )}
                 </div>
               )}
 

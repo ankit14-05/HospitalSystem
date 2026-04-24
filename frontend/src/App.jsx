@@ -140,13 +140,6 @@ function RedirectIfAuth({ children }) {
   return <Navigate to={getDashboard(user?.role)} replace />;
 }
 
-function PublicOrAdminPatientRegisterRoute({ children }) {
-  const { isAuthenticated, user, loading } = useAuth();
-  if (loading) return null;
-  if (!isAuthenticated) return children;
-  if (['superadmin', 'admin'].includes(user?.role)) return children;
-  return <Navigate to={getDashboard(user?.role)} replace />;
-}
 
 /**
  * Smart root redirect — sends each role to their own dashboard.
@@ -175,20 +168,22 @@ export default function App() {
           <Route path="/login"           element={<RedirectIfAuth><LoginPage /></RedirectIfAuth>} />
           <Route path="/forgot-password" element={<RedirectIfAuth><ForgotPasswordPage /></RedirectIfAuth>} />
 
-          {/* Public patient registration; doctor/staff remain superadmin-only */}
+          {/* ── Admin-Only registration routes ── */}
           <Route
             path="/register/patient"
             element={
-              <PublicOrAdminPatientRegisterRoute>
+              <RequireAuth>
+                <RequireRole roles={['admin', 'superadmin', 'receptionist']}>
                   <PatientRegisterPage />
-              </PublicOrAdminPatientRegisterRoute>
+                </RequireRole>
+              </RequireAuth>
             }
           />
           <Route
             path="/register/doctor"
             element={
               <RequireAuth>
-                <RequireRole roles={['superadmin']}>
+                <RequireRole roles={['admin', 'superadmin']}>
                   <DoctorRegisterPage />
                 </RequireRole>
               </RequireAuth>
@@ -198,7 +193,7 @@ export default function App() {
             path="/register/staff"
             element={
               <RequireAuth>
-                <RequireRole roles={['superadmin']}>
+                <RequireRole roles={['admin', 'superadmin']}>
                   <StaffRegisterPage />
                 </RequireRole>
               </RequireAuth>

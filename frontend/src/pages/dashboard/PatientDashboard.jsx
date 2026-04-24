@@ -5,7 +5,7 @@ import {
   Calendar, FileText, Pill, Receipt, Phone, Heart, Activity,
   User, Camera, X, Check, Clock, Download, Plus, Shield,
   CheckCircle, XCircle, RefreshCw, Loader, Edit2, Bell,
-  Thermometer, Droplets, Weight, ArrowRight, AlertCircle, FlaskConical, Eye
+  Thermometer, Droplets, Weight, ArrowRight, AlertCircle, FlaskConical, Eye, Upload
 } from 'lucide-react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -837,7 +837,7 @@ const PrescriptionsTab = ({ prescriptions, loading, onRefresh }) => (
 );
 
 // ─── Reports Tab ──────────────────────────────────────────────────────────────
-const ReportsTab = ({ reports, loading, onRefresh, onViewReport }) => (
+const ReportsTab = ({ reports, loading, onRefresh, onViewReport, onUploadReport }) => (
   <Card>
     <SectionHeader title="Medical Reports" icon={FileText}>
       <button onClick={onRefresh} className="p-2 hover:bg-slate-100 rounded-xl"><RefreshCw size={13} className="text-slate-400" /></button>
@@ -862,6 +862,11 @@ const ReportsTab = ({ reports, loading, onRefresh, onViewReport }) => (
                 {((r.Status || r.status) === 'Completed' || (r.Status || r.status) === 'Reported') && (
                   <button onClick={() => onViewReport(r)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-white text-sm font-semibold transition-colors" style={{ background: BLUE }}>
                     <Eye size={12} /> View Report
+                  </button>
+                )}
+                {(r.Status || r.status) === 'Rejected' && (
+                  <button onClick={() => onUploadReport(r)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-orange-600 text-white text-sm font-semibold transition-colors">
+                    <Upload size={12} /> Upload Report
                   </button>
                 )}
               </div>
@@ -970,6 +975,7 @@ export default function PatientDashboard() {
   const [showBook,    setShowBook]    = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [selectedReport, setSelectedReport] = useState(null);
+  const [uploadReport, setSelectedUploadReport] = useState(null);
 
   const handleBook = () => navigate('/appointments/book');
   const setL = useCallback((k, v) => setLoading(l => ({ ...l, [k]: v })), []);
@@ -1140,7 +1146,7 @@ export default function PatientDashboard() {
     })(),
     reports: (
       <ReportsTab reports={reports} loading={loading.reports}
-        onRefresh={refreshReports} onViewReport={setSelectedReport} />
+        onRefresh={refreshReports} onViewReport={setSelectedReport} onUploadReport={setSelectedUploadReport} />
     ),
     billing: (
       <BillingTab bills={bills} loading={loading.bills}
@@ -1235,6 +1241,114 @@ export default function PatientDashboard() {
           onClose={() => setSelectedReport(null)}
         />
       )}
+
+      {uploadReport && (
+        <PatientUploadModal
+          order={uploadReport}
+          onClose={() => setSelectedUploadReport(null)}
+          onSuccess={refreshReports}
+        />
+      )}
     </div>
   );
 }
+
+// ─── PatientUploadModal ──────────────────────────────────────────────────────
+const PatientUploadModal = ({ order, onClose, onSuccess }) => {
+  const [files, setFiles] = useState([]);
+  const [uploading, setUploading] = useState(false);
+
+  const handleUpload = async () => {
+    if (files.length === 0) {
+      toast.error('Please select at least one file');
+      return;
+    }
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      files.forEach(f => formData.append('files', f));
+      
+      await api.post(`/lab/orders/${order.Id || order.id}/patient-uploads`, formData);
+      toast.success('Lab report uploaded successfully');
+      onSuccess();
+      onClose();
+    } catch (err) {
+      toast.error(err.message || 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-fade-in">
+      <Card className="w-full max-w-md p-6 animate-slide-up">
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-orange-50 flex items-center justify-center">
+              <Upload size={18} className="text-orange-600" />
+            </div>
+            <div>
+              <h3 className="font-bold text-slate-800">Upload Lab Report</h3>
+              <p className="text-xs text-slate-400">Order: {order.OrderNumber}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-xl transition-colors">
+            <X size={18} className="text-slate-400" />
+          </button>
+        </div>
+
+        <div className="space-y-4">
+          <div className="p-6 border-2 border-dashed border-slate-200 rounded-2xl text-center hover:border-orange-200 transition-colors cursor-pointer relative">
+            <input 
+              type="file" 
+              multiple 
+              onChange={(e) => setFiles(Array.from(e.target.files))}
+              className="absolute inset-0 opacity-0 cursor-pointer"
+            />
+            <div className="flex flex-col items-center gap-2">
+              <div className="w-12 h-12 rounded-full bg-slate-50 flex items-center justify-center">
+                <Upload size={20} className="text-slate-400" />
+              </div>
+              <p className="text-sm font-medium text-slate-600">Click or drag to upload</p>
+              <p className="text-xs text-slate-400">PDF, JPG, PNG (Max 10MB each)</p>
+            </div>
+          </div>
+
+          {files.length > 0 && (
+            <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
+              {files.map((f, i) => (
+                <div key={i} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <FileText size={14} className="text-slate-400" />
+                    <p className="text-xs font-medium text-slate-700 truncate">{f.name}</p>
+                  </div>
+                  <button onClick={() => setFiles(prev => prev.filter((_, idx) => idx !== i))} className="text-slate-400 hover:text-red-500">
+                    <X size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex items-center gap-3 pt-4">
+            <button 
+              onClick={onClose} 
+              disabled={uploading}
+              className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-semibold text-sm hover:bg-slate-50 transition-colors"
+            >
+              Cancel
+            </button>
+            <button 
+              onClick={handleUpload}
+              disabled={uploading || files.length === 0}
+              className="flex-[2] px-4 py-2.5 rounded-xl bg-orange-600 text-white font-semibold text-sm hover:bg-orange-700 transition-colors shadow-sm shadow-orange-200 flex items-center justify-center gap-2 disabled:opacity-50"
+            >
+              {uploading ? <RefreshCw size={14} className="animate-spin" /> : <Upload size={14} />}
+              {uploading ? 'Uploading...' : 'Submit Report'}
+            </button>
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+};
