@@ -233,10 +233,17 @@ export default function CompleteAppointmentModal({
           <button
             onClick={handleComplete}
             disabled={saving}
-            className="inline-flex items-center gap-2 rounded-2xl bg-emerald-600 px-5 py-2.5 text-sm font-bold text-white transition-colors hover:bg-emerald-700 disabled:opacity-60"
+            className="inline-flex items-center gap-2 rounded-2xl bg-emerald-600 px-5 py-2.5 text-sm font-bold text-white transition-colors hover:bg-emerald-700 disabled:opacity-60 shadow-lg shadow-emerald-200"
           >
-            {saving ? <Loader size={14} className="animate-spin" /> : <CheckCircle size={14} />}
-            Mark as completed
+            {saving ? (
+              <Loader size={14} className="animate-spin" />
+            ) : (
+              <CheckCircle size={14} />
+            )}
+            {postCompleteAction === 'prescription' ? 'Save & Write Prescription' :
+             postCompleteAction === 'tests' ? 'Save & Order Tests' :
+             postCompleteAction === 'both' ? 'Save & Issue Rx/Tests' :
+             'Mark as Completed'}
           </button>
         </div>
       </div>

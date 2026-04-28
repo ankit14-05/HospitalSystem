@@ -7,6 +7,16 @@ export default function StatusUpdateModal({ isOpen, onClose, currentStatus, next
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef(null);
 
+  // ⚠️ IMPORTANT: useEffect MUST be before the early return to obey React Rules of Hooks.
+  // Hooks must always be called in the same order on every render.
+  useEffect(() => {
+    if (!isOpen) {
+      setSelectedFiles([]);
+      setUploading(false);
+    }
+  }, [isOpen]);
+
+  // Early return AFTER all hooks
   if (!isOpen) return null;
 
   // Determine Titles
@@ -36,14 +46,6 @@ export default function StatusUpdateModal({ isOpen, onClose, currentStatus, next
   const removeFile = (index) => {
     setSelectedFiles(prev => prev.filter((_, i) => i !== index));
   };
-
-  // Clear modal state safely whenever it closes
-  useEffect(() => {
-    if (!isOpen) {
-      setSelectedFiles([]);
-      setUploading(false);
-    }
-  }, [isOpen]);
 
   const handleSubmit = async () => {
     if (isUpload && selectedFiles.length === 0) {

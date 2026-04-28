@@ -23,6 +23,15 @@ exports.getLabTests = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// GET /api/v1/lab/search-tests?term=...
+exports.searchLabTests = async (req, res, next) => {
+  try {
+    const { term } = req.query;
+    const tests = await labService.searchLabTests(term || '');
+    res.json({ success: true, data: tests });
+  } catch (err) { next(err); }
+};
+
 // POST /api/v1/lab/orders
 exports.createLabOrder = async (req, res, next) => {
   if (validationFail(req, res)) return;

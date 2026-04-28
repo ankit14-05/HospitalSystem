@@ -56,6 +56,7 @@ import NotFoundPage      from './pages/NotFoundPage';
 // Appointments
 import AppointmentsPage     from './pages/appointments/AppointmentsPage';
 import BookAppointmentPage  from './pages/appointments/BookAppointmentPage';
+import ConsultationWorkspacePage from './pages/appointments/ConsultationWorkspacePage';
 
 // Profiles
 import ProfilePage from './pages/profile/ProfilePage';
@@ -461,6 +462,14 @@ export default function App() {
               element={
                 <RequireRole roles={['patient', ...APPOINTMENT_DESK_ROLES]}>
                   <BookAppointmentPage />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="consultation/:appointmentId"
+              element={
+                <RequireRole roles={['doctor', 'admin', 'superadmin']}>
+                  <ConsultationWorkspacePage />
                 </RequireRole>
               }
             />

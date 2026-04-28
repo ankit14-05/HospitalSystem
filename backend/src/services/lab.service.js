@@ -69,6 +69,21 @@ async function getLabTests({ search, category, active = true } = {}) {
   return result.recordset;
 }
 
+async function searchLabTests(term = '', limit = 10) {
+  const q = `
+    SELECT TOP (@limit) Id, Name, ShortName, Category, Price
+    FROM dbo.LabTests
+    WHERE IsActive = 1
+      AND (Name LIKE @term OR ShortName LIKE @term)
+    ORDER BY Name
+  `;
+  const result = await query(q, {
+    term: { type: sql.NVarChar(200), value: `%${term}%` },
+    limit: { type: sql.Int, value: limit }
+  });
+  return result.recordset;
+}
+
 // ─────────────────────────────────────────────────────────────
 // CREATE LAB ORDER
 // ─────────────────────────────────────────────────────────────
@@ -1214,6 +1229,7 @@ async function updateSignatureSettings({ userId, signatureText, signaturePrefere
 
 module.exports = {
   getLabTests,
+  searchLabTests,
   createLabOrder,
   getLabOrders,
   getLabOrderById,

@@ -1,0 +1,85 @@
+.rx-print-sheet {
+  width: min(100%, 860px);
+  min-height: 297mm;
+  padding: 10mm;
+  border: 1px solid #d8dee8;
+  border-radius: 16px;
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 0; /* Let the content handle margins */
+  }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #ffffff;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  /* Target the root modal container to undo its fixed/flex layout */
+  .rx-composer-root {
+    position: absolute !important;
+    inset: 0 !important;
+    display: block !important;
+    background: transparent !important;
+    backdrop-filter: none !important;
+    padding: 0 !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  /* Undo the inner modal wrapper constraints */
+  .rx-composer-root > div,
+  .rx-composer-root .grid {
+    display: block !important;
+    position: static !important;
+    max-width: none !important;
+    height: auto !important;
+    overflow: visible !important;
+    box-shadow: none !important;
+    border: none !important;
+    border-radius: 0 !important;
+    transform: none !important;
+  }
+
+  /* Hide non-print areas */
+  .rx-no-print {
+    display: none !important;
+  }
+
+  /* Ensure the print sheet itself flows normally and takes the whole page */
+  .rx-print-sheet,
+  .rx-print-sheet * {
+    visibility: visible;
+  }
+
+  .rx-print-sheet {
+    position: static !important;
+    width: 210mm !important;
+    min-height: 297mm !important;
+    margin: 0 !important;
+    padding: 10mm 15mm !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
+
+  /* For repeating table headers/footers */
+  thead {
+    display: table-header-group;
+  }
+  tfoot {
+    display: table-footer-group;
+  }
+  tr, td, th {
+    page-break-inside: avoid;
+  }
+}

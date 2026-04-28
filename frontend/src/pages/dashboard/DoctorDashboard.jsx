@@ -20,7 +20,7 @@ import {
 import CompleteAppointmentModal from '../../components/appointments/CompleteAppointmentModal';
 import PrescriptionComposerModal from '../../components/prescriptions/PrescriptionComposerModal';
 import DashboardTabs from '../../components/dashboard/DashboardTabs';
-import { getList } from '../../utils/apiPayload';
+import { getList, getPayload } from '../../utils/apiPayload';
 
 // ─── Token status config ──────────────────────────────────────────────────────
 const Q_STATUS = {
@@ -28,6 +28,16 @@ const Q_STATUS = {
   waiting: { ring:'ring-2 ring-amber-300',   bg:'bg-amber-50 text-amber-700',     dot:'bg-amber-400',   label:'Waiting'   },
   done:    { ring:'ring-2 ring-slate-200',   bg:'bg-slate-100 text-slate-400',    dot:'bg-slate-300',   label:'Done'      },
 };
+
+const toInt = (value) => {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isNaN(parsed) ? null : parsed;
+};
+
+const getPrescriptionId = (rx) => toInt(rx?.Id || rx?.id);
+const getPrescriptionVersion = (rx) => toInt(rx?.VersionNo || rx?.versionNo) || 1;
+const isPrescriptionFinalized = (rx) => Boolean(rx?.IsFinalized ?? rx?.isFinalized);
+const getPrescriptionItems = (rx) => (Array.isArray(rx?.Items) ? rx.Items : Array.isArray(rx?.items) ? rx.items : []);
 
 const SkRow = () => (
   <div className="flex items-center gap-3 px-6 py-4 border-b border-slate-50 last:border-0">
@@ -1056,7 +1066,7 @@ const RequestsTab = ({ requests, loading, onRefresh, onViewPatient }) => (
 );
 
 // ─── Prescriptions Tab ────────────────────────────────────────────────────────
-const RxTab = ({ prescriptions, loading, onRefresh, onNew }) => (
+const RxTab = ({ prescriptions, loading, onRefresh, onNew, onDownload, onShowVersions }) => (
   <Card>
     <SectionHeader title="Issued Prescriptions" icon={Pill}>
       <button onClick={onRefresh} className="p-2 hover:bg-slate-100 rounded-xl"><RefreshCw size={13} className="text-slate-400" /></button>
@@ -1077,18 +1087,84 @@ const RxTab = ({ prescriptions, loading, onRefresh, onNew }) => (
                 <div className="flex-1 min-w-0">
                   <p className="font-bold text-slate-800 text-sm">{rx.RxNumber || 'Prescription'}</p>
                   <p className="text-xs text-slate-400 mt-0.5">{rx.Diagnosis || 'Consultation prescription'}</p>
-                  <p className="text-xs text-slate-400">Patient: {rx.PatientName || rx.patientName || '-'} · {(Array.isArray(rx.Items) ? rx.Items : Array.isArray(rx.items) ? rx.items : []).length} medicine(s) · {fmtDate(rx.RxDate || rx.PrescribedDate || rx.date)}</p>
+                  <p className="text-xs text-slate-400">
+                    Patient: {rx.PatientName || rx.patientName || '-'}
+                    {' · '}
+                    {getPrescriptionItems(rx).length} medicine(s)
+                    {' · '}
+                    {fmtDate(rx.RxDate || rx.PrescribedDate || rx.date)}
+                    {' · '}
+                    V{getPrescriptionVersion(rx)}
+                  </p>
                 </div>
-                <InfoBadge color={TEAL}>{rx.Status||rx.status||'active'}</InfoBadge>
-                <button className="p-2 rounded-xl hover:bg-slate-100 text-slate-300 hover:text-slate-600 transition-colors">
-                  <Download size={13} />
-                </button>
+
+                <div className="flex items-center gap-2">
+                  <InfoBadge color={isPrescriptionFinalized(rx) ? '#047857' : '#b45309'}>
+                    {isPrescriptionFinalized(rx) ? 'Finalized' : 'Draft'}
+                  </InfoBadge>
+                  <button
+                    onClick={() => onShowVersions(rx)}
+                    className="p-2 rounded-xl hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors"
+                    title="Version history"
+                  >
+                    <Eye size={13} />
+                  </button>
+                  <button
+                    onClick={() => onDownload(rx)}
+                    disabled={!isPrescriptionFinalized(rx)}
+                    className="p-2 rounded-xl text-slate-300 transition-colors hover:bg-slate-100 hover:text-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
+                    title={isPrescriptionFinalized(rx) ? 'Download PDF' : 'Only finalized prescriptions can be downloaded'}
+                  >
+                    <Download size={13} />
+                  </button>
+                </div>
               </div>
             ))}
           </div>
     }
   </Card>
 );
+
+const RxVersionModal = ({ open, rxNumber, loading, versions, onClose }) => {
+  if (!open) return null;
+
+  return (
+    <Modal onClose={onClose}>
+      <div className="px-6 py-5 border-b border-slate-100">
+        <h3 className="text-base font-bold text-slate-900">Version History</h3>
+        <p className="text-xs text-slate-500 mt-1">{rxNumber || 'Prescription'}</p>
+      </div>
+
+      <div className="px-6 py-5 max-h-[60vh] overflow-y-auto">
+        {loading ? (
+          <div className="flex items-center gap-2 text-sm text-slate-500">
+            <Loader size={13} className="animate-spin" />
+            Loading versions...
+          </div>
+        ) : versions.length === 0 ? (
+          <p className="text-sm text-slate-500">No version history available.</p>
+        ) : (
+          <div className="space-y-3">
+            {versions.map((version) => (
+              <div key={version.Id || version.id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                <p className="text-sm font-semibold text-slate-700">
+                  V{version.VersionNo || version.versionNo || 1}
+                  {' · '}
+                  {version.RxNumber || version.rxNumber || 'RX'}
+                </p>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {Boolean(version.IsFinalized ?? version.isFinalized) ? 'Finalized' : 'Draft'}
+                  {' · '}
+                  {fmtDate(version.CreatedAt || version.createdAt || Date.now())}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+};
 
 // ─── Schedule Tab ─────────────────────────────────────────────────────────────
 const ScheduleTab = ({ profile, schedule, todaySlots, weeklyStats, loading, onEdit, onRefresh }) => (
@@ -1201,6 +1277,12 @@ export default function DoctorDashboard() {
   const [showComplete, setShowComplete] = useState(null); // appointment to complete
   const [showRx,      setShowRx]      = useState(null);
   const [profilePic,  setProfilePic]  = useState(null);
+  const [rxVersionModal, setRxVersionModal] = useState({
+    open: false,
+    rxNumber: '',
+    loading: false,
+    versions: [],
+  });
 
   const setL = (k, v) => setLoading(l => ({ ...l, [k]: v }));
 
@@ -1245,6 +1327,66 @@ export default function DoctorDashboard() {
       setPrescriptions(Array.isArray(list) ? list : []);
     } catch { setPrescriptions([]); }
     finally { setL('prescriptions', false); }
+  }, []);
+
+  const downloadPrescriptionPdf = useCallback(async (rx) => {
+    const prescriptionId = getPrescriptionId(rx);
+    if (!prescriptionId) {
+      toast.error('Prescription reference missing');
+      return;
+    }
+    if (!isPrescriptionFinalized(rx)) {
+      toast.error('Only finalized prescriptions can be downloaded');
+      return;
+    }
+
+    try {
+      const fileBlob = await api.get(`/prescriptions/${prescriptionId}/pdf`, { responseType: 'blob' });
+      const url = URL.createObjectURL(fileBlob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `${rx?.RxNumber || `prescription-${prescriptionId}`}.pdf`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      toast.error(error?.message || 'Unable to download prescription');
+    }
+  }, []);
+
+  const showPrescriptionVersions = useCallback(async (rx) => {
+    const prescriptionId = getPrescriptionId(rx);
+    if (!prescriptionId) {
+      toast.error('Prescription reference missing');
+      return;
+    }
+
+    setRxVersionModal({
+      open: true,
+      rxNumber: rx?.RxNumber || `Prescription #${prescriptionId}`,
+      loading: true,
+      versions: [],
+    });
+
+    try {
+      const payload = getPayload(await api.get(`/prescriptions/${prescriptionId}/versions`)) || {};
+      const versions = payload?.data || payload;
+      setRxVersionModal({
+        open: true,
+        rxNumber: rx?.RxNumber || `Prescription #${prescriptionId}`,
+        loading: false,
+        versions: Array.isArray(versions) ? versions : [],
+      });
+    } catch (error) {
+      setRxVersionModal({
+        open: true,
+        rxNumber: rx?.RxNumber || `Prescription #${prescriptionId}`,
+        loading: false,
+        versions: [],
+      });
+      toast.error(error?.message || 'Unable to load version history');
+    }
   }, []);
 
   // ── fetchSchedule ───────────────────────────────────────────────────────────
@@ -1387,6 +1529,8 @@ export default function DoctorDashboard() {
     rx: (
       <RxTab prescriptions={prescriptions} loading={loading.prescriptions}
         onRefresh={fetchPrescriptions}
+        onDownload={downloadPrescriptionPdf}
+        onShowVersions={showPrescriptionVersions}
         onNew={() => {
           if (current) {
             setShowRx(current);
@@ -1537,6 +1681,13 @@ export default function DoctorDashboard() {
         <ProfileModal profile={profile||user} avatar={profilePic} onClose={() => setShowProfile(false)}
           onSave={d => { setProfile(pr => ({ ...pr, ...d })); setProfilePic(d.profilePicUrl); fetchSchedule(); setShowProfile(false); }} />
       )}
+      <RxVersionModal
+        open={rxVersionModal.open}
+        rxNumber={rxVersionModal.rxNumber}
+        loading={rxVersionModal.loading}
+        versions={rxVersionModal.versions}
+        onClose={() => setRxVersionModal({ open: false, rxNumber: '', loading: false, versions: [] })}
+      />
       {showRx && (
         <PrescriptionComposerModal
           patient={showRx}
@@ -1552,4 +1703,3 @@ export default function DoctorDashboard() {
     </div>
   );
 }
-

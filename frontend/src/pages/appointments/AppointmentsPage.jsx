@@ -6,7 +6,7 @@ import {
   Calendar, Search, Filter, RefreshCw, Plus, CheckCircle, XCircle,
   Clock, Eye, RotateCcw, ChevronLeft, ChevronRight, AlertCircle,
   Stethoscope, User, Phone, Hash, Building2, ArrowUpRight, Bell,
-  Check, X, CalendarClock, ClipboardList, FileText
+  Check, X, CalendarClock, ClipboardList, FileText, FileSignature
 } from 'lucide-react';
 import api from '../../services/api';
 import toast from 'react-hot-toast';
@@ -15,6 +15,7 @@ import AppointmentDetailModal from './AppointmentDetailModal';
 import { APPOINTMENT_DESK_ROLES } from '../../config/roles';
 import { getPageData, getPayload } from '../../utils/apiPayload';
 import CompleteAppointmentModal from '../../components/appointments/CompleteAppointmentModal';
+import PrescriptionComposerModal from '../../components/prescriptions/PrescriptionComposerModal';
 
 // ── Status config ─────────────────────────────────────────────────────────────
 const STATUS_CONFIG = {
@@ -314,6 +315,7 @@ export default function AppointmentsPage() {
   const [reschedAppt,    setReschedAppt]  = useState(null);
   const [detailAppt,     setDetailAppt]   = useState(null);
   const [completeAppt,   setCompleteAppt] = useState(null);
+  const [composeAppt,    setComposeAppt]  = useState(null);
   const [actionLoading,  setActionLoading]= useState(null);
 
   const isPatientView = user?.role === 'patient';
@@ -668,6 +670,17 @@ export default function AppointmentsPage() {
                               </button>
                             )}
 
+                            {/* Compose Prescription */}
+                            {['doctor', 'superadmin', 'admin'].includes(user?.role) && (
+                              <button 
+                                onClick={() => setComposeAppt(a)}
+                                className="p-1.5 rounded-lg hover:bg-teal-50 text-teal-400 hover:text-teal-600 transition-colors" 
+                                title="Prescription Composer"
+                              >
+                                <FileSignature size={13} />
+                              </button>
+                            )}
+
                             {/* Confirm */}
                             {isDeskRole && a.Status === 'Scheduled' && (
                               <button onClick={() => handleStatusUpdate(a.Id, 'Confirmed')}
@@ -677,12 +690,11 @@ export default function AppointmentsPage() {
                               </button>
                             )}
 
-                            {/* Complete */}
+                            {/* Start Consultation */}
                             {canComplete && ['Scheduled', 'Confirmed', 'Rescheduled'].includes(a.Status) && (
-                              <button onClick={() => setCompleteAppt(a)}
-                                disabled={isActioning}
-                                className="p-1.5 rounded-lg hover:bg-purple-50 text-slate-400 hover:text-purple-600 transition-colors disabled:opacity-40" title="Mark Complete">
-                                <Check size={13} />
+                              <button onClick={() => navigate(`/consultation/${a.Id}`)}
+                                className="p-1.5 rounded-lg hover:bg-purple-50 text-slate-400 hover:text-purple-600 transition-colors" title="Start Consultation">
+                                <Stethoscope size={13} />
                               </button>
                             )}
 
@@ -768,6 +780,16 @@ export default function AppointmentsPage() {
           onClose={() => setCompleteAppt(null)}
           onCompleted={() => {
             setCompleteAppt(null);
+            load();
+          }}
+        />
+      )}
+      {composeAppt && (
+        <PrescriptionComposerModal
+          patient={composeAppt}
+          appointmentId={composeAppt.Id}
+          onClose={() => setComposeAppt(null)}
+          onSaved={() => {
             load();
           }}
         />

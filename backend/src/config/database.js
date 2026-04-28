@@ -12,28 +12,88 @@ const dbConfig = {
     encrypt: process.env.DB_ENCRYPT === 'true',
     trustServerCertificate: process.env.DB_TRUST_SERVER_CERTIFICATE !== 'false',
     enableArithAbort: true,
-    connectTimeout: parseInt(process.env.DB_CONNECTION_TIMEOUT) || 30000,
-    requestTimeout: parseInt(process.env.DB_REQUEST_TIMEOUT) || 30000,
+    // Increased from 30s → 60s to accommodate the remote server latency
+    connectTimeout: parseInt(process.env.DB_CONNECTION_TIMEOUT) || 60000,
+    requestTimeout: parseInt(process.env.DB_REQUEST_TIMEOUT) || 60000,
   },
   pool: {
-    max: parseInt(process.env.DB_POOL_MAX) || 10,
-    min: parseInt(process.env.DB_POOL_MIN) || 0,
-    idleTimeoutMillis: parseInt(process.env.DB_POOL_IDLE_TIMEOUT) || 30000,
+    max: parseInt(process.env.DB_POOL_MAX) || 15,
+    min: parseInt(process.env.DB_POOL_MIN) || 2,  // Keep 2 warm connections alive
+    // How long a connection can sit idle before being removed from the pool
+    idleTimeoutMillis: parseInt(process.env.DB_POOL_IDLE_TIMEOUT) || 60000,
+    // How long to wait for a connection from the pool before giving up
+    acquireTimeoutMillis: 30000,
   },
 };
 
 let pool = null;
+let isConnecting = false;
+let lastHealthCheck = 0;
+const HEALTH_CHECK_INTERVAL_MS = 30_000; // Only ping DB every 30s, not on every request
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function createPool(attempt = 1) {
+  const maxAttempts = 5;
+  try {
+    const newPool = await new sql.ConnectionPool(dbConfig).connect();
+    newPool.on('error', (err) => {
+      logger.error('SQL Pool Error — connection lost:', err.message || err);
+      pool = null; // Mark as dead so next request triggers reconnect
+    });
+    logger.info(`✅ Connected to MS SQL: ${dbConfig.server}/${dbConfig.database}`);
+    return newPool;
+  } catch (err) {
+    if (attempt >= maxAttempts) {
+      logger.error(`❌ DB connection failed after ${maxAttempts} attempts:`, err.message || err);
+      throw err;
+    }
+    const delay = Math.min(1000 * 2 ** (attempt - 1), 15000); // 1s, 2s, 4s, 8s, 15s cap
+    logger.warn(`⚠️  DB connect attempt ${attempt} failed. Retrying in ${delay}ms…`);
+    await sleep(delay);
+    return createPool(attempt + 1);
+  }
+}
 
 async function getPool() {
-  if (pool && pool.connected) return pool;
-  pool = await new sql.ConnectionPool(dbConfig).connect();
-  pool.on('error', (err) => {
-    logger.error('SQL Pool Error:', err);
-    pool = null;
-  });
-  logger.info(`✅ Connected to MS SQL: ${dbConfig.server}/${dbConfig.database}`);
-  return pool;
+  // Fast path: pool looks healthy and was recently verified — return immediately
+  if (pool && pool.connected) {
+    const now = Date.now();
+    if (now - lastHealthCheck < HEALTH_CHECK_INTERVAL_MS) {
+      return pool; // ← skip the SELECT 1, trust the pool is healthy
+    }
+    // Time for a periodic health check (every 30s), non-blocking for other callers
+    try {
+      await pool.request().query('SELECT 1');
+      lastHealthCheck = now;
+      return pool;
+    } catch {
+      logger.warn('⚠️  Periodic pool health check failed — forcing reconnect');
+      pool = null;
+    }
+  }
+
+  // If another call is already reconnecting, wait for it
+  if (isConnecting) {
+    for (let i = 0; i < 30; i++) {
+      await sleep(500);
+      if (pool && pool.connected) return pool;
+    }
+    throw new Error('Database reconnect timed out — please retry');
+  }
+
+  // We are the one responsible for reconnecting
+  isConnecting = true;
+  try {
+    pool = await createPool();
+    lastHealthCheck = Date.now();
+    return pool;
+  } finally {
+    isConnecting = false;
+  }
 }
+
+
 
 async function query(queryStr, params = {}) {
   const p = await getPool();
@@ -131,11 +191,4 @@ module.exports = {
 
 
 
-
-
-
-
-
-
-
-
+ 

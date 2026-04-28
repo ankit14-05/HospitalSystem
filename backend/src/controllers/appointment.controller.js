@@ -991,3 +991,265 @@ exports.sendDailyScheduleEmail = async (req, res) => {
     return sendError(res, 'Failed to send schedule email', 500);
   }
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /appointments/:id/complete-with-prescription
+// Atomic: saves prescription + clinical notes + lab orders + marks Completed
+// ─────────────────────────────────────────────────────────────────────────────
+exports.completeWithPrescription = async (req, res) => {
+  try {
+    const appointmentId = parseInt(req.params.id, 10);
+    const { hospitalId } = req.user;
+    const actingUserId = parseInt(req.user.id, 10);
+
+    const {
+      // Clinical notes (sections)
+      sections = {},
+      allergy,
+      // Lab tests
+      labTests = [],
+      // Follow-up
+      followUpDate,
+      followUpNotes,
+      // Diagnosis
+      diagnosis,
+      consultationNotes,
+    } = req.body;
+
+    const { getPool, sql, withTransaction } = require('../config/database');
+    const pool = await getPool();
+    const appointment = await assertAppointmentAccess(req, appointmentId);
+
+    if (['Completed', 'Cancelled', 'NoShow'].includes(appointment.Status)) {
+      return sendError(res, `Cannot complete — appointment is already ${appointment.Status}`, 400);
+    }
+
+    const trimOrNull = (v) => {
+      const s = String(v || '').trim();
+      return s || null;
+    };
+
+    // Resolve doctor profile ID
+    const doctorProfileId = appointment.DoctorId;
+
+    // ── All-in-one transaction ──────────────────────────────────────────
+    const result = await withTransaction(async (transaction) => {
+      const request = () => new sql.Request(transaction);
+
+      // 1. Create or update prescription
+      const rxNumber = `RX-${Date.now().toString(36).toUpperCase()}`;
+      const payloadJson = JSON.stringify({
+        header: { allergy: trimOrNull(allergy) },
+        sections,
+        labTests: Array.isArray(labTests) ? labTests.filter(t => t.testName) : [],
+        legacy: { diagnosis: trimOrNull(diagnosis), notes: trimOrNull(consultationNotes) },
+        meta: { schemaVersion: 1, generatedAt: new Date().toISOString() },
+      });
+
+      // Check if a draft already exists for this appointment
+      const existingRes = await request()
+        .input('AppointmentId', sql.BigInt, appointmentId)
+        .input('PatientId', sql.BigInt, appointment.PatientId)
+        .input('DoctorId', sql.BigInt, doctorProfileId)
+        .query(`
+          SELECT TOP 1 Id, RxNumber, VersionNo
+          FROM dbo.Prescriptions
+          WHERE AppointmentId = @AppointmentId
+            AND PatientId = @PatientId
+            AND DoctorId = @DoctorId
+            AND IsFinalized = 0
+          ORDER BY VersionNo DESC, CreatedAt DESC
+        `);
+
+      let prescriptionId;
+      let finalRxNumber;
+
+      if (existingRes.recordset.length) {
+        // Update existing draft → finalize
+        prescriptionId = existingRes.recordset[0].Id;
+        finalRxNumber = existingRes.recordset[0].RxNumber;
+
+        await request()
+          .input('Id', sql.BigInt, prescriptionId)
+          .input('Diagnosis', sql.NVarChar(sql.MAX), trimOrNull(diagnosis))
+          .input('Notes', sql.NVarChar(sql.MAX), trimOrNull(consultationNotes))
+          .input('PayloadJson', sql.NVarChar(sql.MAX), payloadJson)
+          .input('FinalizedBy', sql.BigInt, actingUserId)
+          .query(`
+            UPDATE dbo.Prescriptions
+            SET Diagnosis = @Diagnosis,
+                Notes = @Notes,
+                PayloadJson = @PayloadJson,
+                IsFinalized = 1,
+                FinalizedAt = SYSUTCDATETIME(),
+                FinalizedBy = @FinalizedBy,
+                UpdatedBy = @FinalizedBy,
+                UpdatedAt = SYSUTCDATETIME()
+            WHERE Id = @Id
+          `);
+      } else {
+        // Insert new prescription, finalized immediately
+        finalRxNumber = rxNumber;
+        const insertRes = await request()
+          .input('HospitalId', sql.BigInt, hospitalId)
+          .input('PatientId', sql.BigInt, appointment.PatientId)
+          .input('DoctorId', sql.BigInt, doctorProfileId)
+          .input('AppointmentId', sql.BigInt, appointmentId)
+          .input('RxNumber', sql.NVarChar(50), rxNumber)
+          .input('Diagnosis', sql.NVarChar(sql.MAX), trimOrNull(diagnosis))
+          .input('Notes', sql.NVarChar(sql.MAX), trimOrNull(consultationNotes))
+          .input('PayloadJson', sql.NVarChar(sql.MAX), payloadJson)
+          .input('CreatedBy', sql.BigInt, actingUserId)
+          .query(`
+            INSERT INTO dbo.Prescriptions
+              (HospitalId, PatientId, DoctorId, AppointmentId,
+               VersionNo, IsFinalized, FinalizedAt, FinalizedBy,
+               RxNumber, Diagnosis, Notes, PayloadJson, CreatedBy)
+            OUTPUT INSERTED.Id
+            VALUES
+              (@HospitalId, @PatientId, @DoctorId, @AppointmentId,
+               1, 1, SYSUTCDATETIME(), @CreatedBy,
+               @RxNumber, @Diagnosis, @Notes, @PayloadJson, @CreatedBy)
+          `);
+        prescriptionId = insertRes.recordset[0].Id;
+      }
+
+      // 2. Write clinical notes to normalized table
+      await request()
+        .input('PrescriptionId', sql.BigInt, prescriptionId)
+        .query('DELETE FROM dbo.PrescriptionClinicalNotes WHERE PrescriptionId = @PrescriptionId');
+
+      const noteTypes = [
+        { key: 'allergy', type: 'Allergy', value: trimOrNull(allergy) },
+        { key: 'chiefComplaints', type: 'ChiefComplaint', value: trimOrNull(sections.chiefComplaints) },
+        { key: 'historyPresentIllness', type: 'HOPI', value: trimOrNull(sections.historyPresentIllness) },
+        { key: 'pastHistory', type: 'PastHistory', value: trimOrNull(sections.pastHistory) },
+        { key: 'clinicalNotes', type: 'ClinicalNotes', value: trimOrNull(sections.clinicalNotes) },
+        { key: 'procedure', type: 'Procedure', value: trimOrNull(sections.procedure) },
+      ];
+
+      for (const note of noteTypes) {
+        if (!note.value) continue;
+        await request()
+          .input('PrescriptionId', sql.BigInt, prescriptionId)
+          .input('NoteType', sql.NVarChar(50), note.type)
+          .input('NoteContent', sql.NVarChar(sql.MAX), note.value)
+          .query(`
+            INSERT INTO dbo.PrescriptionClinicalNotes (PrescriptionId, NoteType, NoteContent)
+            VALUES (@PrescriptionId, @NoteType, @NoteContent)
+          `);
+      }
+
+      // 3. Write lab orders to normalized table
+      await request()
+        .input('PrescriptionId', sql.BigInt, prescriptionId)
+        .query('DELETE FROM dbo.PrescriptionLabOrders WHERE PrescriptionId = @PrescriptionId');
+
+      const validLabTests = Array.isArray(labTests) ? labTests.filter(t => t.testName) : [];
+      for (const test of validLabTests) {
+        await request()
+          .input('PrescriptionId', sql.BigInt, prescriptionId)
+          .input('TestName', sql.NVarChar(200), trimOrNull(test.testName))
+          .input('Criteria', sql.NVarChar(500), trimOrNull(test.criteria))
+          .input('Details', sql.NVarChar(sql.MAX), trimOrNull(test.details))
+          .input('Priority', sql.NVarChar(20), ['Urgent', 'STAT'].includes(test.priority) ? test.priority : 'Routine')
+          .query(`
+            INSERT INTO dbo.PrescriptionLabOrders (PrescriptionId, TestName, Criteria, Details, Priority)
+            VALUES (@PrescriptionId, @TestName, @Criteria, @Details, @Priority)
+          `);
+      }
+
+      // 4. Mark appointment as Completed
+      const appointmentColumns = await getAppointmentColumnSet(pool);
+      const hasConsultationTable = await hasAppointmentConsultationTable(pool);
+      const hasPrimaryDiagnosis = appointmentColumns.has('PrimaryDiagnosis');
+      const hasFollowUpDate = appointmentColumns.has('FollowUpDate');
+      const hasFollowUpNotes = appointmentColumns.has('FollowUpNotes');
+
+      const mergedNotes = buildCompletionNotes({
+        existingNotes: appointment.Notes,
+        consultationNotes,
+        diagnosis,
+        followUpDate,
+        followUpNotes,
+        hasPrimaryDiagnosis,
+        hasFollowUpDate,
+        hasFollowUpNotes,
+        hasConsultationTable,
+      });
+
+      const setClauses = [
+        `Status = 'Completed'`,
+        'Notes = @MergedNotes',
+        'UpdatedAt = GETUTCDATE()',
+      ];
+      if (hasPrimaryDiagnosis) setClauses.push('PrimaryDiagnosis = @PrimaryDiagnosis');
+      if (hasFollowUpDate) setClauses.push('FollowUpDate = @FollowUpDate');
+      if (hasFollowUpNotes) setClauses.push('FollowUpNotes = @FollowUpNotes');
+
+      await request()
+        .input('Id', sql.BigInt, appointmentId)
+        .input('HospitalId', sql.BigInt, hospitalId)
+        .input('MergedNotes', sql.NVarChar(sql.MAX), mergedNotes)
+        .input('PrimaryDiagnosis', sql.NVarChar(sql.MAX), trimOrNull(diagnosis))
+        .input('FollowUpDate', sql.Date, followUpDate || null)
+        .input('FollowUpNotes', sql.NVarChar(sql.MAX), trimOrNull(followUpNotes))
+        .query(`
+          UPDATE dbo.Appointments
+          SET ${setClauses.join(', ')}
+          WHERE Id = @Id AND HospitalId = @HospitalId
+        `);
+
+      return { prescriptionId, rxNumber: finalRxNumber };
+    });
+
+    // Post-transaction: update slots + queue (non-critical, outside transaction)
+    try {
+      await pool.request()
+        .input('HospitalId', appointment.HospitalId)
+        .input('DoctorId', appointment.DoctorId)
+        .input('Date', appointment.AppointmentDate)
+        .input('Time', String(appointment.AppointmentTime || '').slice(0, 5))
+        .input('AppointmentId', appointment.Id)
+        .input('TokenNumber', appointment.TokenNumber)
+        .query(`
+          UPDATE dbo.AppointmentSlots
+          SET AppointmentId = @AppointmentId, TokenNumber = @TokenNumber,
+              Status = 'Completed', UpdatedAt = SYSUTCDATETIME()
+          WHERE DoctorId = @DoctorId AND SlotDate = @Date
+            AND CONVERT(VARCHAR(5), StartTime, 108) = @Time
+            AND HospitalId = @HospitalId
+        `);
+
+      await pool.request()
+        .input('AppointmentId', appointment.Id)
+        .input('HospitalId', appointment.HospitalId)
+        .query(`
+          UPDATE dbo.OpdQueue
+          SET QueueStatus = 'served', ServedAt = SYSUTCDATETIME(), UpdatedAt = SYSUTCDATETIME()
+          WHERE AppointmentId = @AppointmentId AND HospitalId = @HospitalId
+            AND QueueStatus IN ('waiting', 'called', 'serving')
+        `);
+    } catch (slotErr) {
+      console.error('[non-critical] Failed to update slots/queue:', slotErr.message);
+    }
+
+    // Fire notifications
+    try {
+      const full = await apptService.getAppointmentById(appointmentId, hospitalId);
+      if (full) fireNotificationsAndEmails('completed', full);
+    } catch (notifErr) {
+      console.error('[non-critical] Failed to send notifications:', notifErr.message);
+    }
+
+    return sendSuccess(res, {
+      appointmentId,
+      prescriptionId: result.prescriptionId,
+      rxNumber: result.rxNumber,
+      status: 'Completed',
+      followUpDate: followUpDate || null,
+    }, 'Consultation completed and prescription finalized');
+  } catch (err) {
+    return sendError(res, err.message, err.statusCode || 500);
+  }
+};

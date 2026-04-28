@@ -91,6 +91,15 @@ const isPrescriptionActive = (prescription) => {
 const getPrescriptionItems = (prescription) =>
   Array.isArray(prescription?.Items) ? prescription.Items : Array.isArray(prescription?.items) ? prescription.items : [];
 
+const toInt = (value) => {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isNaN(parsed) ? null : parsed;
+};
+
+const getPrescriptionId = (prescription) => toInt(prescription?.Id || prescription?.id);
+const getPrescriptionVersion = (prescription) => toInt(prescription?.VersionNo || prescription?.versionNo) || 1;
+const isPrescriptionFinalized = (prescription) => Boolean(prescription?.IsFinalized ?? prescription?.isFinalized);
+
 const getReportTests = (report) =>
   Array.isArray(report?.Tests) ? report.Tests : Array.isArray(report?.tests) ? report.tests : [];
 
@@ -801,7 +810,7 @@ const AppointmentsTab = ({ appointments, loading, onRefresh, onBook, onCancel })
 );
 
 // ─── Prescriptions Tab ────────────────────────────────────────────────────────
-const PrescriptionsTab = ({ prescriptions, loading, onRefresh }) => (
+const PrescriptionsTab = ({ prescriptions, loading, onRefresh, onDownload, onShowVersions }) => (
   <Card>
     <SectionHeader title="Prescriptions" icon={Pill}>
       <button onClick={onRefresh} className="p-2 hover:bg-slate-100 rounded-xl"><RefreshCw size={13} className="text-slate-400" /></button>
@@ -820,20 +829,76 @@ const PrescriptionsTab = ({ prescriptions, loading, onRefresh }) => (
                   <p className="text-xs text-slate-400 mt-0.5">{rx.Diagnosis || 'Consultation prescription'}</p>
                   <p className="text-xs text-slate-400">
                     {rx.DoctorName || rx.doctorName || 'Doctor'} · {getPrescriptionItems(rx).length} medicine(s) · {fmtDate(rx.RxDate || rx.PrescribedDate || rx.date)}
+                    {' · '}
+                    V{getPrescriptionVersion(rx)}
                   </p>
                 </div>
-                <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${isPrescriptionActive(rx) ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
-                  {isPrescriptionActive(rx) ? 'Active' : (rx.Status || rx.status || 'Completed')}
-                </span>
-                <button className="p-2 rounded-xl hover:bg-slate-100 text-slate-300 hover:text-slate-600 transition-colors">
-                  <Download size={13} />
-                </button>
+                <div className="flex items-center gap-2">
+                  <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${isPrescriptionFinalized(rx) ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                    {isPrescriptionFinalized(rx) ? 'Finalized' : 'Draft'}
+                  </span>
+                  <button
+                    onClick={() => onShowVersions(rx)}
+                    className="p-2 rounded-xl hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors"
+                    title="Version history"
+                  >
+                    <Bell size={13} />
+                  </button>
+                  <button
+                    onClick={() => onDownload(rx)}
+                    disabled={!isPrescriptionFinalized(rx)}
+                    className="p-2 rounded-xl hover:bg-slate-100 text-slate-300 hover:text-slate-600 transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+                    title={isPrescriptionFinalized(rx) ? 'Download finalized PDF' : 'Only finalized prescriptions can be downloaded'}
+                  >
+                    <Download size={13} />
+                  </button>
+                </div>
               </div>
             ))}
           </div>
     }
   </Card>
 );
+
+const PrescriptionVersionModal = ({ open, rxNumber, versions, loading, onClose }) => {
+  if (!open) return null;
+
+  return (
+    <Modal onClose={onClose}>
+      <div className="px-6 py-5 border-b border-slate-100">
+        <h3 className="text-base font-bold text-slate-900">Prescription Versions</h3>
+        <p className="text-xs text-slate-500 mt-1">{rxNumber || 'Prescription'}</p>
+      </div>
+      <div className="px-6 py-5 max-h-[60vh] overflow-y-auto">
+        {loading ? (
+          <div className="inline-flex items-center gap-2 text-sm text-slate-500">
+            <Loader size={13} className="animate-spin" />
+            Loading versions...
+          </div>
+        ) : versions.length === 0 ? (
+          <p className="text-sm text-slate-500">No versions found.</p>
+        ) : (
+          <div className="space-y-3">
+            {versions.map((version) => (
+              <div key={version.Id || version.id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                <p className="text-sm font-semibold text-slate-700">
+                  V{version.VersionNo || version.versionNo || 1}
+                  {' · '}
+                  {version.RxNumber || version.rxNumber || 'RX'}
+                </p>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {Boolean(version.IsFinalized ?? version.isFinalized) ? 'Finalized' : 'Draft'}
+                  {' · '}
+                  {fmtDate(version.CreatedAt || version.createdAt || Date.now())}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+};
 
 // ─── Reports Tab ──────────────────────────────────────────────────────────────
 const ReportsTab = ({ reports, loading, onRefresh }) => (
@@ -968,6 +1033,12 @@ export default function PatientDashboard() {
   const [activeTab,   setActiveTab]   = useState('overview');
   const [showBook,    setShowBook]    = useState(false);
   const [showProfile, setShowProfile] = useState(false);
+  const [rxVersionModal, setRxVersionModal] = useState({
+    open: false,
+    rxNumber: '',
+    loading: false,
+    versions: [],
+  });
 
   const handleBook = () => navigate('/appointments/book');
   const setL = useCallback((k, v) => setLoading(l => ({ ...l, [k]: v })), []);
@@ -1048,6 +1119,68 @@ export default function PatientDashboard() {
       .finally(() => setL('prescriptions', false));
   }, [setL]);
 
+  const downloadPrescriptionPdf = useCallback(async (prescription) => {
+    const prescriptionId = getPrescriptionId(prescription);
+    if (!prescriptionId) {
+      toast.error('Prescription reference missing');
+      return;
+    }
+
+    if (!isPrescriptionFinalized(prescription)) {
+      toast.error('Only finalized prescriptions can be downloaded');
+      return;
+    }
+
+    try {
+      const fileBlob = await api.get(`/prescriptions/${prescriptionId}/pdf`, { responseType: 'blob' });
+      const url = URL.createObjectURL(fileBlob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `${prescription?.RxNumber || `prescription-${prescriptionId}`}.pdf`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      toast.error(error?.message || 'Could not download prescription');
+    }
+  }, []);
+
+  const showPrescriptionVersions = useCallback(async (prescription) => {
+    const prescriptionId = getPrescriptionId(prescription);
+    if (!prescriptionId) {
+      toast.error('Prescription reference missing');
+      return;
+    }
+
+    setRxVersionModal({
+      open: true,
+      rxNumber: prescription?.RxNumber || `Prescription #${prescriptionId}`,
+      loading: true,
+      versions: [],
+    });
+
+    try {
+      const payload = getPayload(await api.get(`/prescriptions/${prescriptionId}/versions`)) || {};
+      const versions = payload?.data || payload;
+
+      setRxVersionModal({
+        open: true,
+        rxNumber: prescription?.RxNumber || `Prescription #${prescriptionId}`,
+        loading: false,
+        versions: Array.isArray(versions) ? versions : [],
+      });
+    } catch (error) {
+      setRxVersionModal({
+        open: true,
+        rxNumber: prescription?.RxNumber || `Prescription #${prescriptionId}`,
+        loading: false,
+        versions: [],
+      });
+      toast.error(error?.message || 'Unable to load version history');
+    }
+  }, []);
+
   const refreshReports = useCallback(() => {
     setL('reports', true);
     api.get('/reports/my')
@@ -1112,7 +1245,9 @@ export default function PatientDashboard() {
     ),
     prescriptions: (
       <PrescriptionsTab prescriptions={prescriptions} loading={loading.prescriptions}
-        onRefresh={refreshPrescriptions} />
+        onRefresh={refreshPrescriptions}
+        onDownload={downloadPrescriptionPdf}
+        onShowVersions={showPrescriptionVersions} />
     ),
     emr: (() => {
       const patId = p?.Id || p?.id || profile?.Id;
@@ -1212,6 +1347,13 @@ export default function PatientDashboard() {
       {/* ── Modals ── */}
       {showBook    && <BookModal    onClose={() => setShowBook(false)}    onSuccess={() => { setShowBook(false);    fetchAll(); }} />}
       {showProfile && <ProfileModal profile={profile || user}            onClose={() => setShowProfile(false)} onSave={d => { setProfile(pr => ({ ...pr, ...d })); setShowProfile(false); }} />}
+      <PrescriptionVersionModal
+        open={rxVersionModal.open}
+        rxNumber={rxVersionModal.rxNumber}
+        versions={rxVersionModal.versions}
+        loading={rxVersionModal.loading}
+        onClose={() => setRxVersionModal({ open: false, rxNumber: '', loading: false, versions: [] })}
+      />
     </div>
   );
 }

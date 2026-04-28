@@ -82,6 +82,12 @@ router.patch('/:id/complete',
   ctrl.completeAppointment
 );
 
+// ── Complete with prescription (atomic) ───────────────────────────────────────
+router.post('/:id/complete-with-prescription',
+  authorize('doctor', 'admin', 'superadmin'),
+  ctrl.completeWithPrescription
+);
+
 // ── Doctor queue: call patient in ─────────────────────────────────────────────
 router.patch('/:id/call',
   authorize('doctor', 'admin', 'superadmin'),

@@ -38,11 +38,14 @@ const PATIENT_ACCESS  = [...CLINICAL_ROLES, ...LAB_TECH_ROLES, 'patient', 'recep
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test Catalogue
-// GET /api/v1/lab/tests
-// ─────────────────────────────────────────────────────────────────────────────
 router.get('/tests',
   authorize(...PATIENT_ACCESS),
   ctrl.getLabTests,
+);
+
+router.get('/search-tests',
+  authorize(...PATIENT_ACCESS),
+  ctrl.searchLabTests
 );
 
 router.post('/tests',

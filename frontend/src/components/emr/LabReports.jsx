@@ -85,7 +85,13 @@ function ViewModal({ order, allRows, onClose }) {
 
   useEffect(() => {
     api.get(`/lab/orders/${order.OrderId}/attachments`)
-      .then(res => setAttachments(res?.data || []))
+      .then(res => {
+        // Backend: { success: true, data: [...] } — interceptor unwraps to { success, data }
+        const list = Array.isArray(res?.data) ? res.data
+          : Array.isArray(res) ? res
+          : [];
+        setAttachments(list);
+      })
       .catch(() => setAttachments([]))
       .finally(() => setLoadingAttach(false));
   }, [order.OrderId]);
@@ -220,7 +226,18 @@ export default function LabReports({ patientId }) {
 
     api.get(`/emr/${patientId}/lab-reports`, { params: { page: 1, limit: 1000 } })
       .then(res => {
-        const data = res?.results || res?.data?.results || res?.data || (Array.isArray(res) ? res : []);
+        // Backend responds: { success: true, results: [...], total, page, limit }
+        // The axios interceptor unwraps response.data, so res = { success, results, total, ... }
+        let data = [];
+        if (Array.isArray(res?.results)) {
+          data = res.results;
+        } else if (Array.isArray(res?.data?.results)) {
+          data = res.data.results;
+        } else if (Array.isArray(res?.data)) {
+          data = res.data;
+        } else if (Array.isArray(res)) {
+          data = res;
+        }
         setRows(data);
       })
       .catch(err => {
