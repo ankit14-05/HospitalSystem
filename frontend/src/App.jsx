@@ -52,6 +52,7 @@ import HospitalSetupPage from './pages/setup/HospitalSetupPage';
 import UsersPage         from './pages/setup/UsersPage';
 import GeoSetupPage      from './pages/setup/GeoSetupPage';
 import NotFoundPage      from './pages/NotFoundPage';
+import AccessControlPage from './pages/rbac/AccessControlPage';
 
 // Appointments
 import AppointmentsPage     from './pages/appointments/AppointmentsPage';
@@ -402,6 +403,14 @@ export default function App() {
               element={
                 <RequireRole roles={['superadmin', 'admin']}>
                   <AdminSettings />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="admin/access-control"
+              element={
+                <RequireRole roles={['superadmin', 'admin']}>
+                  <AccessControlPage />
                 </RequireRole>
               }
             />

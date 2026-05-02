@@ -59,6 +59,7 @@ const NAV = {
     { path:'/admin/schedule-manager', label:'Doctor Schedules', icon: Clock           },
     { path:'/admin/departments',      label:'Departments',      icon: Bed             },
     { path:'/admin/reports',          label:'Reports',          icon: BarChart2       },
+    { path:'/admin/access-control',   label:'Access Control',   icon: Shield          },
     { path:'/admin/settings',         label:'Settings',         icon: Settings        },
   ],
   admin: [
@@ -72,6 +73,7 @@ const NAV = {
     { path:'/admin/schedule-manager', label:'Doctor Schedules', icon: Clock           },
     { path:'/admin/departments',      label:'Departments',      icon: Bed             },
     { path:'/admin/reports',          label:'Reports',          icon: BarChart2       },
+    { path:'/admin/access-control',   label:'Access Control',   icon: Shield          },
     { path:'/admin/settings',         label:'Settings',         icon: Settings        },
   ],
   doctor: [
