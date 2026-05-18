@@ -301,7 +301,8 @@ async function getPrescriptions(patientId, hospitalId) {
         FOR JSON PATH
       ) AS Items
     FROM dbo.Prescriptions rx
-    LEFT JOIN dbo.Users u ON u.Id = rx.DoctorId
+    LEFT JOIN dbo.DoctorProfiles dp ON dp.Id = rx.DoctorId
+    LEFT JOIN dbo.Users u ON u.Id = dp.UserId
     WHERE rx.PatientId = @patientId AND rx.HospitalId = @hospitalId
     ORDER BY rx.RxDate DESC
   `;

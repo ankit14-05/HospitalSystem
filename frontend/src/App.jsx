@@ -53,10 +53,12 @@ import HospitalSetupPage from './pages/setup/HospitalSetupPage';
 import UsersPage         from './pages/setup/UsersPage';
 import GeoSetupPage      from './pages/setup/GeoSetupPage';
 import NotFoundPage      from './pages/NotFoundPage';
+import AccessControlPage from './pages/rbac/AccessControlPage';
 
 // Appointments
 import AppointmentsPage     from './pages/appointments/AppointmentsPage';
 import BookAppointmentPage  from './pages/appointments/BookAppointmentPage';
+import ConsultationWorkspacePage from './pages/appointments/ConsultationWorkspacePage';
 
 // Profiles
 import ProfilePage from './pages/profile/ProfilePage';
@@ -450,6 +452,14 @@ export default function App() {
                 </RequireRole>
               }
             />
+            <Route
+              path="admin/access-control"
+              element={
+                <RequireRole roles={['superadmin', 'admin']}>
+                  <AccessControlPage />
+                </RequireRole>
+              }
+            />
 
             {/* ── Scheduling ── */}
             <Route
@@ -507,6 +517,14 @@ export default function App() {
               element={
                 <RequireRole roles={['patient', ...APPOINTMENT_DESK_ROLES]}>
                   <BookAppointmentPage />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="consultation/:appointmentId"
+              element={
+                <RequireRole roles={['doctor', 'admin', 'superadmin']}>
+                  <ConsultationWorkspacePage />
                 </RequireRole>
               }
             />
